@@ -1,0 +1,767 @@
+import base64
+import json
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import requests
+from flask import jsonify
+from google.cloud import storage
+from google.oauth2 import service_account
+
+from shoplive.backend.infra import build_proxies, get_access_token, parse_common_payload
+
+
+def json_error(message: str, status_code: int = 400):
+    return jsonify({"ok": False, "error": message}), status_code
+
+
+def fetch_image_as_base64(image_url: str, proxy: str) -> Tuple[str, str]:
+    resp = requests.get(image_url, timeout=60, proxies=build_proxies(proxy))
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "image/png").split(";")[0].strip()
+    if content_type not in {"image/png", "image/jpeg"}:
+        content_type = "image/png"
+    b64 = base64.b64encode(resp.content).decode("utf-8")
+    return b64, content_type
+
+
+def normalize_reference_urls(raw) -> list:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str):
+        txt = raw.replace("\n", ",")
+        return [x.strip() for x in txt.split(",") if x.strip()]
+    return []
+
+
+def parse_data_url(data_url: str) -> Tuple[str, str]:
+    m = re.match(r"^data:(image\/(?:png|jpeg));base64,(.+)$", data_url, re.IGNORECASE)
+    if not m:
+        raise ValueError("本地图片格式无效，仅支持 data:image/png 或 data:image/jpeg")
+    return m.group(2), m.group(1).lower()
+
+
+def parse_generic_data_url(data_url: str, accepted_prefix: str) -> Tuple[str, str]:
+    m = re.match(rf"^data:({accepted_prefix}\/[a-zA-Z0-9.+-]+);base64,(.+)$", data_url, re.IGNORECASE)
+    if not m:
+        raise ValueError(f"无效 data URL，期望 {accepted_prefix}/*")
+    return m.group(2), m.group(1).lower()
+
+
+def escape_drawtext_text(value: str) -> str:
+    txt = str(value or "")
+    txt = txt.replace("\\", "\\\\")
+    txt = txt.replace(":", "\\:")
+    txt = txt.replace("'", "\\'")
+    txt = txt.replace("%", "\\%")
+    txt = txt.replace("\n", "\\n")
+    return txt
+
+
+def download_video_to_file(video_url: str, output_file: Path, proxy: str):
+    raw = str(video_url or "").strip()
+    if not raw:
+        raise ValueError("video_url 不能为空")
+    if raw.startswith("data:video/"):
+        b64, _ = parse_generic_data_url(raw, "video")
+        output_file.write_bytes(base64.b64decode(b64))
+        return
+    if raw.startswith("http://") or raw.startswith("https://"):
+        resp = requests.get(raw, timeout=180, proxies=build_proxies(proxy), stream=True)
+        resp.raise_for_status()
+        with output_file.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 256):
+                if chunk:
+                    f.write(chunk)
+        return
+    raise ValueError("video_url 仅支持 http(s) 或 data:video/* base64")
+
+
+def normalize_reference_images_base64(raw) -> List[Dict[str, str]]:
+    result = []
+    if not raw:
+        return result
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            b64 = str(item.get("base64", "")).strip()
+            mime = str(item.get("mime_type", "image/png")).strip()
+            if b64 and mime in {"image/png", "image/jpeg"}:
+                result.append({"base64": b64, "mime_type": mime})
+    return result
+
+
+def extract_banana_urls(data: Dict) -> list:
+    urls = []
+    if not isinstance(data, dict):
+        return urls
+    if isinstance(data.get("data"), dict):
+        if isinstance(data["data"].get("url"), str):
+            urls.append(data["data"]["url"])
+        if isinstance(data["data"].get("urls"), list):
+            urls.extend([u for u in data["data"]["urls"] if isinstance(u, str)])
+        if isinstance(data["data"].get("images"), list):
+            for item in data["data"]["images"]:
+                if isinstance(item, str):
+                    urls.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("url"), str):
+                    urls.append(item["url"])
+    if isinstance(data.get("url"), str):
+        urls.append(data["url"])
+    if isinstance(data.get("urls"), list):
+        urls.extend([u for u in data["urls"] if isinstance(u, str)])
+    seen = set()
+    result = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            result.append(u)
+    return result
+
+
+def extract_imagen_images(data: Dict) -> list:
+    images = []
+    predictions = data.get("predictions", []) if isinstance(data, dict) else []
+    if not isinstance(predictions, list):
+        return images
+    for p in predictions:
+        if not isinstance(p, dict):
+            continue
+        b64 = None
+        mime = "image/png"
+        if isinstance(p.get("bytesBase64Encoded"), str):
+            b64 = p["bytesBase64Encoded"]
+            if isinstance(p.get("mimeType"), str):
+                mime = p["mimeType"]
+        if not b64 and isinstance(p.get("image"), dict):
+            img = p["image"]
+            if isinstance(img.get("bytesBase64Encoded"), str):
+                b64 = img["bytesBase64Encoded"]
+            if isinstance(img.get("mimeType"), str):
+                mime = img["mimeType"]
+        if b64:
+            images.append(
+                {
+                    "mime_type": mime or "image/png",
+                    "base64": b64,
+                    "data_url": f"data:{mime or 'image/png'};base64,{b64}",
+                }
+            )
+    return images
+
+
+def extract_chat_content(data: Dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first.get("message"), dict) else {}
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join([p for p in parts if p])
+    return ""
+
+
+def extract_vertex_text(data: Dict[str, Any]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return ""
+    first = candidates[0] if isinstance(candidates[0], dict) else {}
+    content = first.get("content") if isinstance(first.get("content"), dict) else {}
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    out: List[str] = []
+    for part in parts:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            out.append(part["text"])
+    return "\n".join([x for x in out if x]).strip()
+
+
+def try_parse_json_object(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {}
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE)
+    if fenced:
+        raw = fenced.group(1).strip()
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        pass
+    block = re.search(r"\{[\s\S]*\}", raw)
+    if not block:
+        return {}
+    try:
+        obj = json.loads(block.group(0))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def parse_category_judge_text(text: str) -> Dict[str, Any]:
+    raw = (text or "").strip()
+    if not raw:
+        return {
+            "ok": False,
+            "is_match": True,
+            "detected_category": "",
+            "confidence": None,
+            "reason": "empty_judge_result",
+            "raw": "",
+        }
+    match_line = re.search(r"MATCH\s*:\s*(YES|NO)", raw, re.IGNORECASE)
+    detected_line = re.search(r"DETECTED_CATEGORY\s*:\s*(.+)", raw, re.IGNORECASE)
+    confidence_line = re.search(r"CONFIDENCE\s*:\s*([0-9]*\.?[0-9]+)", raw, re.IGNORECASE)
+    reason_line = re.search(r"REASON\s*:\s*(.+)", raw, re.IGNORECASE)
+    is_match = True
+    if match_line:
+        is_match = match_line.group(1).upper() == "YES"
+    elif re.search(r"\bNO\b", raw, re.IGNORECASE):
+        is_match = False
+    confidence = None
+    if confidence_line:
+        try:
+            confidence = float(confidence_line.group(1))
+        except ValueError:
+            confidence = None
+    return {
+        "ok": bool(match_line or detected_line or reason_line),
+        "is_match": is_match,
+        "detected_category": (detected_line.group(1).strip() if detected_line else ""),
+        "confidence": confidence,
+        "reason": (reason_line.group(1).strip() if reason_line else ""),
+        "raw": raw,
+    }
+
+
+def judge_generated_image_category(payload: Dict, image_item: Dict) -> Dict[str, Any]:
+    try:
+        project_id, key_file, proxy, _ = parse_common_payload(payload)
+        model = (payload.get("judge_model") or "gemini-2.5-flash").strip()
+        location = (payload.get("judge_location") or "global").strip()
+        main_category = (payload.get("main_category") or "").strip()
+        product_name = (payload.get("product_name") or "").strip()
+        selling_points = (payload.get("selling_points") or "").strip()
+        b64 = str((image_item or {}).get("base64") or "").strip()
+        mime_type = str((image_item or {}).get("mime_type") or "image/png").strip()
+        if not b64:
+            return {"ok": False, "is_match": True, "reason": "empty_image_for_judge", "raw": ""}
+        token = get_access_token(key_file, proxy)
+        url = (
+            "https://aiplatform.googleapis.com/v1/projects/"
+            f"{project_id}/locations/{location}/publishers/google/models/{model}:generateContent"
+        )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        judge_prompt = (
+            "You are a strict ecommerce product category verifier. "
+            "Given one generated product image, decide whether its main subject matches the expected category/product. "
+            "Output EXACTLY 4 lines in English:\n"
+            "MATCH: YES or NO\n"
+            "DETECTED_CATEGORY: <short category>\n"
+            "CONFIDENCE: <0-1 decimal>\n"
+            "REASON: <short reason>\n\n"
+            f"Expected category: {main_category}\n"
+            f"Expected product name: {product_name}\n"
+            f"Expected selling points: {selling_points}\n"
+            "Rules:\n"
+            "1) Main visible subject must be expected product category.\n"
+            "2) If image is portrait/face/human-only while expected is a product, return NO.\n"
+            "3) If uncertain, return NO.\n"
+            "4) Be conservative."
+        )
+        body = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": judge_prompt}, {"inlineData": {"mimeType": mime_type, "data": b64}}],
+                }
+            ]
+        }
+        resp = requests.post(url, headers=headers, json=body, timeout=70, proxies=build_proxies(proxy))
+        data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+        raw_text = extract_vertex_text(data)
+        parsed = parse_category_judge_text(raw_text)
+        parsed["status_code"] = resp.status_code
+        parsed["model"] = model
+        parsed["response_ok"] = resp.ok
+        if not resp.ok:
+            parsed["ok"] = False
+            parsed["is_match"] = True
+            parsed["reason"] = parsed.get("reason") or "judge_api_failed_skip_block"
+        return parsed
+    except Exception as e:
+        return {"ok": False, "is_match": True, "reason": f"judge_exception_skip_block: {e}", "raw": ""}
+
+
+def call_litellm_chat(
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict],
+    proxy: str = "",
+    temperature=None,
+    max_tokens=None,
+    top_p=None,
+) -> Tuple[int, Dict]:
+    body = {"model": model, "messages": messages}
+    model_lower = str(model or "").lower()
+    is_gpt5_family = "gpt-5" in model_lower
+
+    # Some gpt-5 deployments reject classic sampling/token params on chat/completions.
+    # Keep payload minimal for compatibility and let provider defaults apply.
+    if not is_gpt5_family:
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if top_p is not None:
+            body["top_p"] = top_p
+    resp = requests.post(
+        f"{api_base}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=body,
+        timeout=90,
+        proxies=build_proxies(proxy),
+    )
+    data = resp.json() if "json" in (resp.headers.get("content-type", "") or "") else {"raw": resp.text}
+    return resp.status_code, {"ok": resp.ok, "status_code": resp.status_code, "response": data}
+
+
+def extract_gs_paths(obj) -> List[str]:
+    found = set()
+
+    def walk(node):
+        if node is None:
+            return
+        if isinstance(node, str):
+            for m in re.findall(r"gs:\/\/[^\s\"'<>]+", node):
+                found.add(m)
+            return
+        if isinstance(node, list):
+            for i in node:
+                walk(i)
+            return
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+
+    walk(obj)
+    return sorted(found)
+
+
+def extract_inline_videos(obj) -> List[Dict[str, str]]:
+    videos = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            b64 = node.get("bytesBase64Encoded")
+            mime = node.get("mimeType", "video/mp4")
+            if isinstance(b64, str) and b64 and str(mime).startswith("video/"):
+                videos.append({"mime_type": str(mime), "base64": b64, "data_url": f"data:{mime};base64,{b64}"})
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for i in node:
+                walk(i)
+
+    walk(obj)
+    return videos
+
+
+def sign_gcs_url(gs_uri: str, key_file: str, expires_seconds: int = 3600) -> str:
+    m = re.match(r"^gs:\/\/([^\/]+)\/(.+)$", gs_uri)
+    if not m:
+        return ""
+    bucket_name, blob_name = m.group(1), m.group(2)
+    creds = service_account.Credentials.from_service_account_file(key_file)
+    client = storage.Client(project=creds.project_id, credentials=creds)
+    blob = client.bucket(bucket_name).blob(blob_name)
+    return blob.generate_signed_url(version="v4", expiration=expires_seconds, method="GET")
+
+
+def run_google_image_generate(payload: Dict) -> Tuple[int, Dict]:
+    project_id, key_file, proxy, model = parse_common_payload(payload)
+    prompt = (payload.get("prompt") or "").strip()
+    location = (payload.get("location") or "us-central1").strip()
+    sample_count = int(payload.get("sample_count", 1))
+    aspect_ratio = (payload.get("aspect_ratio") or "16:9").strip()
+    person_generation = (payload.get("person_generation") or "allow_adult").strip()
+    if not model:
+        model = "imagen-3.0-generate-002"
+    if not prompt:
+        raise ValueError("google image prompt 不能为空")
+    token = get_access_token(key_file, proxy)
+    url = (
+        "https://aiplatform.googleapis.com/v1/projects/"
+        f"{project_id}/locations/{location}/publishers/google/models/{model}:predict"
+    )
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+    body = {
+        "instances": [{"prompt": prompt}],
+        "parameters": {
+            "sampleCount": sample_count,
+            "aspectRatio": aspect_ratio,
+            "personGeneration": person_generation,
+            "addWatermark": False,
+        },
+    }
+    resp = requests.post(url, headers=headers, json=body, timeout=90, proxies=build_proxies(proxy))
+    data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+    images = extract_imagen_images(data)
+    return resp.status_code, {
+        "ok": resp.ok,
+        "status_code": resp.status_code,
+        "model": model,
+        "response": data,
+        "images": images,
+    }
+
+
+def infer_target_race(selling_region: str) -> str:
+    region = (selling_region or "").lower()
+    if any(k in region for k in ["japan", "korea", "china", "hong kong", "taiwan", "新加坡", "日本", "韩国", "中国"]):
+        return "East Asian"
+    if any(k in region for k in ["saudi", "uae", "dubai", "qatar", "kuwait", "阿联酋", "沙特", "中东"]):
+        return "Arab"
+    if any(k in region for k in ["us", "usa", "united states", "canada", "uk", "europe", "欧美", "欧洲"]):
+        return "Caucasian"
+    if any(k in region for k in ["thailand", "vietnam", "indonesia", "malaysia", "菲律宾", "东南亚"]):
+        return "Southeast Asian"
+    if any(k in region for k in ["africa", "nigeria", "kenya", "south africa", "非洲"]):
+        return "African"
+    return "Local market appropriate ethnicity"
+
+
+def build_shoplive_image_rule_capsule(payload: Dict, use_model: bool, is_contact_lens: bool) -> str:
+    product_name = (payload.get("product_name") or "").strip() or "generic product"
+    main_category = (payload.get("main_category") or "").strip() or "ecommerce product"
+    target_audience = (payload.get("target_audience") or "").strip() or "general online shoppers"
+    brand_philosophy = (payload.get("brand_philosophy") or "").strip() or "clean and premium"
+    selling_region = (payload.get("selling_region") or "").strip() or "global market"
+    selling_points = (payload.get("selling_points") or "").strip() or "clear product benefits"
+    other_info = (payload.get("other_info") or "").strip() or "none"
+    language_code = (payload.get("language_code") or "zh-CN").strip()
+    currency_code = (payload.get("currency_code") or "CNY").strip()
+    exchange_rate = str(payload.get("exchange_rate") or "7.20").strip()
+    product_count = int(payload.get("product_count") or payload.get("sample_count") or 1)
+    product_count = max(1, min(product_count, 4))
+    target_race = infer_target_race(selling_region)
+    base_context = (
+        f"Context -> category: {main_category}; product: {product_name}; target audience: {target_audience}; "
+        f"target race inferred from market: {target_race}; brand philosophy: {brand_philosophy}; "
+        f"market: {selling_region}; language: {language_code}; currency: {currency_code}; "
+        f"usd exchange rate: {exchange_rate}; key selling points: {selling_points}; other info: {other_info}. "
+    )
+    planning_rules = (
+        f"Internal planning rules: reason over {product_count} possible variants of the SAME category, "
+        "consider style/material/color/detail diversity, and choose one strongest visual variant for this final image. "
+        "Keep category consistency as highest priority. "
+        "You may internally reason with title/description/price logic, but DO NOT render any text, numbers, logo, "
+        "watermark, certification mark, QR code, URL, or brand name in the image."
+    )
+    composition_rules = (
+        "Visual rules: centered subject; balanced safe margins; complete structure; realistic proportions; "
+        "50mm product photography language; no collage; no studio rigs."
+    )
+    if is_contact_lens:
+        scene_rules = (
+            "Template lock (contact lens): right-eye-only macro composition, 100mm macro style, "
+            "full right eyebrow and lower eyelid visible, sharp iris/lens texture, clean high-end seamless background."
+        )
+    elif use_model:
+        scene_rules = (
+            "Template lock (model apparel): single full-body model only, realistic anatomy, full head-to-toe visible, "
+            "off-white seamless background, 5%-8% headroom and >=3% footroom."
+        )
+    else:
+        scene_rules = (
+            "Template lock (product-only): single complete saleable unit only, no human body parts, "
+            "pure white seamless background, centered composition, product area <= 50% frame."
+        )
+    category_specific_rules = (
+        "Category-specific layout: shoes -> symmetric front placement; bags -> straight front upright; "
+        "socks -> flat lay only; watches -> centered dial with natural strap curve; "
+        "phone/tablet -> two identical devices side-by-side (left back, right front, slight overlap, no foldable); "
+        "bike/scooter/balance vehicle -> right-facing strict side profile, wheels aligned."
+    )
+    return " ".join([base_context, planning_rules, composition_rules, scene_rules, category_specific_rules]).strip()
+
+
+def build_shoplive_image_prompt(payload: Dict) -> str:
+    product_name = (payload.get("product_name") or "").strip() or "Generic product"
+    main_category = (payload.get("main_category") or "").strip() or "Ecommerce product"
+    target_audience = (payload.get("target_audience") or "").strip() or "general online shoppers"
+    brand_philosophy = (payload.get("brand_philosophy") or "").strip() or "clean and conversion-oriented"
+    selling_region = (payload.get("selling_region") or "").strip() or "global market"
+    selling_points = (payload.get("selling_points") or "").strip() or "core value proposition"
+    other_info = (payload.get("other_info") or "").strip()
+    language_code = (payload.get("language_code") or "zh-CN").strip()
+    currency_code = (payload.get("currency_code") or "CNY").strip()
+    exchange_rate = str(payload.get("exchange_rate") or "7.20").strip()
+    product_count = int(payload.get("product_count") or payload.get("sample_count") or 2)
+    product_count = max(1, min(product_count, 4))
+    target_race = infer_target_race(selling_region)
+    return f"""
+角色定义
+你是一个专业的AI图像生成提示词工程师，非常擅长生成商品图片的生成提示词。
+[图片]
+任务目标
+根据输入的 售卖地区/目标市场，推理出目标人种，然后再根据 商品名称、售卖地区、商品卖点、目标人种、商品风格模版、其他信息 等上下文信息，为指定的主营品类生成商品图片的生成提示词。
+
+输入
+ 商品名称、售卖地区、商品卖点、目标人种、商品风格模版、其他信息 等上下文信息
+
+当前输入上下文
+- 商品名称: {product_name}
+- 主营品类: {main_category}
+- 售卖地区: {selling_region}
+- 商品卖点: {selling_points}
+- 目标人种: {target_race}
+- 商品风格模版: {brand_philosophy}
+- 其他信息: {other_info}
+- 目标语言: {language_code}
+- 目标货币: {currency_code}
+- 汇率: {exchange_rate}
+- 候选数量: {product_count}
+
+Content (生图提示词):
+生成Content的核心推理逻辑：思维链：
+1. 分析输入：分析输入数据（商品名称、售卖地区、商品卖点、目标人种、商品风格模版、其他信息 等上下文信息），来生成Content，忽略其他与商品展示无关内容。
+2. 确定拍摄场景（有模特 / 无模特）：你必须自行推断是否需要模特场景。
+  - 决策目标：优先选择最能体现该商品核心卖点的拍摄场景。
+  - 默认策略：
+    - 优先选择“有模特场景”：当商品属于服装类且卖点依赖穿着效果与身形比例（如：连衣裙、外套、上衣、裤装、套装、内衣/泳装等）。
+    - 优先选择“无模特场景”：当商品更适合以单品静物展示（如：箱包、小家电、厨具、家居用品、数码产品、美妆、文具、袜子、腕表等）。
+3. 校验视觉规范:
+1）构图方式: 在无缝背景本身上预留安全边距（safe margin）：左右留白均等，头顶与脚部留有充足空间（这是背景留白，不是画框/相框/边框效果）。
+2）主体完整性: 确保单一主体、真实比例、头部完整、着装、结构完整。
+3）空间占比: 严格控制50mm 焦段拍摄，强制模特全身构图，确保模特从头顶到脚尖完全收录于画面内，
+4）品类特定参数: 应用鞋类（对称摆放）等专业参数。
+4. 核对规则: 检查所有规则，包括 通用基础规则、品类特定规则，必须遵循规则来生成Content。 
+5. 构建提示词: 请根据你在第2步推断的“有模特/无模特”场景，选择并严格套用对应模板（模板1或模板2或模版3），仅替换 [SCENE、WARDROBE、SUBJECT] 部分；其他部分不能随意修改和省略；不得混用三套模板的关键约束。若信息不足以判断，优先采用“无模特场景”以降低出错率。
+模板 1（有模特 / 服装）
+SCENE:
+A model whose ethnicity, age, and gender match the product's target market. The model's body proportions are realistic, their pose is natural, and their head is clear and fully visible.
+
+WARDROBE:
+Describe the wearable item(s) based on the product title, focusing on type, color, and fit suitable for a full-body view. Do not describe microscopic details (e.g., stitching, fabric texture) or use phrases like 'as the main item'.
+If the product is an underwear/lingerie/swimwear category (e.g., bra, panties/briefs/boxers, lingerie set, bodysuit, swimsuit), it is allowed to show only that item (or a matching set) without adding an extra top+bottom outfit. For non-underwear apparel, show a complete outfit (top + bottom).
+
+ENVIRONMENT:
+Seamless off-white background.
+
+LIGHTING:
+Standard product still-life photography lighting setup.
+
+CAMERA:
+Use a 50mm focal length to shoot a vertical full-body shot.
+
+COMPOSITION
+Vertical full-body shot on a seamless off-white background. Maintain strict safe margins between the model and the image borders, ensuring 5%-8% headroom above the head and at least 3% footroom below the feet. The model is perfectly centered, with the continuous off-white background extending to all four edges without obstruction.
+
+STYLE:
+Product still-life photography style.
+
+OUTPUT:
+2K resolution, sharp and clear.
+
+
+---
+
+模板 2（无模特）
+
+SUBJECT:
+The frame contains only a single, independent, complete saleable unit of the product. First, identify the product category/type from the title and description. Then, present it in a professional arrangement suitable for that category (e.g., facing forward, upright). The product must have a generic, unbranded appearance; Ensure the complete saleable unit is shown in full.
+
+ENVIRONMENT:
+Seamless pure white background.
+
+LIGHTING:
+Standard product still-life photography lighting setup.
+
+CAMERA:
+Use a 50mm focal length to shoot a vertical product shot. Camera position approximately 2.8m from the product.
+
+
+COMPOSITION
+The product is presented completely and centered, with ample and balanced negative space on all sides, and does not occupy more than 50% of the image.
+
+STYLE:
+Product still-life photography style.
+
+OUTPUT:
+2K resolution, sharp and clear.
+
+OTHER REQUIREMENT:
+The product must have a generic, unbranded appearance, strictly forbid any brand logos, trademarks, or watermarks, brand names on its surface.
+
+
+---
+
+模板 3（美瞳/隐形眼镜）
+
+SUBJECT:
+The frame contains a close-up shot strictly of the right eye, focusing on the intricate iris texture and the wearing effect of the contact lenses (the product). The model's eye area—skin tone, eyelashes, eye shape—should be natural and realistic, aligning with the aesthetic preferences of the target market.
+
+ENVIRONMENT:
+A seamless, soft, uniform high-end makeup/product photography studio background, free from any environmental shadows or distractions.
+
+LIGHTING:
+Standard product still-life photography lighting. Soft, even illumination designed to emphasize the natural texture of the periocular skin and the hydrated, glossy finish of the product (contact lenses/circle lenses).
+
+CAMERA:
+Use a professional 100mm Macro Lens for ultra-sharp macro photography.
+
+FOCUS & DETAIL
+Ensure razor-sharp focus is locked onto the surface of the eyeball. The texture and edges of the cosmetic contact lens, the intricate structure of the iris, tiny blood vessels in the whites of the eye (sclera), and details of the surrounding skin pores must all be rendered with absolute clarity.
+
+COMPOSITION
+The shot must be absolutely centered on the right eye only. The frame above must fully include the entire right eyebrow, showing the natural flow of hair strands and the brow bone structure. The frame below must include the complete right lower eyelid, lower lashes, and the skin of the partial right under-eye triangle area.
+
+STYLE:
+Product still-life photography style.
+
+OUTPUT:
+2K resolution, The image quality is sharp and clear.
+
+通用基础原则：
+1. 构图定式（最高优先级）:
+1）留白: 必须明确描述“主体位于画面正中心，头顶与脚底留有充足空间，左右两侧留白均等”。
+2）画面占比: 无模特: 完整商品最多占画面的 50%。
+2. 主体完整性与比例:
+  - 有模特场景:
+  1）数量与比例: 仅限单一模特。必须呈现真实的物理人体比例，头部完整可见。
+  2）着装规范: 默认模特穿着完整套装（上装+下装），但内衣/内裤/泳装等贴身品类允许仅展示该贴身单品或同系列成套（无需额外外搭上装+下装）。在任何情况下画面需电商合规、干净克制、无不当裸露的强调。
+  3）属性匹配: 根据 {main_category} 和 {target_audience} 确定性别年龄；根据{selling_region} 严格推理并锁定目标人种（如：日本→东亚人种；沙特→阿拉伯人）。
+  - 无模特场景: 仅展示商品主体，严禁出现人体部位（手/脚/脸/颈部等），保证“单个可售单位”完整且可识别。
+  2）呈现方式: 必须是专业化摆放的商品完整拍摄图，严禁拼接图。
+  3）去商业化: 严禁在产品表面出现任何品牌 Logo、商标、水印或序列号，确保产品外观是通用的、无特定品牌特征的。
+3. 摄影风格与画质控制: 统一使用“单品静物摄影”作为风格基调。技术参数: 必须包含 2k 分辨率、高细节、清晰对焦。严禁元素: 严禁出现品牌标志、logo、吊牌、文字、商业元素、水印、杂物、主题化背景或夸张布置。严禁露出摄影棚灯架、支架等任何非自然环境标志物。
+4. 背景与光影规范:
+  - 有模特场景: 采用无缝米白色背景，无任何其他与物体无关干扰元素。
+  - 无模特场景: 采用无缝纯白色背景，无任何其他与物体无关干扰元素。
+品类特定规则
+- 有模特场景 (服装品类):
+  - 主体: 单一模特，具有 真实的人体比例。
+  - 镜头语言：使用全身镜头，从头到脚完整覆盖。
+  - 质感呈现: 降权微观细节描述，强调整体质感
+  - 结构纠正: 明确正常人体比例。
+- 无模特场景 (服装以外的品类，例如：首饰、戒指、包袋、小家电、鞋类等):
+  - 主体: 产品本身，经过专业化的摆放。
+  - 品类特定规则:
+   1）鞋类: 鞋类商品应采用正面朝前、左右对称、平行微展的标准摆放姿态，以完整且对称地呈现鞋头轮廓、鞋面材质、鞋带系法及扣件。
+   2）箱包: 箱包类商品应保持正前方直视视角，并确保包身自然直立、形态饱满，以完整展示包身的宽度比例与正面设计特征。
+   3）袜子： 袜子类商品主图应采用平铺拍摄的方式，将与销售单位对应的袜子完整平整地放置在纯白背景上，自然舒展无褶皱，不得出现模特、人体模型、文字、水印或非售卖道具。
+   4）腕表类： 采用正前方直视视角，确保表盘绝对居中且占据画面核心。表带须从表耳处自然向下延伸，呈现符合重力逻辑的流畅弧度（即模拟佩戴后的自然垂坠感），严禁采用截断式构图或僵硬的平铺摆放。光影需精准勾勒表圈边缘与指针质感，配合纯色背景，确保整体视觉呈现出如名表画册般的极简、高端且严谨的单品特写效果。
+   5）手机/平板类: 必须明确描述为“两部相同的设备并排站立”（Two identical devices standing side-by-side）。左侧设备展示背面（Back view），右侧设备展示正面亮屏（Front view）。两者紧密相邻，右侧设备的左边缘轻微遮挡左侧设备的右边缘（Slight overlap）。严禁出现折叠屏形态（No foldable, no flip, no hinge），严禁堆叠。保持绝对正平视视角，确保轮廓为标准矩形且无品牌Logo。
+   6）平衡车/自行车/电动滑板车类: 采用正侧面（Side profile view）拍摄，车头朝右，车身保持水平直立。确保前后轮完全可见且处于同一水平线上，背景纯白无杂物。构图居中，车辆占据画面中心位置，四周留有适度空白。严禁出现倾斜、俯视或透视变形。
+
+最终输出指令：
+请根据以上所有要求，仅输出一个可直接用于图像生成模型的英文提示词（Content），不要输出 JSON，不要解释，不要附加其他说明。画面比例固定为 3:4。
+""".strip()
+
+
+def build_shoplive_image_prompt_compact(payload: Dict) -> str:
+    product_name = (payload.get("product_name") or "").strip() or "generic product"
+    main_category = (payload.get("main_category") or "").strip() or "ecommerce product"
+    target_audience = (payload.get("target_audience") or "").strip() or "general online shoppers"
+    brand_philosophy = (payload.get("brand_philosophy") or "").strip() or "clean and premium"
+    selling_region = (payload.get("selling_region") or "").strip() or "global market"
+    selling_points = (payload.get("selling_points") or "").strip() or "clear product benefits"
+    target_race = infer_target_race(selling_region)
+    category_l = main_category.lower()
+    apparel_keywords = ["dress", "shirt", "top", "pants", "skirt", "coat", "jacket", "连衣裙", "上衣", "裤", "外套", "裙"]
+    use_model = any(k in category_l for k in apparel_keywords)
+    dress_keywords = ["dress", "gown", "连衣裙", "裙"]
+    is_dress = any(k in category_l or k in product_name.lower() for k in dress_keywords)
+    contact_lens_keywords = ["contact lens", "contacts", "circle lens", "美瞳", "隐形眼镜"]
+    is_contact_lens = any(k in category_l or k in product_name.lower() for k in contact_lens_keywords)
+    rule_capsule = build_shoplive_image_rule_capsule(payload, use_model=use_model, is_contact_lens=is_contact_lens)
+    if use_model:
+        subject_block = (
+            f"One full-body model ({target_race}) suitable for {target_audience}, realistic body proportions, natural pose, full head-to-toe visible."
+        )
+        env_block = "Seamless off-white studio background."
+        composition = "Vertical 3:4 full-body composition, centered subject, 5%-8% headroom and at least 3% footroom."
+    else:
+        if is_dress:
+            subject_block = (
+                "Single complete full-length dress garment only, from neckline to hem fully visible, "
+                "displayed on a hanger or invisible mannequin, centered, generic unbranded appearance."
+            )
+        else:
+            subject_block = f"Single complete saleable unit of {main_category}, professionally arranged, centered, generic unbranded appearance."
+        env_block = "Seamless pure white studio background."
+        composition = "Vertical 3:4 composition, centered product, balanced negative space, product occupies <= 50% frame."
+    return (
+        "Commercial ecommerce product still-life photo. "
+        f"Product name: {product_name}. Category: {main_category}. Selling points: {selling_points}. "
+        f"Target market: {selling_region}. Brand philosophy: {brand_philosophy}. "
+        f"{rule_capsule} "
+        f"{subject_block} {env_block} "
+        "Lighting: standard product still-life studio lighting. "
+        "Camera: 50mm focal length. "
+        f"{composition} "
+        f"The generated subject MUST strictly match this category and product name: {main_category} / {product_name}. "
+        "Do not generate any unrelated product category. "
+        "No portrait close-up, no headshot, no only-face composition. "
+        "2K resolution, sharp focus, clear texture. "
+        "No logos, no trademarks, no watermarks, no text overlays, no clutter, no collage."
+    ).strip()
+
+
+def build_shoplive_image_prompt_safe_product_only(payload: Dict) -> str:
+    product_name = (payload.get("product_name") or "").strip() or "generic product"
+    main_category = (payload.get("main_category") or "").strip() or "ecommerce product"
+    selling_points = (payload.get("selling_points") or "").strip() or "clear product benefits"
+    selling_region = (payload.get("selling_region") or "").strip() or "global market"
+    category_l = main_category.lower()
+    dress_keywords = ["dress", "gown", "连衣裙", "裙"]
+    is_dress = any(k in category_l or k in product_name.lower() for k in dress_keywords)
+    contact_lens_keywords = ["contact lens", "contacts", "circle lens", "美瞳", "隐形眼镜"]
+    is_contact_lens = any(k in category_l or k in product_name.lower() for k in contact_lens_keywords)
+    rule_capsule = build_shoplive_image_rule_capsule(payload, use_model=False, is_contact_lens=is_contact_lens)
+    if is_dress:
+        subject = (
+            "Single complete full-length dress garment only, from neckline to hem fully visible, "
+            "displayed on a hanger or invisible mannequin, centered."
+        )
+    else:
+        subject = "Single complete saleable product unit only, centered."
+    return (
+        "Ecommerce product-only still-life photo. "
+        f"Product name: {product_name}. Category: {main_category}. Selling points: {selling_points}. "
+        f"Target market: {selling_region}. "
+        f"{rule_capsule} "
+        "No people, no human body parts, no faces, no model, no hands. "
+        f"{subject} "
+        "Strictly prohibit any unrelated category item. "
+        "No portrait close-up, no headshot, no only-face composition. "
+        "Unbranded appearance. "
+        "Seamless pure white background. "
+        "Standard product still-life studio lighting. "
+        "50mm focal length. Vertical 3:4 composition with balanced negative space. "
+        "2K resolution, sharp focus, clear texture. "
+        "No logos, no trademarks, no watermarks, no text overlays, no clutter, no collage."
+    ).strip()
+

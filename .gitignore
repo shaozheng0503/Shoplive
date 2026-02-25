@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.sample
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store

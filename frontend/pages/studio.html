@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shoplive Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles/studio.css" />
+  </head>
+  <body>
+    <main class="studio-page">
+      <header class="studio-topbar">
+        <div class="brand">
+          <a href="/pages/index.html" class="brand-logo-link" aria-label="Back to landing">
+            <img class="brand-logo" src="/assets/image.png" alt="Shoplive logo" />
+          </a>
+          <div class="brand-text">
+            <strong>SHOPLIVE</strong>
+            <span>STUDIO</span>
+          </div>
+          <span class="task-name" id="taskName" data-i18n="taskUntitled">Untitled Task</span>
+        </div>
+        <div class="top-right">
+          <div class="workflow-status" id="workflowStatusBar">
+            <span id="statusValidate" class="status-pill" data-i18n="flowValidate">校验</span>
+            <span id="statusClarify" class="status-pill" data-i18n="flowClarify">追问</span>
+            <span id="statusScript" class="status-pill" data-i18n="flowScript">脚本</span>
+            <span id="statusSelfcheck" class="status-pill" data-i18n="flowSelfcheck">自评</span>
+            <span id="statusExport" class="status-pill" data-i18n="flowExport">导出</span>
+          </div>
+          <div class="studio-actions">
+            <button id="studioLangToggleBtn" class="new-task-btn">EN</button>
+            <button id="newTaskBtn" class="new-task-btn">+ New Task</button>
+            <span class="account-chip" data-i18n="accountPlan">Free</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="panel assets-panel">
+          <div class="panel-title">
+            <h2 data-i18n="panelFootage">Footage</h2>
+            <button id="uploadBtn" class="ghost-btn" data-i18n="uploadBtn">Upload</button>
+          </div>
+          <div class="gate-bar">
+            <span data-i18n="prdGate">PRD Gate</span>
+            <strong id="prdGateBadge" class="gate-badge bad">Not Ready</strong>
+          </div>
+          <input id="filePicker" type="file" accept="video/*,image/*" multiple hidden />
+          <div id="assetList" class="asset-list"></div>
+          <div id="uploadBox" class="upload-box">
+            <p data-i18n="noAssets">No Assets</p>
+            <small data-i18n="dropHint">Drop files or click upload</small>
+          </div>
+          <div class="prd-form">
+            <h3 data-i18n="prdInputs">PRD Inputs</h3>
+            <label data-i18n="sellingPointsLabel">商品卖点（1-6个）</label>
+            <input id="sellingPointsInput" data-i18n-placeholder="sellingPointsPh" placeholder="如：补水、便携" />
+            <label data-i18n="targetUserLabel">目标用户</label>
+            <input id="targetUserInput" data-i18n-placeholder="targetUserPh" placeholder="如：18-30岁女性" />
+            <label data-i18n="salesRegionLabel">销售地区</label>
+            <input id="salesRegionInput" data-i18n-placeholder="salesRegionPh" placeholder="如：东南亚" />
+
+            <label data-i18n="styleTemplateLabel">商品风格模版</label>
+            <div id="templateButtons" class="template-buttons">
+              <button type="button" class="template-btn active" data-template="clean" data-i18n="tplClean">Clean Product</button>
+              <button type="button" class="template-btn" data-template="lifestyle" data-i18n="tplLifestyle">Lifestyle</button>
+              <button type="button" class="template-btn" data-template="premium" data-i18n="tplPremium">Premium</button>
+              <button type="button" class="template-btn" data-template="social" data-i18n="tplSocial">Social Ads</button>
+            </div>
+
+            <label data-i18n="videoDurationLabel">视频时长</label>
+            <div class="choice-row">
+              <label><input type="radio" name="duration" value="10" checked /> 10s</label>
+              <label><input type="radio" name="duration" value="15" /> 15s</label>
+            </div>
+
+            <label data-i18n="ratioLabel">视频尺寸比例</label>
+            <input value="16:9" disabled />
+
+            <label><input id="needModelToggle" type="checkbox" checked /> <span data-i18n="needModelLabel">需要模特展示（默认开启）</span></label>
+            <div id="pointSuggestions" class="point-suggestions"></div>
+          </div>
+        </aside>
+
+        <section class="panel video-panel">
+          <div class="panel-title">
+            <h2 data-i18n="panelVideo">Video</h2>
+            <button id="exportBtn" class="export-btn" data-i18n="exportBtn">Generate Video</button>
+          </div>
+          <div class="preview-box">
+            <div class="preview-stage">
+              <video id="previewVideo" controls></video>
+              <img id="previewImage" alt="Selected asset preview" />
+              <span id="previewStatus" data-i18n="noPreview">No Preview</span>
+            </div>
+            <p id="previewHint" data-i18n="previewHint">Upload clips and send command to generate timeline.</p>
+          </div>
+          <div class="timeline-toolbar">
+            <button id="seekStartBtn">⏮</button>
+            <button id="playPauseBtn">▶</button>
+            <button id="seekEndBtn">⏭</button>
+            <span id="timecode">00:00 / 00:20</span>
+            <span class="zoom">100%</span>
+          </div>
+          <div class="timeline-actions">
+            <button id="splitSegBtn" data-i18n="splitSegment">Split Segment</button>
+            <button id="deleteSegBtn" data-i18n="deleteSegment">Delete Segment</button>
+            <span id="timelineHint" data-i18n="timelineHintDefault">Select a segment to edit</span>
+          </div>
+          <div id="timelineTracks" class="timeline-tracks"></div>
+        </section>
+
+        <section class="panel script-panel">
+          <div class="panel-title">
+            <h2>Script</h2>
+            <span id="scriptSync" class="sync-state" data-i18n="syncing">Syncing...</span>
+          </div>
+          <textarea id="scriptEditor" spellcheck="false"></textarea>
+          <div class="script-footer">
+            <span id="scriptCounter">0 characters</span>
+            <span data-i18n="markdownEditor">Markdown Editor</span>
+          </div>
+        </section>
+
+        <aside class="panel ai-panel">
+          <div class="panel-title">
+            <h2>Shoplive AI</h2>
+            <span id="onlineDot" class="online-dot" data-i18n="online">Online</span>
+          </div>
+          <div id="messageList" class="message-list"></div>
+          <div class="api-config">
+            <label><input id="useApiToggle" type="checkbox" /> <span data-i18n="useBackendApi">Use backend API</span></label>
+            <input id="llmApiBaseInput" data-i18n-placeholder="llmApiBasePh" placeholder="LiteLLM URL (e.g. https://litellm.shoplazza.site)" />
+            <input id="llmApiKeyInput" type="password" data-i18n-placeholder="llmApiKeyPh" placeholder="LiteLLM API Key (Bearer ...)" />
+            <input id="backendUrlInput" data-i18n-placeholder="backendUrlPh" placeholder="Backend URL (e.g. http://127.0.0.1:8000)" />
+            <input id="projectIdInput" data-i18n-placeholder="projectIdPh" placeholder="Project ID (e.g. gemini-sl-20251120)" />
+            <div class="api-row">
+              <input id="modelInput" value="gemini-3.1-pro-preview" />
+              <input id="proxyInput" data-i18n-placeholder="proxyPh" placeholder="Proxy (optional)" />
+            </div>
+            <div class="api-row">
+              <input id="veoModelInput" value="veo-3.1-generate-preview" />
+              <input id="storageUriInput" data-i18n-placeholder="storageUriPh" placeholder="gs://bucket/path (optional)" />
+            </div>
+            <div class="api-row">
+              <input id="veoDurationInput" value="8" />
+              <input id="veoAspectRatioInput" value="16:9" />
+            </div>
+          </div>
+          <div class="quick-actions">
+            <button data-prompt="Generate a 20s product script with hook and CTA">
+              <span data-i18n="qaGenerateTask">generate task name</span>
+            </button>
+            <button data-prompt="Refine the shots and pacing for social media">
+              <span data-i18n="qaEditShots">edit shots</span>
+            </button>
+            <button data-prompt="Change background music to energetic">
+              <span data-i18n="qaUpdateTrack">update track</span>
+            </button>
+          </div>
+          <div class="chat-input">
+            <input id="chatInput" data-i18n-placeholder="chatPlaceholder" placeholder="Tell Shoplive what you want to do..." />
+            <button id="sendBtn" aria-label="Send message">➤</button>
+          </div>
+          <div class="chat-tools">
+            <button data-i18n="chatToolAssets">Assets</button>
+            <button data-i18n="chatToolLink">Link</button>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/scripts/entry/studio.main.js"></script>
+  </body>
+</html>

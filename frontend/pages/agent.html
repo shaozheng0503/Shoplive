@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shoplive Agent</title>
+    <link rel="stylesheet" href="/styles/agent.css" />
+  </head>
+  <body>
+    <main class="agent-page">
+      <header class="agent-topbar">
+        <div class="brand">
+          <img src="/assets/image.png" alt="Shoplive logo" />
+          <div>
+            <strong>SHOPLIVE</strong>
+            <span>Agent</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="langToggleBtn" class="lang-btn">EN</button>
+          <a class="back-link" href="/pages/index.html">返回首页</a>
+        </div>
+      </header>
+
+      <section id="workspace" class="workspace mode-chat">
+        <div class="workspace-toolbar" hidden>
+          <button id="toggleScriptTab" class="workspace-tab">分镜脚本</button>
+          <button id="toggleVideoTab" class="workspace-tab">视频编辑</button>
+        </div>
+        <aside id="scriptEditorPanel" class="editor-panel script-panel" hidden></aside>
+        <section id="videoEditorPanel" class="editor-panel video-panel" hidden></section>
+
+        <section class="chat-shell">
+          <div id="chatList" class="chat-list"></div>
+
+          <div class="composer composer-compact">
+            <div class="compact-head">
+              <button id="uploadBtn" class="ghost upload-ref-btn">参考图</button>
+              <button id="toggleProductUrlBtn" class="ghost">商品链接</button>
+              <span id="uploadHint" class="compact-hint">上传商品图后可自动识别商品信息并优化提示词。</span>
+            </div>
+            <div class="compact-link-row">
+              <input id="productUrlInput" type="url" placeholder="粘贴 Shoplazza 商品链接（可自动解析）" />
+              <button id="parseProductUrlBtn" class="ghost">解析链接</button>
+            </div>
+            <textarea id="chatInput" placeholder="输入视频生成提示词..." rows="4"></textarea>
+            <div class="compact-config-row">
+              <label class="compact-chip" for="aspectRatioSelect">
+                <span>比例</span>
+                <select id="aspectRatioSelect">
+                  <option value="9:16">9:16</option>
+                  <option value="16:9" selected>16:9</option>
+                  <option value="1:1">1:1</option>
+                </select>
+              </label>
+              <label class="compact-chip" for="durationSelect">
+                <span>视频时长</span>
+                <select id="durationSelect">
+                  <option value="4">4秒</option>
+                  <option value="6">6秒</option>
+                  <option value="8" selected>8秒</option>
+                </select>
+              </label>
+              <button id="sendBtn">生成视频</button>
+              <button id="enhancePromptBtn" class="ghost">提示词增强</button>
+            </div>
+            <input id="imageInput" type="file" accept="image/png,image/jpeg" multiple hidden />
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/scripts/entry/agent.main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,235 @@
+import re
+from typing import Dict, List
+
+
+ALLOWED_VIDEO_DURATIONS = {4, 6, 8}
+DEFAULT_VIDEO_DURATION = 8
+
+
+def normalize_selling_points(raw: str) -> List[str]:
+    points = [x.strip() for x in re.split(r"[，,、;；\n]+", str(raw or "")) if x.strip()]
+    dedup = []
+    for p in points:
+        if p not in dedup:
+            dedup.append(p)
+    return dedup
+
+
+def normalize_duration_seconds(raw) -> int:
+    try:
+        n = int(raw)
+    except Exception:
+        return DEFAULT_VIDEO_DURATION
+    return n if n in ALLOWED_VIDEO_DURATIONS else DEFAULT_VIDEO_DURATION
+
+
+def normalize_shoplive_brief(payload: Dict) -> Dict:
+    selling_points = normalize_selling_points(payload.get("selling_points", ""))
+    duration = normalize_duration_seconds(payload.get("duration", DEFAULT_VIDEO_DURATION))
+    aspect_ratio = str(payload.get("aspect_ratio", "16:9") or "16:9").strip() or "16:9"
+    if aspect_ratio != "16:9":
+        aspect_ratio = "16:9"
+    return {
+        "product_name": str(payload.get("product_name", "")).strip(),
+        "main_category": str(payload.get("main_category", "")).strip(),
+        "selling_points": selling_points[:6],
+        "target_user": str(payload.get("target_user", "")).strip(),
+        "sales_region": str(payload.get("sales_region", "")).strip(),
+        "template": str(payload.get("template", "clean")).strip() or "clean",
+        "duration": duration,
+        "aspect_ratio": aspect_ratio,
+        "need_model": bool(payload.get("need_model", True)),
+        "image_count": int(payload.get("image_count", 0) or 0),
+        "quality_reports": payload.get("quality_reports", [])
+        if isinstance(payload.get("quality_reports", []), list)
+        else [],
+    }
+
+
+def build_input_diff(raw: Dict, normalized: Dict) -> Dict:
+    diff = {}
+    raw_sp = normalize_selling_points(raw.get("selling_points", ""))
+    if raw_sp[:6] != normalized["selling_points"]:
+        diff["selling_points"] = {"raw": raw_sp, "effective": normalized["selling_points"]}
+    raw_duration = normalize_duration_seconds(raw.get("duration", DEFAULT_VIDEO_DURATION))
+    if raw_duration != normalized["duration"]:
+        diff["duration"] = {"raw": raw_duration, "effective": normalized["duration"]}
+    raw_aspect = str(raw.get("aspect_ratio", "16:9") or "16:9").strip() or "16:9"
+    if raw_aspect != normalized["aspect_ratio"]:
+        diff["aspect_ratio"] = {"raw": raw_aspect, "effective": normalized["aspect_ratio"]}
+    return diff
+
+
+def validate_shoplive_brief(brief: Dict) -> Dict:
+    issues = []
+    image_count = int(brief.get("image_count", 0) or 0)
+    if image_count <= 0:
+        issues.append("NO_IMAGES")
+    if image_count > 3:
+        issues.append("TOO_MANY_IMAGES")
+    for q in brief.get("quality_reports", []):
+        w = int(q.get("width", 0) or 0)
+        h = int(q.get("height", 0) or 0)
+        sharp = float(q.get("sharpness", 0) or 0)
+        subject = float(q.get("subjectRatio", q.get("subject_ratio", 0)) or 0)
+        is_generated = bool(q.get("is_generated", False))
+        if w <= 0 or h <= 0:
+            continue
+        if (w < 1024 or h < 1024) and not is_generated:
+            issues.append("LOW_RESOLUTION")
+            break
+        if sharp < 100:
+            issues.append("LOW_SHARPNESS")
+            break
+        if subject < 0.4:
+            issues.append("LOW_SUBJECT")
+            break
+    if len(brief.get("selling_points", [])) == 0:
+        issues.append("NEED_SELLING_POINTS")
+    if len(brief.get("selling_points", [])) > 6:
+        issues.append("TOO_MANY_POINTS")
+    if not brief.get("target_user"):
+        issues.append("NEED_TARGET_USER")
+    if not brief.get("sales_region"):
+        issues.append("NEED_REGION")
+    ok = len(issues) == 0
+    return {"ok": ok, "issues": issues}
+
+
+def build_shoplive_script(brief: Dict) -> str:
+    points = [str(x or "").strip() for x in brief.get("selling_points", []) if str(x or "").strip()]
+    p0 = points[0] if points else "核心卖点"
+    p1 = points[1] if len(points) > 1 else p0
+    duration = int(brief.get("duration", DEFAULT_VIDEO_DURATION) or DEFAULT_VIDEO_DURATION)
+    aspect = str(brief.get("aspect_ratio", "16:9") or "16:9")
+    target = str(brief.get("target_user") or "目标用户")
+    region = str(brief.get("sales_region") or "目标地区")
+    product = str(brief.get("product_name") or "该商品")
+    template = str(brief.get("template") or "clean")
+    model_text = "需要模特展示" if bool(brief.get("need_model", True)) else "不需要模特展示"
+    return (
+        f"主框架：4.4 产品演示；辅助框架：4.6 故事讲述\n"
+        f"镜头1（0-2s）：{aspect}构图，{product}开场特写，突出{p0}，电影级影棚布光，镜头推近。\n"
+        f"镜头2（2-5s）：{model_text}，在{region}偏好场景面向{target}进行使用演示，展示{p1}，镜头跟拍并加入情绪锚点。\n"
+        f"镜头3（5-{duration}s）：收束为转化镜头，保留商品关键细节与购买动机，节奏干净利落。\n"
+        f"BGM：轻快且有节奏感的电商氛围音乐，避免喧宾夺主。\n"
+        f"标题：{product}｜{duration}s 高转化短视频（{template}）\n"
+        f"文案：围绕“{('；'.join(points) if points else p0)}”做真实可执行表达，不夸大、不绝对化。\n"
+        "合规检查：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+    )
+
+
+def build_shoplive_script_prompt(brief: Dict, user_message: str = "") -> str:
+    points = "；".join([str(x or "").strip() for x in brief.get("selling_points", []) if str(x or "").strip()]) or "核心卖点"
+    model_text = "需要模特展示" if bool(brief.get("need_model", True)) else "不需要模特展示"
+    extra = str(user_message or "").strip()
+    return (
+        "你是电商短视频脚本导演。请按“最新规则”输出可直接执行的脚本，不要解释。\n"
+        "必须遵循：优先聚焦1-2个核心卖点；框架4.1~4.6中选择1个主框架+1个辅助框架；镜头连贯、可拍摄、可剪辑。\n"
+        f"商品：{brief.get('product_name', '') or '该商品'}\n"
+        f"卖点：{points}\n"
+        f"目标用户：{brief.get('target_user', '') or '目标用户'}\n"
+        f"销售地区：{brief.get('sales_region', '') or '目标地区'}\n"
+        f"模板风格：{brief.get('template', 'clean')}\n"
+        f"时长：{brief.get('duration', DEFAULT_VIDEO_DURATION)}秒（4/6/8之一）\n"
+        f"画幅：{brief.get('aspect_ratio', '16:9')}\n"
+        f"模特策略：{model_text}\n"
+        f"用户补充：{extra or '无'}\n"
+        "输出格式必须包含以下字段并按顺序输出：\n"
+        "主框架：...\n"
+        "辅助框架：...\n"
+        "镜头1（含时段）：...\n"
+        "镜头2（含时段）：...\n"
+        "镜头3（含时段）：...\n"
+        "Bgm：...\n"
+        "标题：...\n"
+        "文案：...\n"
+        "合规检查：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+    )
+
+
+def selfcheck_script(script_text: str) -> Dict:
+    text = str(script_text or "")
+    missing = []
+    if not (
+        re.search(r"镜头1|shot\s*1", text, re.IGNORECASE)
+        and re.search(r"镜头2|shot\s*2", text, re.IGNORECASE)
+        and re.search(r"镜头3|shot\s*3", text, re.IGNORECASE)
+    ):
+        missing.append("SHOT_1_2_3")
+    if not re.search(r"bgm", text, re.IGNORECASE):
+        missing.append("BGM")
+    if not re.search(r"标题|title", text, re.IGNORECASE):
+        missing.append("TITLE")
+    if not re.search(r"文案|copy|caption", text, re.IGNORECASE):
+        missing.append("COPY")
+    return {"ok": len(missing) == 0, "missing": missing}
+
+
+def build_shoplive_video_prompt_template(normalized: Dict, script_text: str) -> str:
+    points = [str(x or "").strip() for x in normalized.get("selling_points", []) if str(x or "").strip()]
+    points_text = "；".join(points) if points else "核心卖点"
+    target_user = normalized.get("target_user", "") or "目标用户"
+    region = normalized.get("sales_region", "") or "目标地区"
+    template = normalized.get("template", "clean")
+    product = normalized.get("product_name", "") or "该商品"
+    duration = int(normalized.get("duration", DEFAULT_VIDEO_DURATION) or DEFAULT_VIDEO_DURATION)
+    aspect = normalized.get("aspect_ratio", "16:9") or "16:9"
+    need_model = "需要模特展示" if bool(normalized.get("need_model", True)) else "不需要模特展示"
+    script_hint = str(script_text or "").strip()[:600]
+    return (
+        f"{aspect} 超高清商业画质，电影级影棚布光。"
+        f"商品：{product}。主卖点仅聚焦1-2个：{points_text}。"
+        f"目标人群：{target_user}；销售地区：{region}；风格模板：{template}；模特策略：{need_model}；时长：{duration}秒。"
+        "镜头组织遵循动态节奏，优先使用 1 个主框架 + 1 个辅助框架（4.1~4.6），"
+        "把卖点转化为可执行镜头动作、光影、环境与情绪锚点，不写空话。"
+        + (f" 参考分镜脚本：{script_hint}。" if script_hint else "")
+        + " 合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+    )
+
+
+def build_shoplive_agent_enhance_template(normalized: Dict, raw_prompt: str = "", script_text: str = "") -> str:
+    points = normalized.get("selling_points", []) or []
+    points_text = "；".join(points) if points else "突出核心卖点"
+    product = normalized.get("product_name", "") or "该商品"
+    target_user = normalized.get("target_user", "") or "目标用户"
+    region = normalized.get("sales_region", "") or "目标地区"
+    template = normalized.get("template", "clean") or "clean"
+    duration = int(normalized.get("duration", DEFAULT_VIDEO_DURATION) or DEFAULT_VIDEO_DURATION)
+    aspect = normalized.get("aspect_ratio", "16:9") or "16:9"
+    story_hint = str(script_text or "").strip()[:500]
+    base_prompt = str(raw_prompt or "").strip()
+    return (
+        "你是一位电商视频提示词优化专家。请把用户原始提示词改写为一条可直接用于视频生成的最终提示词。\n"
+        "你必须严格遵循如下视频 prompt 框架，并按框架字段组织语义：\n"
+        "4.1 产品口播：\n"
+        "- [Style] [Environment] [Tone & Pacing] [Camera] [Lighting]\n"
+        "- [Actions/Scenes]：主体动作 -> 产品特写 -> 使用演示 -> 情绪展示 -> 收尾\n"
+        "- [Background Sound] [Transition/Editing] [Call to Action]\n"
+        "4.2 UGC评测：\n"
+        "- 真实手持/POV、快节奏、生活化高代入\n"
+        "- 结构：主体出场 -> 产品特写 -> 使用演示 -> 前后对比(可选) -> 总结推荐\n"
+        "4.3 痛点与解决：\n"
+        "- Shot1 正确示范 -> Shot2 痛点示范 -> Shot3 解决细节 -> Shot4 性能特写 -> Shot5 推荐收尾\n"
+        "4.4 产品演示：\n"
+        "- 极简电影感写实，强调流程可视化与日常仪式感\n"
+        "- 结构：产品引入 -> 使用动作 -> 特写卖点 -> 体验展示 -> 收尾CTA\n"
+        "4.5 前后对比：\n"
+        "- 现代达人带货风格，高饱和商业滤镜，真实亲测感\n"
+        "- 结构：展示 -> 痛点/对比 -> 使用质感 -> 效果展示 -> 收尾CTA\n"
+        "4.6 故事讲述：\n"
+        "- [Style] [Scene] [Cinematography] [Lighting & Color] [Mood & Tone]\n"
+        "- 叙事强调镜头连贯、情绪弧线、产品价值与场景关系\n"
+        "根据商品与卖点自动选择最合适的1种主框架 + 1种辅助框架，不要同时铺满所有框架。\n"
+        f"约束：时长={duration}秒，画幅={aspect}，商品={product}，目标人群={target_user}，地区={region}，风格模板={template}。\n"
+        f"核心卖点：{points_text}。\n"
+        + (f"参考分镜：{story_hint}\n" if story_hint else "")
+        + (f"用户原始提示词：{base_prompt}\n" if base_prompt else "用户原始提示词：无\n")
+        + "输出要求：\n"
+        "- 只输出最终一条提示词正文，不要解释。\n"
+        "- 优先保证商品一致性、真实感、镜头可执行性。\n"
+        "- 最终提示词中要显式覆盖：Style/Environment/Tone & Pacing/Camera/Lighting/Actions/Background Sound/Transition/CTA。\n"
+        "- 时长是4/6/8秒，卖点只聚焦1-2个，节奏要可拍可剪。\n"
+        "- 必须包含合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+    )
+

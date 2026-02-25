@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shoplive Image Lab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles/image-lab.css" />
+  </head>
+  <body>
+    <main class="lab-page">
+      <header class="lab-topbar">
+        <div class="brand">
+          <img class="brand-logo" src="/assets/image.png" alt="Shoplive logo" />
+          <div class="brand-text">
+            <strong>SHOPLIVE</strong>
+            <span>IMAGE LAB</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="langToggleBtn" class="ghost-btn">EN</button>
+          <button id="toStudioBtn" class="primary-btn" data-i18n="skipBtn">Skip to Studio</button>
+        </div>
+      </header>
+
+      <section class="lab-shell">
+        <aside class="panel form-panel">
+          <div class="stepper">
+            <span class="step active" data-i18n="step1">1. 生成商品图</span>
+            <span class="arrow">→</span>
+            <span class="step" data-i18n="step2">2. 生成营销视频</span>
+          </div>
+          <h2 data-i18n="title">实时生成商品图</h2>
+          <p class="muted" data-i18n="desc">先完成生图，再自动跳转到视频生成工作台。</p>
+
+          <label data-i18n="uploadLabel">上传商品图片（1-3张）</label>
+          <input id="productImageInput" type="file" accept="image/*" multiple />
+
+          <label data-i18n="productNameLabel">商品名称</label>
+          <input id="productNameInput" data-i18n-placeholder="productNamePh" placeholder="如：法式复古收腰连衣裙" />
+
+          <label data-i18n="pointLabel">商品卖点（1-6个）</label>
+          <input id="sellingPointsInput" data-i18n-placeholder="sellingPointsPh" placeholder="补水、便携" />
+          <div id="pointSuggestions" class="point-suggestions"></div>
+
+          <label data-i18n="targetUserLabel">目标用户</label>
+          <input id="targetUserInput" data-i18n-placeholder="targetUserPh" placeholder="如：18-30岁女性" />
+
+          <label data-i18n="salesRegionLabel">销售地区</label>
+          <input id="salesRegionInput" data-i18n-placeholder="salesRegionPh" placeholder="如：东南亚" />
+
+          <label data-i18n="templateLabel">商品风格模版</label>
+          <div id="templateButtons" class="template-buttons">
+            <button type="button" class="template-btn active" data-template="clean">Clean</button>
+            <button type="button" class="template-btn" data-template="lifestyle">Lifestyle</button>
+            <button type="button" class="template-btn" data-template="premium">Premium</button>
+            <button type="button" class="template-btn" data-template="social">Social</button>
+          </div>
+
+          <button id="generateBtn" class="primary-btn large" data-i18n="generateBtn">实时生成商品图</button>
+        </aside>
+
+        <section class="panel result-panel">
+          <h3 data-i18n="qualityTitle">图片质量检测</h3>
+          <div id="qualityList" class="quality-list"></div>
+
+          <h3 data-i18n="progressTitle">生成进度</h3>
+          <div class="progress-meta">
+            <span id="etaText" class="muted">预计剩余耗时 -- s</span>
+          </div>
+          <div class="progress-wrap">
+            <div id="progressBar" class="progress-bar"></div>
+          </div>
+          <p id="statusText" class="muted" data-i18n="idleText">Idle</p>
+
+          <h3 data-i18n="resultTitle">生成结果</h3>
+          <div id="resultGrid" class="result-grid"></div>
+          <div class="next-actions">
+            <button id="gotoStudioBtn" class="primary-btn" disabled data-i18n="gotoBtn">
+              进入视频生成
+            </button>
+            <span id="autoJumpText" class="muted"></span>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/scripts/entry/image-lab.main.js"></script>
+  </body>
+</html>

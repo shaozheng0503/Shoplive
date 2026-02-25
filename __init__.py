@@ -1,0 +1,2 @@
+"""Shoplive project package root."""
+

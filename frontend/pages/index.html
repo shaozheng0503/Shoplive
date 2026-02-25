@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shoplive Landing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles/styles.css" />
+  </head>
+  <body class="landing-body">
+    <main class="landing-page">
+      <section class="hero-shell">
+        <header class="topbar">
+          <div class="brand">
+            <img class="brand-logo" src="/assets/image.png" alt="Shoplive logo" />
+            <div class="brand-text">
+              <strong>SHOPLIVE</strong>
+              <span>STUDIO</span>
+            </div>
+          </div>
+          <nav class="nav">
+            <a href="#" data-i18n="navFeatures">Features</a>
+            <a href="#" data-i18n="navSolutions">Solutions</a>
+            <a href="#" data-i18n="navResources">Resources</a>
+            <a href="#" data-i18n="navPricing">Pricing</a>
+            <a href="#" data-i18n="navCommunity">Community</a>
+          </nav>
+          <div class="top-actions">
+            <button id="langToggleBtn" class="lang-btn">
+              <span class="lang-globe" aria-hidden="true">◉</span>
+              <span class="lang-label">EN</span>
+            </button>
+            <button id="topStartBtn" class="start-btn" data-i18n="start">Get started</button>
+          </div>
+        </header>
+
+        <div class="hero-panel">
+          <div class="left-copy">
+            <h1 data-i18n="line1">让创作回归简单：</h1>
+            <p class="desc" data-i18n="desc">无需剪辑技能，Shoplive 自动化分析商品卖点，几分钟内直接产出专业级可用视频。</p>
+          </div>
+          <div class="right-cards">
+            <article class="mini-card card-video">
+              <div class="media-thumb">
+                <video
+                  class="mock-media"
+                  autoplay
+                  muted
+                  loop
+                  playsinline
+                  poster="https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80"
+                >
+                  <source src="https://cdn.coverr.co/videos/coverr-young-woman-in-a-coat-1579/1080p.mp4" type="video/mp4" />
+                </video>
+              </div>
+              <p data-i18n="cardVideoClips">视频素材</p>
+            </article>
+            <article class="mini-card card-link">
+              <div class="media-thumb">
+                <img
+                  id="landingRefPreview"
+                  class="mock-media"
+                  src="https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=640&q=70"
+                  alt="Reference image preview"
+                />
+              </div>
+              <p data-i18n="cardProductLinks">商品链接</p>
+            </article>
+            <article class="mini-card card-script">
+              <div class="media-thumb script-thumb rich-script-thumb">
+                <div class="script-head">
+                  <span class="script-dot"></span>
+                  <span class="script-title">SCRIPT</span>
+                </div>
+                <div class="script-line"></div>
+                <div class="script-line short"></div>
+                <div class="script-line"></div>
+                <div class="script-meta">Scene A · 通勤开场</div>
+                <div class="script-meta">Scene B · 面料细节特写</div>
+                <div class="script-meta">Scene C · 上身对比与卖点</div>
+                <div class="script-tag">Shot 1</div>
+              </div>
+              <p data-i18n="cardVideoScript">视频脚本</p>
+            </article>
+          </div>
+        </div>
+
+        <div class="input-row input-row-smart">
+          <div class="input-main">
+            <button id="openRefPanelBtn" class="ref-trigger" type="button">
+              <span class="ref-icon" aria-hidden="true"></span>
+              <span data-i18n="uploadRef">参考图</span>
+            </button>
+            <input id="promptInput" placeholder="Choose one to start with" />
+            <button id="startFlowBtn" class="primary-btn" data-i18n="cta">Get free videos</button>
+          </div>
+          <div class="input-advanced" id="landingAdvanced">
+            <div class="adv-ops">
+              <label>
+                <span data-i18n="ratioLabel">比例</span>
+                <select id="aspectRatioSelect">
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="1:1">1:1</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="durationLabel">视频时长</span>
+                <select id="durationSelect">
+                  <option value="8">8秒</option>
+                  <option value="6">6秒</option>
+                  <option value="4">4秒</option>
+                </select>
+              </label>
+              <button id="enhancePromptBtn" class="secondary-btn" data-i18n="enhancePrompt">提示词增强</button>
+            </div>
+          </div>
+        </div>
+        <p class="landing-note" data-i18n="uploadHint">上传商品图，描述你的商品信息和想要的视频风格…</p>
+        <div class="creators-row">
+          <div class="creator-avatars" aria-hidden="true">
+            <img src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=80&q=70" alt="" />
+            <img src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=80&q=70" alt="" />
+            <img src="https://images.unsplash.com/photo-1502685104226-ee32379fefbe?auto=format&fit=crop&w=80&q=70" alt="" />
+          </div>
+          <span id="creatorUsageText" data-i18n="creatorUsage">超过 10,000+ 创作者正在使用</span>
+        </div>
+      </section>
+    </main>
+
+    <section id="refModal" class="ref-modal" aria-hidden="true">
+      <div class="ref-modal-card">
+        <header class="ref-modal-head">
+          <strong data-i18n="refPanelTitle">选择参考图</strong>
+          <button id="closeRefPanelBtn" class="ref-close-btn" type="button" aria-label="Close">×</button>
+        </header>
+        <div class="ref-modal-body">
+          <aside class="ref-modal-side">
+            <button id="refUploadBtn" class="ref-side-btn" type="button">
+              <span class="side-icon upload" aria-hidden="true"></span>
+              <span data-i18n="refUploadLocal">从本地上传</span>
+            </button>
+            <button id="refMosaicBtn" class="ref-side-btn" type="button">
+              <span class="side-icon mosaic" aria-hidden="true"></span>
+              <span data-i18n="refUploadMosaic">从本地上传拼图</span>
+            </button>
+            <input id="refFileInput" type="file" accept="image/*" multiple hidden />
+          </aside>
+          <div class="ref-modal-main">
+            <div class="ref-tabs">
+              <button id="refTabUpload" class="ref-tab is-active" type="button" data-i18n="refTabUpload">上传资产</button>
+              <button id="refTabAi" class="ref-tab" type="button" data-i18n="refTabAi">AI 生成</button>
+            </div>
+            <div id="refUploadPanel" class="ref-panel is-active">
+              <div id="refUploadGrid" class="ref-grid"></div>
+            </div>
+            <div id="refAiPanel" class="ref-panel">
+              <div class="ai-generate-box">
+                <textarea
+                  id="refAiPromptInput"
+                  rows="3"
+                  data-i18n-placeholder="refAiPromptPh"
+                  placeholder="输入商品与风格，生成参考图"
+                ></textarea>
+                <button id="refAiGenerateBtn" class="secondary-btn" type="button" data-i18n="refAiGenerateBtn">AI 生成</button>
+              </div>
+              <div id="refAiResultGrid" class="ref-grid"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script type="module" src="/scripts/entry/landing.main.js"></script>
+  </body>
+</html>
