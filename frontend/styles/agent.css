@@ -2570,17 +2570,17 @@ body {
   overflow: auto;
 }
 
-/* Prevent single long replies from stretching split layout */
-.workspace.has-editors .chat-list .msg:not(.form-card):not(.video-msg) {
+/* Keep bubble natural height; only collapse when explicitly marked */
+.workspace.has-editors .chat-list .msg.is-history-collapsed {
   max-height: 240px;
   overflow: auto;
 }
 
-.workspace.has-editors .chat-list .msg:not(.form-card):not(.video-msg)::-webkit-scrollbar {
+.workspace.has-editors .chat-list .msg.is-history-collapsed::-webkit-scrollbar {
   width: 6px;
 }
 
-.workspace.has-editors .chat-list .msg:not(.form-card):not(.video-msg)::-webkit-scrollbar-thumb {
+.workspace.has-editors .chat-list .msg.is-history-collapsed::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: #b8cbea;
 }

@@ -1,0 +1,5 @@
+flask
+requests
+google-auth
+google-cloud-storage
+playwright

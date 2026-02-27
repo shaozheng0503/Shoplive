@@ -61,6 +61,14 @@ const i18n = {
     on: "开启",
     confirm: "确认并生成视频",
     submit: "已开始生成视频，请稍候...",
+    chainSubmit: "已开始链式生成 {total} 秒视频：先生成基础8秒片段，再自动延展。",
+    chainProgressA: "链式生成进行中（目标 {total} 秒）：正在等待当前片段完成…",
+    chainProgressB: "链式生成进行中（目标 {total} 秒）：正在拼接下一段风格一致视频…",
+    chainProgressC: "链式生成进行中（目标 {total} 秒）：已应用一致性策略，请稍候…",
+    chainDoneDetail: "链式生成完成，共产出 {segments} 段片段。",
+    chainSummaryTitle: "链式阶段明细：",
+    chainSummaryLineBase: "第{step}段（基础生成）｜seed={seed}｜尝试次数={attempt}｜输出：{uri}",
+    chainSummaryLineExtend: "第{step}段（延展）｜尝试次数={attempt}｜输入：{source}｜输出：{uri}",
     op: "视频任务已创建，正在生成。",
     polling: "视频生成中，请稍候...",
     pollFail: "当前生成失败，请调整信息后重试。",
@@ -246,6 +254,14 @@ const i18n = {
     on: "Enabled",
     confirm: "Confirm & Generate Video",
     submit: "Video generation started, please wait...",
+    chainSubmit: "Chained generation started for {total}s: creating base 8s segment then extending automatically.",
+    chainProgressA: "Chained generation in progress ({total}s target): waiting for current segment to finish...",
+    chainProgressB: "Chained generation in progress ({total}s target): extending with style continuity...",
+    chainProgressC: "Chained generation in progress ({total}s target): consistency constraints applied, please wait...",
+    chainDoneDetail: "Chained generation completed with {segments} segments.",
+    chainSummaryTitle: "Chained segment details:",
+    chainSummaryLineBase: "Segment {step} (base) | seed={seed} | attempts={attempt} | output: {uri}",
+    chainSummaryLineExtend: "Segment {step} (extend) | attempts={attempt} | input: {source} | output: {uri}",
     op: "Video task created. Generating now.",
     polling: "Generating video, please wait...",
     pollFail: "Generation failed. Please adjust inputs and retry.",
@@ -807,7 +823,7 @@ async function ensureSmartOptionPools() {
     return smartOptionCache.loading;
   }
 
-  const base = window.location.origin;
+  const base = getApiBase();
   smartOptionCache.signature = signature;
   smartOptionCache.loading = (async () => {
     try {
@@ -1050,7 +1066,7 @@ function hasWorkflowRequiredInput() {
 }
 
 async function callShopliveWorkflow(action, extra = {}) {
-  const base = window.location.origin;
+  const base = getApiBase();
   return postJson(`${base}/api/shoplive/video/workflow`, {
     action,
     input: buildWorkflowInput(),
@@ -1897,7 +1913,7 @@ function renderVideoEditor() {
     }
     pushMsg("system", t("videoExporting"));
     try {
-      const base = window.location.origin;
+      const base = getApiBase();
       const resp = await postJson(
         `${base}/api/video/edit/export`,
         {
@@ -2186,7 +2202,7 @@ async function analyzeImageInsight(imageItems = []) {
     .filter(Boolean)
     .slice(0, 6);
   if (!normalized.length) throw new Error("invalid image data");
-  const base = window.location.origin;
+  const base = getApiBase();
   return postJson(
     `${base}/api/agent/image-insight`,
     {
@@ -2679,7 +2695,153 @@ function buildAutoPromptDraftFromParsed(source = "image") {
 }
 
 function pickPlayableUrl(data) {
-  return data?.signed_video_urls?.[0]?.url || data?.signed_all_urls?.[0]?.url || data?.inline_videos?.[0]?.data_url || "";
+  return data?.inline_videos?.[0]?.data_url || data?.signed_video_urls?.[0]?.url || data?.signed_all_urls?.[0]?.url || "";
+}
+
+function getApiBase() {
+  const { protocol, hostname, port, origin } = window.location;
+  if (protocol === "file:") return "http://127.0.0.1:8000";
+  if ((hostname === "127.0.0.1" || hostname === "localhost") && !port) return "http://127.0.0.1:8000";
+  return origin;
+}
+
+function buildPlayableUrlFromGcs(gcsUri) {
+  const uri = String(gcsUri || "").trim();
+  if (!uri || !uri.startsWith("gs://")) return "";
+  return `${getApiBase()}/api/veo/play?gcs_uri=${encodeURIComponent(uri)}`;
+}
+
+function buildVideoSourceCandidates(videoUrl, gcsUri = "") {
+  const direct = String(videoUrl || "").trim();
+  const proxy = buildPlayableUrlFromGcs(gcsUri);
+  const result = [];
+  if (proxy) result.push(proxy);
+  if (direct && direct !== proxy) result.push(direct);
+  return result;
+}
+
+async function refreshPlayableUrlByOperation(operationName) {
+  const op = String(operationName || "").trim();
+  if (!op) return "";
+  try {
+    const status = await postJson(
+      `${getApiBase()}/api/veo/status`,
+      {
+        project_id: "gemini-sl-20251120",
+        model: "veo-3.1-generate-preview",
+        operation_name: op,
+      },
+      25000
+    );
+    return String(pickPlayableUrl(status) || "").trim();
+  } catch (_e) {
+    return "";
+  }
+}
+
+function isChainDuration(value) {
+  // Temporarily disable chained long-duration flow (16/24/30s) without deleting implementation.
+  // Original logic kept for quick restore:
+  // return ["16", "24", "30"].includes(String(value || ""));
+  void value;
+  return false;
+}
+
+function renderChainSummary(chainResp) {
+  const segments = Array.isArray(chainResp?.segments) ? chainResp.segments : [];
+  if (!segments.length) return;
+  const seed = String(chainResp?.seed || "");
+  const lines = [t("chainSummaryTitle")];
+  for (const seg of segments) {
+    const step = Number(seg?.step || 0) || 0;
+    const attempt = Number(seg?.attempt_count || 1) || 1;
+    const uri = String(seg?.video_gcs_uri || "").trim() || "-";
+    if (String(seg?.type || "") === "base_generate") {
+      lines.push(
+        t("chainSummaryLineBase", {
+          step,
+          seed: seed || "-",
+          attempt,
+          uri,
+        })
+      );
+    } else {
+      lines.push(
+        t("chainSummaryLineExtend", {
+          step,
+          attempt,
+          source: String(seg?.source_video_gcs_uri || "-"),
+          uri,
+        })
+      );
+    }
+  }
+  pushMsg("system", lines.join("\n"), { speed: 20 });
+}
+
+function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "") {
+  const sourceCandidates = buildVideoSourceCandidates(videoUrl, gcsUri);
+  const finalPlayableUrl = sourceCandidates[0] || "";
+  state.lastVideoUrl = finalPlayableUrl;
+  state.canUseEditors = true;
+  const card = document.createElement("article");
+  card.className = "msg system video-msg";
+  const title = document.createElement("div");
+  title.textContent = t("done");
+
+  const surface = document.createElement("div");
+  surface.className = "video-edit-surface";
+
+  const video = document.createElement("video");
+  video.controls = true;
+  video.preload = "metadata";
+  video.playsInline = true;
+  video.src = finalPlayableUrl;
+  let idx = 0;
+  let refreshedByOp = false;
+  video.addEventListener("error", async () => {
+    if (idx + 1 < sourceCandidates.length) {
+      idx += 1;
+      const nextUrl = sourceCandidates[idx];
+      state.lastVideoUrl = nextUrl;
+      video.src = nextUrl;
+      const p = video.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+      return;
+    }
+    if (!refreshedByOp) {
+      refreshedByOp = true;
+      const refreshedUrl = await refreshPlayableUrlByOperation(operationName);
+      if (refreshedUrl) {
+        state.lastVideoUrl = refreshedUrl;
+        video.src = refreshedUrl;
+        const p = video.play();
+        if (p && typeof p.catch === "function") p.catch(() => {});
+        return;
+      }
+    }
+    pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.");
+  });
+  surface.appendChild(video);
+
+  const actions = document.createElement("div");
+  actions.className = "video-actions";
+  actions.innerHTML = `
+    <button id="openVideoEditorBtn">${t("editVideo")}</button>
+    <button id="openScriptEditorBtn">${t("editScript")}</button>
+  `;
+
+  card.appendChild(title);
+  card.appendChild(surface);
+  card.appendChild(actions);
+  chatList.appendChild(card);
+  card.querySelector("#openVideoEditorBtn")?.addEventListener("click", () => toggleEditorPanel("video"));
+  card.querySelector("#openScriptEditorBtn")?.addEventListener("click", () => toggleEditorPanel("script"));
+  applyWorkspaceMode();
+  renderVideoEditor();
+  renderScriptEditor();
+  applyVideoEditsToPreview();
+  scrollToBottom();
 }
 
 async function postJson(url, body, timeout = 30000) {
@@ -2716,7 +2878,7 @@ async function generateVideo(promptOverride = "") {
     const imageParsed = parseDataUrl(state.images[0]?.dataUrl);
     const fallbackImageUrl = Array.isArray(state.productImageUrls) ? String(state.productImageUrls[0] || "").trim() : "";
     const useImageMode = Boolean((imageParsed?.base64 && imageParsed?.mime) || fallbackImageUrl);
-    const base = window.location.origin;
+    const base = getApiBase();
     const startBody = {
       project_id: "gemini-sl-20251120",
       model: "veo-3.1-generate-preview",
@@ -2725,6 +2887,7 @@ async function generateVideo(promptOverride = "") {
       veo_mode: useImageMode ? "image" : "text",
       duration_seconds: Number(state.duration),
       aspect_ratio: state.aspectRatio || "16:9",
+      storage_uri: "gs://gemini_video_shoplive/agent/",
     };
     if (imageParsed?.base64 && imageParsed?.mime) {
       startBody.image_base64 = imageParsed.base64;
@@ -2732,6 +2895,65 @@ async function generateVideo(promptOverride = "") {
     } else if (fallbackImageUrl) {
       startBody.image_url = fallbackImageUrl;
     }
+    if (isChainDuration(state.duration)) {
+      const totalSeconds = Number(state.duration || 16);
+      pushMsg("system", t("chainSubmit", { total: totalSeconds }));
+      const segmentRounds = Math.max(1, Math.floor(totalSeconds / 8));
+      const chainMaxWaitSeconds = totalSeconds >= 24 ? 900 : 780;
+      const chainPollIntervalSeconds = 6;
+      const chainExtendRetryMax = 2;
+      const chainExtendRetryDelaySeconds = 3;
+      const chainTimeout =
+        (chainMaxWaitSeconds * segmentRounds + chainExtendRetryDelaySeconds * chainExtendRetryMax * Math.max(0, segmentRounds - 1) + 45) *
+        1000;
+      let chainResp = null;
+      chainResp = await postJson(
+        `${base}/api/veo/chain`,
+        {
+          ...startBody,
+          target_total_seconds: totalSeconds,
+          duration_seconds: 8,
+          max_wait_seconds: chainMaxWaitSeconds,
+          poll_interval_seconds: chainPollIntervalSeconds,
+          extend_retry_max: chainExtendRetryMax,
+          extend_retry_delay_seconds: chainExtendRetryDelaySeconds,
+        },
+        chainTimeout
+      );
+      let chainVideoUrl =
+        String(chainResp?.final_signed_video_url || "").trim() ||
+        String(chainResp?.segments?.[chainResp.segments.length - 1]?.signed_video_url || "").trim();
+      let chainFinalGcsUri = String(chainResp?.final_video_gcs_uri || "").trim();
+      const finalOp = String(chainResp?.segments?.[chainResp.segments.length - 1]?.operation_name || "").trim();
+      if (finalOp) {
+        try {
+          const freshStatus = await postJson(
+            `${base}/api/veo/status`,
+            {
+              project_id: "gemini-sl-20251120",
+              model: "veo-3.1-generate-preview",
+              operation_name: finalOp,
+            },
+            30000
+          );
+          const freshUrl = pickPlayableUrl(freshStatus);
+          if (freshUrl) chainVideoUrl = freshUrl;
+          if (!chainFinalGcsUri) {
+            chainFinalGcsUri = String(freshStatus?.video_uris?.[0] || "").trim();
+          }
+        } catch (_e) {}
+      }
+      if (!chainVideoUrl) throw new Error("chain video url missing");
+      const segmentCount =
+        Number(chainResp?.segment_count || 0) || (Array.isArray(chainResp?.segments) ? chainResp.segments.length : 0);
+      if (segmentCount > 0) {
+        pushMsg("system", t("chainDoneDetail", { segments: segmentCount }));
+      }
+      renderGeneratedVideoCard(chainVideoUrl, chainFinalGcsUri, finalOp);
+      state.generating = false;
+      return;
+    }
+
     const start = await postJson(`${base}/api/veo/start`, startBody);
     const operationName = start?.operation_name;
     if (!operationName) throw new Error("operation_name missing");
@@ -2761,31 +2983,11 @@ async function generateVideo(promptOverride = "") {
           return;
         }
         const videoUrl = pickPlayableUrl(status);
+        const gcsUri = String(status?.video_uris?.[0] || "").trim();
         if (videoUrl) {
           pollStopped = true;
           clearInterval(timer);
-          state.lastVideoUrl = videoUrl;
-          state.canUseEditors = true;
-          const card = document.createElement("article");
-          card.className = "msg system video-msg";
-          card.innerHTML = `
-            <div>${t("done")}</div>
-            <div class="video-edit-surface">
-              <video controls src="${videoUrl}"></video>
-            </div>
-            <div class="video-actions">
-              <button id="openVideoEditorBtn">${t("editVideo")}</button>
-              <button id="openScriptEditorBtn">${t("editScript")}</button>
-            </div>
-          `;
-          chatList.appendChild(card);
-          card.querySelector("#openVideoEditorBtn")?.addEventListener("click", () => toggleEditorPanel("video"));
-          card.querySelector("#openScriptEditorBtn")?.addEventListener("click", () => toggleEditorPanel("script"));
-          applyWorkspaceMode();
-          renderVideoEditor();
-          renderScriptEditor();
-          applyVideoEditsToPreview();
-          scrollToBottom();
+          renderGeneratedVideoCard(videoUrl, gcsUri, operationName);
           state.generating = false;
           return;
         }
@@ -2798,8 +3000,14 @@ async function generateVideo(promptOverride = "") {
         pollBusy = false;
       }
     }, 3000);
-  } catch (_e) {
-    pushMsg("system", t("genFail"));
+  } catch (e) {
+    const detailRaw = String(e?.message || "").trim();
+    const detail = /aborted|abort/i.test(detailRaw)
+      ? currentLang === "zh"
+        ? "请求超时，请重试"
+        : "request timeout, please retry"
+      : detailRaw;
+    pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"));
     state.generating = false;
   }
 }
@@ -3026,7 +3234,7 @@ async function enhancePromptByAgent() {
   ]
     .filter(Boolean)
     .join("\n");
-  const base = window.location.origin;
+  const base = getApiBase();
   try {
     pushMsg("system", t("enhanceWorking"));
     const fallbackTemplate =
@@ -3037,7 +3245,7 @@ async function enhancePromptByAgent() {
             "4.1产品口播、4.2UGC评测、4.3痛点与解决、4.4产品演示、4.5前后对比、4.6故事讲述。",
             "必须选择1个主框架+1个辅助框架，不要全部堆叠。",
             "最终语义必须覆盖：Style、Environment、Tone & Pacing、Camera、Lighting、Actions/Scenes、Background Sound、Transition/Editing、CTA。",
-            "卖点只聚焦1-2个，时长严格遵守4/6/8秒，镜头可执行可拍可剪。",
+            "卖点只聚焦1-2个；单段时长遵守4/6/8秒，若目标总时长是16/24秒请按8秒链式延展，镜头可执行可拍可剪。",
             "必须包含合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。",
             "只输出最终提示词，不要解释。",
           ].join("\n")
@@ -3046,7 +3254,7 @@ async function enhancePromptByAgent() {
             "Rewrite the input as a final, production-ready single prompt using frameworks 4.1~4.6.",
             "Select one primary framework + one supporting framework only.",
             "The final prompt must cover: Style, Environment, Tone & Pacing, Camera, Lighting, Actions/Scenes, Background Sound, Transition/Editing, CTA.",
-            "Focus on only 1-2 selling points and keep duration constraints executable.",
+            "Focus on only 1-2 selling points; keep per-segment duration in 4/6/8s, and for 16/24s use chained 8s extension.",
             "Must append compliance suffix: clean highlight edges, controlled reflections, clear textures, sharp structure edges, no distorted limbs/structures, no third-party logos/watermarks.",
             "Output only the final prompt text without explanations.",
           ].join("\n");
@@ -3114,7 +3322,7 @@ async function parseShopProductByUrl(inputUrl = "") {
   const url = String(inputUrl || productUrlInput?.value || "").trim();
   if (!url) return;
   if (productUrlInput && inputUrl) productUrlInput.value = url;
-  const base = window.location.origin;
+  const base = getApiBase();
   try {
     pushMsg("system", t("parseLinkWorking"));
     const data = await postJson(
@@ -3177,6 +3385,7 @@ async function parseShopProductByUrl(inputUrl = "") {
       showUploadRefQuickAction();
     }
     const reviewSummary = String(insight.review_summary || "").trim();
+    const fetchConfidence = String(insight.fetch_confidence || data?.confidence || "").trim().toLowerCase();
     const positiveText = state.reviewPositivePoints.length ? state.reviewPositivePoints.slice(0, 2).join("；") : "";
     const negativeText = state.reviewNegativePoints.length ? state.reviewNegativePoints.slice(0, 2).join("；") : "";
     const sellingText = state.sellingPoints || (currentLang === "zh" ? "突出核心卖点" : "highlight core selling points");
@@ -3185,6 +3394,14 @@ async function parseShopProductByUrl(inputUrl = "") {
         currentLang === "zh"
           ? `请为商品「${state.productName || "该商品"}」生成一条${state.duration || "8"}秒电商短视频，比例${state.aspectRatio || "16:9"}，重点卖点：${sellingText}。${positiveText ? `好评强调点：${positiveText}。` : ""}${negativeText ? `差评规避点：${negativeText}。` : ""}${reviewSummary ? `补充反馈：${reviewSummary}。` : ""}镜头自然、真实质感、突出转化。`
           : `Create a ${state.duration || "8"}s ecommerce video for "${state.productName || "this product"}" in ${state.aspectRatio || "16:9"}. Key selling points: ${sellingText}. ${positiveText ? `Emphasize positive review signals: ${positiveText}.` : ""}${negativeText ? `Avoid negative feedback triggers: ${negativeText}.` : ""}${reviewSummary ? `Additional review cues: ${reviewSummary}.` : ""} Natural cinematic motion, realistic texture, conversion-focused.`;
+    }
+    if (fetchConfidence === "low") {
+      pushMsg(
+        "system",
+        currentLang === "zh"
+          ? "链接解析结果可信度较低，建议补充商品截图或手动补充卖点。"
+          : "Parsed result confidence is low. Add product screenshots or fill selling points manually.",
+      );
     }
     pushMsg("system", t("parseLinkDone"));
   } catch (_e) {

@@ -8,6 +8,19 @@ from typing import Callable, Dict, Tuple
 import requests
 from flask import jsonify, request
 
+from shoplive.backend.scraper.adapters import (
+    assess_parse_quality,
+    get_platform_parser,
+    guess_platform as guess_platform_by_url,
+    parse_generic_page,
+)
+from shoplive.backend.scraper.fetchers import (
+    fetch_html_with_playwright,
+    fetch_html_with_requests,
+    is_weak_amazon_html,
+)
+from shoplive.backend.scraper.models import ParseResult
+
 
 def register_agent_routes(
     app,
@@ -364,163 +377,123 @@ def register_agent_routes(
                 language = "zh"
             if not product_url or not re.match(r"^https?://", product_url, flags=re.IGNORECASE):
                 return json_error("product_url 不能为空且必须是 http/https 链接")
+            platform = guess_platform_by_url(product_url)
+            parser = get_platform_parser(platform)
+            js_first_platforms = {"amazon", "tiktok-shop", "temu"}
+            wait_ms_by_platform = {"amazon": 3800, "tiktok-shop": 4200, "temu": 3600}
 
-            req_headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-            }
-            resp = requests.get(product_url, timeout=45, proxies=build_proxies(proxy), headers=req_headers)
-            if resp.status_code >= 400:
-                req_headers["User-Agent"] = (
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+            def parse_with_artifact(fetch_artifact):
+                if fetch_artifact.status_code >= 400 or not fetch_artifact.html:
+                    return ParseResult(platform=platform, source=fetch_artifact.engine, confidence="low")
+                if parser is parse_generic_page:
+                    result = parser(fetch_artifact.url or product_url, fetch_artifact.html, platform)
+                else:
+                    result = parser(fetch_artifact.url or product_url, fetch_artifact.html)
+                result.source = fetch_artifact.engine
+                return result
+
+            def _artifact_quality(fetch_artifact, parsed_result):
+                score = assess_parse_quality(parsed_result)
+                html_text = (fetch_artifact.html or "").lower()
+                if fetch_artifact.status_code >= 400 or not html_text:
+                    return -1
+                if platform == "amazon" and is_weak_amazon_html(html_text):
+                    score -= 6
+                if fetch_artifact.failure_tag in {"anti_bot", "js_challenge", "weak_html", "render_failed"}:
+                    score -= 2
+                return score
+
+            fallback_reason = ""
+            parsed = ParseResult(platform=platform, confidence="low")
+
+            fetch_req = None
+            fetch_pw = None
+
+            if platform in js_first_platforms:
+                fetch_pw = fetch_html_with_playwright(
+                    product_url,
+                    proxy,
+                    platform=platform,
+                    wait_ms=wait_ms_by_platform.get(platform, 3200),
                 )
-                resp = requests.get(product_url, timeout=45, proxies=build_proxies(proxy), headers=req_headers)
-                if resp.status_code >= 400:
-                    return json_error(f"商品链接抓取失败: HTTP {resp.status_code}", 502)
-            html_text = resp.text or ""
-            if _is_anti_bot_page(html_text):
-                return json_error("目标站点启用了反爬拦截（验证码/风控页），当前无法直接抓取详情页", 502)
-            platform = _guess_platform(product_url)
+                parsed = parse_with_artifact(fetch_pw)
+                fallback_reason = fetch_pw.failure_tag or fetch_pw.error or ""
+                needs_requests = (not fetch_pw.html) or fetch_pw.status_code >= 400 or parsed.confidence == "low"
+                if not parsed.product_name or not parsed.image_urls:
+                    needs_requests = True
+                if platform == "amazon" and fetch_pw.failure_tag == "weak_html":
+                    needs_requests = True
+                if needs_requests:
+                    fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
+                    parsed_req = parse_with_artifact(fetch_req)
+                    if _artifact_quality(fetch_req, parsed_req) >= _artifact_quality(fetch_pw, parsed):
+                        parsed = parsed_req
+                    fallback_reason = fetch_req.failure_tag or fetch_req.error or fallback_reason
+            else:
+                fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
+                parsed = parse_with_artifact(fetch_req)
+                fallback_reason = fetch_req.failure_tag or fetch_req.error or ""
+                needs_playwright = bool(fetch_req.anti_bot) or parsed.confidence == "low"
+                if not parsed.product_name or not parsed.image_urls:
+                    needs_playwright = True
+                if needs_playwright:
+                    fetch_pw = fetch_html_with_playwright(
+                        product_url,
+                        proxy,
+                        platform=platform,
+                        wait_ms=wait_ms_by_platform.get(platform, 2200),
+                    )
+                    parsed_pw = parse_with_artifact(fetch_pw)
+                    if _artifact_quality(fetch_pw, parsed_pw) >= _artifact_quality(fetch_req, parsed):
+                        parsed = parsed_pw
+                    fallback_reason = fetch_pw.failure_tag or fetch_pw.error or fallback_reason
 
-            product_ld = _extract_product_jsonld(html_text)
-            product_candidates = _extract_product_like_from_inline_json(html_text)
-            product_inline = product_candidates[0] if product_candidates else {}
-            meta_title = _extract_meta(html_text, "og:title")
-            meta_desc = _extract_meta(html_text, "og:description")
-            meta_image = _extract_meta(html_text, "og:image")
-            title_tag = ""
-            title_m = re.search(r"<title>([\s\S]*?)</title>", html_text, flags=re.IGNORECASE)
-            if title_m:
-                title_tag = _clean_text(title_m.group(1))
+            if parsed.confidence == "low" and not fallback_reason:
+                if fetch_pw and (fetch_pw.failure_tag or fetch_pw.error):
+                    fallback_reason = fetch_pw.failure_tag or fetch_pw.error
+                elif fetch_req and (fetch_req.failure_tag or fetch_req.error):
+                    fallback_reason = fetch_req.failure_tag or fetch_req.error
+            if fallback_reason == "weak_html":
+                fallback_reason = "weak_html_amazon"
 
-            product_name = _pick_first_non_empty(
-                [
-                    product_ld.get("name", ""),
-                    product_inline.get("title", ""),
-                    product_inline.get("name", ""),
-                    meta_title,
-                    title_tag,
-                ]
-            )
-            description = _pick_first_non_empty(
-                [
-                    product_ld.get("description", ""),
-                    product_inline.get("description", ""),
-                    product_inline.get("body_html", ""),
-                    meta_desc,
-                ]
-            )
-            description_plain = _clean_text(description)
-
-            image_candidates = []
-            ld_image = product_ld.get("image")
-            if isinstance(ld_image, str) and ld_image.strip():
-                image_candidates.append({"url": ld_image.strip(), "source": "jsonld"})
-            elif isinstance(ld_image, list):
-                for u in ld_image:
-                    uu = str(u or "").strip()
-                    if uu and uu.startswith("http"):
-                        image_candidates.append({"url": uu, "source": "jsonld"})
-            inline_images = product_inline.get("images") or product_inline.get("image") or product_inline.get("featured_image")
-            if isinstance(inline_images, str):
-                uu = _normalize_url(inline_images, product_url)
-                if uu:
-                    image_candidates.append({"url": uu, "source": "inline"})
-            elif isinstance(inline_images, list):
-                for u in inline_images:
-                    if isinstance(u, dict):
-                        u = u.get("src") or u.get("url") or ""
-                    uu = _normalize_url(str(u or ""), product_url)
-                    if uu:
-                        image_candidates.append({"url": uu, "source": "inline"})
-            if meta_image and meta_image.startswith("http"):
-                image_candidates.append({"url": meta_image, "source": "meta"})
-            for u in _extract_image_urls_from_html(html_text, product_url):
-                image_candidates.append({"url": u, "source": "html_img"})
-            if platform == "amazon":
-                for u in _extract_amazon_hires_images(html_text, product_url):
-                    image_candidates.append({"url": u, "source": "amazon_hires"})
-            if platform == "aliexpress":
-                for m in re.findall(r'"imagePathList"\s*:\s*\[([^\]]+)\]', html_text or "", flags=re.IGNORECASE):
-                    for u in re.findall(r'"([^"]+)"', m):
-                        uu = _normalize_url(u.replace("\\/", "/"), product_url)
-                        if uu:
-                            image_candidates.append({"url": uu, "source": "inline"})
-                if not product_name:
-                    m_title = re.search(r'"subject"\s*:\s*"([^"]+)"', html_text or "", flags=re.IGNORECASE)
-                    if m_title:
-                        product_name = html.unescape(m_title.group(1)).strip()
-            images = _rank_and_filter_images(
-                image_candidates,
-                product_name=product_name,
-                platform=platform,
-                limit=10,
-            )
-
-            selling_points = []
-            if description_plain:
-                parts = re.split(r"[，,。.;；!！?？\n]", description_plain)
-                for p in parts:
-                    s = p.strip(" -:：")
-                    if len(s) < 5 or len(s) > 42:
-                        continue
-                    selling_points.append(s)
-                    if len(selling_points) >= 4:
-                        break
-
-            page_text = _clean_text(html_text)
-            review_lines = _extract_review_lines(page_text)
-            review_pos, review_neg = _extract_review_signals(page_text)
-            review_summary = "；".join((review_pos[:2] + review_neg[:1])) if (review_pos or review_neg) else ("；".join(review_lines[:3]) if review_lines else "")
+            if not parsed.product_name:
+                try:
+                    path = urlparse(product_url).path or ""
+                    slug = path.strip("/").split("/")[-1]
+                    if not slug or slug.lower() in {"item.htm", "item.html", "goods.html"}:
+                        qid = re.search(r"[?&](?:id|goods_id)=([0-9a-zA-Z_-]+)", product_url)
+                        if qid:
+                            slug = f"{platform} {qid.group(1)}"
+                    slug = re.sub(r"\.(html|htm)$", "", slug, flags=re.IGNORECASE)
+                    slug = re.sub(r"[-_]+", " ", slug).strip()
+                    if slug:
+                        parsed.product_name = slug[:80]
+                        if not parsed.selling_points:
+                            parsed.selling_points = [f"{parsed.product_name[:28]} 核心卖点突出"]
+                        if parsed.confidence == "low":
+                            parsed.confidence = "medium"
+                except Exception:
+                    pass
 
             image_items = []
-            for u in images[:4]:
+            for u in parsed.image_urls[:4]:
                 try:
                     b64, mime = fetch_image_as_base64(u, proxy)
                     image_items.append({"base64": b64, "mime_type": mime, "url": u})
                 except Exception:
                     continue
 
-            offers = product_ld.get("offers") if isinstance(product_ld, dict) else {}
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
-            price = ""
-            currency = ""
-            if isinstance(offers, dict):
-                price = str(offers.get("price") or "").strip()
-                currency = str(offers.get("priceCurrency") or "").strip()
-
-            insight = {
-                "product_name": product_name,
-                "main_business": "鞋服配饰" if language == "zh" else "fashion ecommerce",
-                "style_template": "clean",
-                "selling_points": selling_points,
-                "target_user": "",
-                "sales_region": "",
-                "brand_direction": "",
-                "review_highlights": review_lines,
-                "review_positive_points": review_pos,
-                "review_negative_points": review_neg,
-                "review_summary": review_summary,
-                "image_urls": images,
-                "image_items": image_items,
-                "platform": platform,
-                "price": price,
-                "currency": currency,
-            }
+            insight = parsed.to_insight(language)
+            insight["image_items"] = image_items
             return jsonify(
                 {
                     "ok": True,
                     "status_code": 200,
                     "url": product_url,
                     "insight": insight,
+                    "source": parsed.source,
+                    "confidence": parsed.confidence,
+                    "fallback_reason": fallback_reason,
                 }
             )
         except Exception as e:
