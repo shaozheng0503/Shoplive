@@ -4,9 +4,13 @@ import re
 from typing import Callable, Dict, Tuple
 
 import requests
-from flask import Response, jsonify, request, stream_with_context
+from flask import Response, g, jsonify, request, stream_with_context
 from google.cloud import storage
 from google.oauth2 import service_account
+
+from shoplive.backend.audit import audit_log
+from shoplive.backend.validation import validate_request
+from shoplive.backend.schemas import VeoStartRequest, VeoStatusRequest
 
 
 def register_veo_routes(
@@ -137,28 +141,43 @@ def register_veo_routes(
         raise TimeoutError(f"Veo operation 超时（>{max_wait_seconds}s）: {operation_name}")
 
     @app.post("/api/veo/start")
+    @validate_request(VeoStartRequest)
     def api_veo_start():
-        payload = request.get_json(silent=True) or {}
+        """Submit a video generation task to Google Veo.
+
+        Modes: text (prompt-only), image (prompt + first frame), reference (style-consistent).
+        Returns operation_name for polling via /api/veo/status.
+
+        Common follow-up: use check_video_status(operation_name) to poll until video is ready.
+        """
+        _t0 = time.monotonic()
+        # Validated schema fields; raw_payload for reference fields not in schema.
+        payload = g.req.model_dump()
+        raw_payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
-            prompt = (payload.get("prompt") or "").strip()
-            storage_uri = (payload.get("storage_uri") or "").strip()
-            sample_count = int(payload.get("sample_count", 1))
-            veo_mode = (payload.get("veo_mode") or "text").strip()
-            image_url = (payload.get("image_url") or "").strip()
-            image_b64 = (payload.get("image_base64") or "").strip()
-            image_mime_type = (payload.get("image_mime_type") or "image/png").strip()
-            reference_urls = normalize_reference_urls(payload.get("reference_image_urls"))
+            prompt = g.req.prompt
+            storage_uri = g.req.storage_uri
+            sample_count = g.req.sample_count
+            veo_mode = g.req.veo_mode
+            image_url = g.req.image_url
+            image_b64 = g.req.image_base64
+            image_mime_type = g.req.image_mime_type
+            reference_urls = normalize_reference_urls(raw_payload.get("reference_image_urls"))
             reference_images_base64 = normalize_reference_images_base64(
-                payload.get("reference_images_base64")
+                raw_payload.get("reference_images_base64")
             )
-            reference_type = (payload.get("reference_type") or "asset").strip()
+            reference_type = (raw_payload.get("reference_type") or "asset").strip()
             if not model:
                 model = "veo-3.1-generate-preview"
             if not prompt:
-                return json_error("prompt 不能为空")
-            if image_mime_type not in {"image/png", "image/jpeg"}:
-                return json_error("image_mime_type 仅支持 image/png 或 image/jpeg")
+                return json_error(
+                    "prompt 不能为空",
+                    recovery_suggestion="Provide a descriptive 'prompt' for video generation. "
+                                        "Use /api/shoplive/video/workflow with action='build_export_prompt' "
+                                        "to auto-generate an optimized prompt from product data.",
+                    error_code="MISSING_PROMPT",
+                )
             if image_b64.startswith("data:image/"):
                 image_b64, image_mime_type = parse_data_url(image_b64)
 
@@ -230,25 +249,80 @@ def register_veo_routes(
                 proxies=build_proxies(proxy),
             )
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+            operation_name = data.get("name") or ""
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video",
+                action="veo_start",
+                input_summary={
+                    "model": model,
+                    "veo_mode": veo_mode,
+                    "prompt_length": len(prompt),
+                    "has_image": bool(image_b64 or image_url),
+                    "has_storage_uri": bool(storage_uri),
+                    "duration_seconds": effective_duration_seconds,
+                    "sample_count": sample_count,
+                },
+                output_summary={
+                    "ok": resp.ok,
+                    "status_code": resp.status_code,
+                    "operation_name": operation_name[:80],
+                },
+                status="success" if resp.ok else "error",
+                error_code=None if resp.ok else "VEO_API_ERROR",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": resp.ok,
                     "status_code": resp.status_code,
                     "model": model,
                     "veo_mode": veo_mode,
-                    "operation_name": data.get("name"),
+                    "operation_name": operation_name,
                     "requested_duration_seconds": raw_duration_seconds,
                     "effective_duration_seconds": effective_duration_seconds,
                     "response": data,
                 }
             ), resp.status_code
         except ValueError as e:
-            return json_error(str(e))
+            audit_log.record(
+                tool="generate_video",
+                action="veo_start",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="validation_error",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
+            return json_error(
+                str(e),
+                recovery_suggestion="Check project_id, key_file, and proxy settings. "
+                                    "Ensure Google Cloud credentials are valid.",
+                error_code="VEO_VALIDATION_ERROR",
+            )
         except Exception as e:
-            return json_error(f"Veo 提交失败: {e}", 500)
+            audit_log.record(
+                tool="generate_video",
+                action="veo_start",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="error",
+                error_code="VEO_SUBMIT_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
+            return json_error(
+                f"Veo 提交失败: {e}",
+                500,
+                recovery_suggestion="Check network connectivity and proxy settings. "
+                                    "Verify that the Veo API is accessible and the model name is valid. "
+                                    "If authentication failed, check your service account key file.",
+                error_code="VEO_SUBMIT_FAILED",
+            )
 
     @app.post("/api/veo/extend")
     def api_veo_extend():
+        _t0 = time.monotonic()
         payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
@@ -298,6 +372,26 @@ def register_veo_routes(
                 proxies=build_proxies(proxy),
             )
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+            operation_name = data.get("name") or ""
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="extend_video",
+                action="veo_extend",
+                input_summary={
+                    "model": model,
+                    "prompt_length": len(prompt),
+                    "source_video": source_video_gcs_uri.split("/")[-1],
+                    "duration_seconds": effective_duration_seconds,
+                },
+                output_summary={
+                    "ok": resp.ok,
+                    "status_code": resp.status_code,
+                    "operation_name": operation_name[:80],
+                },
+                status="success" if resp.ok else "error",
+                error_code=None if resp.ok else "VEO_API_ERROR",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": resp.ok,
@@ -305,7 +399,7 @@ def register_veo_routes(
                     "model": model,
                     "mode": "extend",
                     "source_video_gcs_uri": source_video_gcs_uri,
-                    "operation_name": data.get("name"),
+                    "operation_name": operation_name,
                     "requested_duration_seconds": raw_duration_seconds,
                     "effective_duration_seconds": effective_duration_seconds,
                     "target_total_seconds": payload.get("target_total_seconds", 16),
@@ -313,12 +407,32 @@ def register_veo_routes(
                 }
             ), resp.status_code
         except ValueError as e:
+            audit_log.record(
+                tool="extend_video",
+                action="veo_extend",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="validation_error",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(str(e))
         except Exception as e:
+            audit_log.record(
+                tool="extend_video",
+                action="veo_extend",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="error",
+                error_code="VEO_EXTEND_SUBMIT_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(f"Veo Extend 提交失败: {e}", 500)
 
     @app.post("/api/veo/chain")
     def api_veo_chain():
+        _t0 = time.monotonic()
         payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
@@ -429,6 +543,20 @@ def register_veo_routes(
                 body={"instances": [base_instance], "parameters": base_parameters},
             )
             if not ok:
+                audit_log.record(
+                    tool="chain_video_segments",
+                    action="veo_chain",
+                    input_summary={
+                        "model": model,
+                        "veo_mode": veo_mode,
+                        "target_total_seconds": target_total_seconds,
+                        "prompt_length": len(prompt),
+                    },
+                    output_summary={"step": "base_generate", "status_code": status_code},
+                    status="error",
+                    error_code="VEO_BASE_GENERATE_FAILED",
+                    duration_ms=int((time.monotonic() - _t0) * 1000),
+                )
                 return (
                     jsonify(
                         {
@@ -532,6 +660,23 @@ def register_veo_routes(
                         if attempt < extend_retry_max:
                             time.sleep(extend_retry_delay_seconds)
                 else:
+                    audit_log.record(
+                        tool="chain_video_segments",
+                        action="veo_chain",
+                        input_summary={
+                            "model": model,
+                            "target_total_seconds": target_total_seconds,
+                            "prompt_length": len(prompt),
+                        },
+                        output_summary={
+                            "step": f"extend_{idx + 1}",
+                            "segments_completed": len(segments),
+                        },
+                        status="error",
+                        error_code="VEO_EXTEND_FAILED",
+                        error_message=("; ".join(retry_errors))[:200],
+                        duration_ms=int((time.monotonic() - _t0) * 1000),
+                    )
                     return (
                         jsonify(
                             {
@@ -561,6 +706,25 @@ def register_veo_routes(
                     }
                 )
 
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="chain_video_segments",
+                action="veo_chain",
+                input_summary={
+                    "model": model,
+                    "veo_mode": veo_mode,
+                    "target_total_seconds": target_total_seconds,
+                    "prompt_length": len(prompt),
+                    "sample_count": sample_count,
+                    "extend_rounds": extend_rounds,
+                },
+                output_summary={
+                    "segment_count": len(segments),
+                    "final_video_gcs_uri": current_video_uri[:80] if current_video_uri else "",
+                },
+                status="success",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": True,
@@ -582,16 +746,37 @@ def register_veo_routes(
                 }
             )
         except ValueError as e:
+            audit_log.record(
+                tool="chain_video_segments",
+                action="veo_chain",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="validation_error",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(str(e))
         except Exception as e:
+            audit_log.record(
+                tool="chain_video_segments",
+                action="veo_chain",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="error",
+                error_code="VEO_CHAIN_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(f"Veo 链式生成失败: {e}", 500)
 
     @app.post("/api/veo/status")
+    @validate_request(VeoStatusRequest)
     def api_veo_status():
-        payload = request.get_json(silent=True) or {}
+        _t0 = time.monotonic()
+        payload = g.req.model_dump()
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
-            operation_name = (payload.get("operation_name") or "").strip()
+            operation_name = g.req.operation_name
             if not model:
                 model = "veo-3.1-generate-preview"
             if not operation_name:
@@ -631,6 +816,26 @@ def register_veo_routes(
                     signed_video_urls.append({"gs_uri": uri, "url": sign_gcs_url(uri, key_file)})
                 except Exception:
                     pass
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            is_done = bool(data.get("done"))
+            audit_log.record(
+                tool="check_video_status",
+                action="veo_status",
+                input_summary={
+                    "model": model,
+                    "operation_name": operation_name[:80],
+                },
+                output_summary={
+                    "ok": resp.ok,
+                    "status_code": resp.status_code,
+                    "done": is_done,
+                    "video_count": len(video_uris),
+                    "inline_video_count": len(inline_videos),
+                },
+                status="success" if resp.ok else "error",
+                error_code=None if resp.ok else "VEO_STATUS_ERROR",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": resp.ok,
@@ -644,8 +849,27 @@ def register_veo_routes(
                 }
             ), resp.status_code
         except ValueError as e:
+            audit_log.record(
+                tool="check_video_status",
+                action="veo_status",
+                input_summary={"operation_name": str(payload.get("operation_name") or "")[:80]},
+                output_summary={},
+                status="validation_error",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(str(e))
         except Exception as e:
+            audit_log.record(
+                tool="check_video_status",
+                action="veo_status",
+                input_summary={"operation_name": str(payload.get("operation_name") or "")[:80]},
+                output_summary={},
+                status="error",
+                error_code="VEO_STATUS_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(f"Veo 状态查询失败: {e}", 500)
 
     @app.route("/api/veo/play", methods=["GET", "HEAD"])

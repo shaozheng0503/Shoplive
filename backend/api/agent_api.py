@@ -2,11 +2,20 @@ import os
 import re
 import json
 import html
+import time
 from urllib.parse import urljoin, urlparse
 from typing import Callable, Dict, Tuple
 
 import requests
-from flask import jsonify, request
+from flask import g, jsonify, request
+
+from shoplive.backend.audit import audit_log
+from shoplive.backend.validation import validate_request
+from shoplive.backend.schemas import (
+    AgentChatRequest,
+    ImageInsightRequest,
+    ProductInsightRequest,
+)
 
 from shoplive.backend.scraper.adapters import (
     assess_parse_quality,
@@ -367,16 +376,24 @@ def register_agent_routes(
         return weak_hits >= 2
 
     @app.post("/api/agent/shop-product-insight")
+    @validate_request(ProductInsightRequest)
     def api_agent_shop_product_insight():
-        payload = request.get_json(silent=True) or {}
+        """Parse a product URL from an e-commerce platform.
+
+        Extracts product name, images, selling points, reviews, and price.
+        Supports: Amazon, Shein, Taobao, JD, Temu, Aliexpress, TikTok Shop,
+        Etsy, Ebay, Walmart, Shopify, Shoplazza.
+
+        Common follow-up actions:
+        - Use extracted data → /api/shoplive/video/workflow to generate video script
+        - Use extracted images → /api/agent/image-insight for deeper visual analysis
+        """
+        _t0 = time.monotonic()
+        req = g.req
         try:
-            product_url = str(payload.get("product_url") or "").strip()
-            proxy = str(payload.get("proxy") or "").strip()
-            language = str(payload.get("language") or "zh").strip().lower()
-            if language not in {"zh", "en"}:
-                language = "zh"
-            if not product_url or not re.match(r"^https?://", product_url, flags=re.IGNORECASE):
-                return json_error("product_url 不能为空且必须是 http/https 链接")
+            product_url = req.product_url
+            proxy = req.proxy
+            language = req.language
             platform = guess_platform_by_url(product_url)
             parser = get_platform_parser(platform)
             js_first_platforms = {"amazon", "tiktok-shop", "temu"}
@@ -475,16 +492,40 @@ def register_agent_routes(
                 except Exception:
                     pass
 
-            image_items = []
-            for u in parsed.image_urls[:4]:
-                try:
-                    b64, mime = fetch_image_as_base64(u, proxy)
-                    image_items.append({"base64": b64, "mime_type": mime, "url": u})
-                except Exception:
-                    continue
+            # Parallel image fetching (Article: "将串行调用转为并行以加速执行")
+            from shoplive.backend.async_executor import parallel_fetch_images
+            parallel_results = parallel_fetch_images(
+                parsed.image_urls[:4],
+                proxy,
+                fetch_fn=fetch_image_as_base64,
+                max_images=4,
+                timeout_seconds=60,
+            )
+            image_items = [
+                {"base64": r["base64"], "mime_type": r["mime_type"], "url": r["url"]}
+                for r in parallel_results if r["ok"]
+            ]
 
             insight = parsed.to_insight(language)
             insight["image_items"] = image_items
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="parse_product_url",
+                action="scrape",
+                input_summary={
+                    "url_domain": urlparse(product_url).netloc,
+                    "language": language,
+                    "has_proxy": bool(proxy),
+                },
+                output_summary={
+                    "confidence": parsed.confidence,
+                    "image_count": len(image_items),
+                    "source": parsed.source,
+                    "has_product_name": bool(parsed.product_name),
+                },
+                status="success",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": True,
@@ -497,11 +538,39 @@ def register_agent_routes(
                 }
             )
         except Exception as e:
-            return json_error(f"商品链接解析失败: {e}", 500)
+            audit_log.record(
+                tool="parse_product_url",
+                action="scrape",
+                input_summary={"product_url": req.product_url[:120]},
+                output_summary={},
+                status="error",
+                error_code="SCRAPE_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
+            return json_error(
+                f"商品链接解析失败: {e}",
+                500,
+                recovery_suggestion="Check the product URL is valid and accessible. "
+                                    "If the page has anti-bot protection, try with a proxy parameter. "
+                                    "Alternatively, use /api/agent/image-insight to analyze product images directly.",
+                error_code="SCRAPE_FAILED",
+            )
 
     @app.post("/api/agent/image-insight")
+    @validate_request(ImageInsightRequest)
     def api_agent_image_insight():
-        payload = request.get_json(silent=True) or {}
+        """Analyze product images using Gemini to extract structured metadata.
+
+        Returns: product_name, main_business, style_template, selling_points,
+        target_user, sales_region, brand_direction.
+
+        Common follow-up actions:
+        - Use insights → /api/shoplive/video/workflow to generate video script
+        - Use insights → /api/shoplive/image/generate to create product images
+        """
+        _t0 = time.monotonic()
+        payload = g.req.model_dump()
         try:
             project_id, key_file, proxy, _ = parse_common_payload(payload)
             model = (payload.get("model") or "gemini-2.5-flash").strip()
@@ -530,7 +599,14 @@ def register_agent_routes(
                         continue
 
             if not image_items:
-                return json_error("image_items 或 image_base64 或 image_url 至少提供一个")
+                return json_error(
+                    "image_items 或 image_base64 或 image_url 至少提供一个",
+                    recovery_suggestion="Provide at least one of: "
+                                        "image_items (list of {base64, mime_type}), "
+                                        "image_base64 (base64 string), or "
+                                        "image_url (HTTP URL to the product image).",
+                    error_code="MISSING_IMAGE",
+                )
 
             token = get_access_token(key_file, proxy)
             url = (
@@ -615,6 +691,24 @@ def register_agent_routes(
                 "brand_direction": str(parsed.get("brand_direction") or "").strip(),
             }
 
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="analyze_product_image",
+                action="gemini_vision",
+                input_summary={
+                    "image_count": len(image_items[:6]),
+                    "model": model,
+                    "language": language,
+                },
+                output_summary={
+                    "product_name": insight.get("product_name", "")[:40],
+                    "style_template": insight.get("style_template", ""),
+                    "selling_points_count": len(insight.get("selling_points", [])),
+                    "gemini_status": resp.status_code,
+                },
+                status="success" if resp.ok else "error",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": resp.ok,
@@ -628,36 +722,87 @@ def register_agent_routes(
                 }
             ), resp.status_code
         except ValueError as e:
+            audit_log.record(
+                tool="analyze_product_image",
+                action="gemini_vision",
+                input_summary={"image_count": len(payload.get("image_items") or [])},
+                output_summary={},
+                status="validation_error",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
             return json_error(str(e))
         except Exception as e:
-            return json_error(f"Agent 图片解析失败: {e}", 500)
+            audit_log.record(
+                tool="analyze_product_image",
+                action="gemini_vision",
+                input_summary={"image_count": len(payload.get("image_items") or [])},
+                output_summary={},
+                status="error",
+                error_code="IMAGE_INSIGHT_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
+            return json_error(
+                f"Agent 图片解析失败: {e}",
+                500,
+                recovery_suggestion="Check image format (only PNG/JPEG supported). "
+                                    "Ensure image URL is accessible or base64 data is valid. "
+                                    "Try with fewer images if timeout occurs.",
+                error_code="IMAGE_INSIGHT_FAILED",
+            )
 
     @app.post("/api/agent/chat")
+    @validate_request(AgentChatRequest)
     def api_agent_chat():
-        payload = request.get_json(silent=True) or {}
+        """General-purpose LLM chat interface via LiteLLM.
+
+        Provide either 'messages' (full conversation) or 'prompt' (single message).
+
+        Common follow-up actions:
+        - For product-related questions → use parse_product_url or analyze_product_image instead
+        - For video prompt refinement → use /api/shoplive/video/workflow with action='build_enhance_template'
+        """
+        _t0 = time.monotonic()
+        req = g.req
         try:
             api_base = (
-                payload.get("api_base")
+                req.api_base
                 or os.getenv("LITELLM_API_BASE")
                 or "https://litellm.shoplazza.site"
             ).strip().rstrip("/")
-            api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
-            model = (payload.get("model") or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
-            proxy = (payload.get("proxy") or "").strip()
-            messages = payload.get("messages")
-            prompt = (payload.get("prompt") or "").strip()
-            temperature = payload.get("temperature")
-            max_tokens = payload.get("max_tokens")
-            top_p = payload.get("top_p")
+            api_key = (req.api_key or os.getenv("LITELLM_API_KEY") or "").strip()
+            model = (req.model or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+            proxy = req.proxy
+            messages = req.messages
+            prompt = req.prompt
+            temperature = req.temperature
+            max_tokens = req.max_tokens
+            top_p = req.top_p
 
             if not api_key:
-                return json_error("agent api_key 不能为空（可通过 payload.api_key 或 LITELLM_API_KEY 提供）")
+                return json_error(
+                    "agent api_key 不能为空（可通过 payload.api_key 或 LITELLM_API_KEY 提供）",
+                    recovery_suggestion="Set api_key in the request payload, or configure the "
+                                        "LITELLM_API_KEY environment variable in .env file.",
+                    error_code="MISSING_API_KEY",
+                )
             if not model:
-                return json_error("agent model 不能为空")
+                return json_error(
+                    "agent model 不能为空",
+                    recovery_suggestion="Set model in the request payload (e.g., 'azure-gpt-5'), "
+                                        "or configure the LITELLM_MODEL environment variable.",
+                    error_code="MISSING_MODEL",
+                )
 
             if not isinstance(messages, list) or not messages:
                 if not prompt:
-                    return json_error("messages 或 prompt 至少提供一个")
+                    return json_error(
+                        "messages 或 prompt 至少提供一个",
+                        recovery_suggestion="Provide either 'prompt' (a string) for a single-turn chat, "
+                                            "or 'messages' (a list of {role, content} objects) for multi-turn conversation.",
+                        error_code="MISSING_INPUT",
+                    )
                 messages = [{"role": "user", "content": prompt}]
 
             status_code, data_wrap = call_litellm_chat(
@@ -672,6 +817,23 @@ def register_agent_routes(
             )
             data = data_wrap.get("response", {})
             content = extract_chat_content(data)
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="chat_with_llm",
+                action="litellm_chat",
+                input_summary={
+                    "model": model,
+                    "message_count": len(messages),
+                    "prompt_length": len(prompt),
+                },
+                output_summary={
+                    "status_code": status_code,
+                    "content_length": len(content),
+                    "ok": data_wrap.get("ok", False),
+                },
+                status="success" if data_wrap.get("ok") else "error",
+                duration_ms=_dur_ms,
+            )
             return jsonify(
                 {
                     "ok": data_wrap.get("ok", False),
@@ -682,5 +844,25 @@ def register_agent_routes(
                 }
             ), status_code
         except Exception as e:
-            return json_error(f"Agent Chat 调用失败: {e}", 500)
+            audit_log.record(
+                tool="chat_with_llm",
+                action="litellm_chat",
+                input_summary={
+                    "model": req.model,
+                    "message_count": len(req.messages or []),
+                },
+                output_summary={},
+                status="error",
+                error_code="CHAT_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=int((time.monotonic() - _t0) * 1000),
+            )
+            return json_error(
+                f"Agent Chat 调用失败: {e}",
+                500,
+                recovery_suggestion="Check api_key and model configuration. "
+                                    "Verify the LiteLLM API base is reachable. "
+                                    "Try with a proxy if behind a firewall.",
+                error_code="CHAT_FAILED",
+            )
 

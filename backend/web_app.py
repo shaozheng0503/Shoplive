@@ -59,12 +59,24 @@ from shoplive.backend.api.agent_api import register_agent_routes
 from shoplive.backend.api.veo_api import register_veo_routes
 from shoplive.backend.api.media_api import register_media_routes
 from shoplive.backend.api.video_edit_api import register_video_edit_routes
+from shoplive.backend.tool_registry import build_tool_manifest, get_tools_by_skill, get_tools_by_tags
+from shoplive.backend.skills import get_skill_by_id, list_skills_summary
+from shoplive.backend.mcp_adapter import (
+    build_mcp_tools_list,
+    build_mcp_tools_by_skill,
+    handle_mcp_request,
+)
+from shoplive.backend.audit import audit_log, setup_audit_middleware, get_trace_context
+from shoplive.backend.infra import get_token_cache_stats
 
 FRONTEND_ROOT = (SHOPLIVE_PROJECT_ROOT / "shoplive" / "frontend").resolve()
 FRONTEND_PAGES_DIR = (FRONTEND_ROOT / "pages").resolve()
 app = Flask(__name__, static_folder=str(FRONTEND_ROOT), static_url_path="")
 VIDEO_EDIT_EXPORT_DIR = (SHOPLIVE_PROJECT_ROOT / "shoplive_video_edits").resolve()
 VIDEO_EDIT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Setup audit middleware for automatic request tracing
+setup_audit_middleware(app)
 
 
 SHOPLIVE_VIDEO_SYSTEM_PROMPT = """
@@ -209,6 +221,368 @@ register_video_edit_routes(
     download_video_to_file=download_video_to_file,
     video_edit_export_dir=VIDEO_EDIT_EXPORT_DIR,
 )
+
+# ---------------------------------------------------------------------------
+# Tool Manifest API (Article: "LLM 友好的接口设计")
+# Enables Agent tool discovery, skill-based filtering, and tag-based recall.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/tools/manifest")
+def api_tools_manifest():
+    """Return the full tool manifest for Agent consumption.
+
+    This endpoint implements the article's "智能召回" concept:
+    - Full manifest for initial discovery
+    - Skill-based filtering via ?skill=video_generation
+    - Tag-based filtering via ?tags=video,generation
+
+    Usage by Agent:
+    1. GET /api/tools/manifest → discover all tools
+    2. GET /api/tools/manifest?skill=product_analysis → tools for product analysis
+    3. GET /api/tools/manifest?tags=video,veo → tools related to Veo video
+    """
+    from flask import jsonify as _jsonify
+    skill = request.args.get("skill", "").strip()
+    tags = request.args.get("tags", "").strip()
+    if skill:
+        tools = get_tools_by_skill(skill)
+        return _jsonify({"ok": True, "filter": {"skill": skill}, "tools": tools})
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        tools = get_tools_by_tags(tag_list)
+        return _jsonify({"ok": True, "filter": {"tags": tag_list}, "tools": tools})
+    return _jsonify(build_tool_manifest())
+
+
+# ---------------------------------------------------------------------------
+# MCP Protocol Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/mcp/tools")
+def api_mcp_tools():
+    """MCP-compatible tool listing endpoint.
+
+    Returns all tools in MCP Tool Definition format with inputSchema.
+    Supports ?skill= filter for progressive tool disclosure.
+    """
+    from flask import jsonify as _jsonify
+    skill = request.args.get("skill", "").strip()
+    if skill:
+        tools = build_mcp_tools_by_skill(skill)
+    else:
+        tools = build_mcp_tools_list()
+    return _jsonify({"tools": tools})
+
+
+@app.post("/api/mcp/rpc")
+def api_mcp_rpc():
+    """MCP JSON-RPC 2.0 endpoint.
+
+    Handles: initialize, tools/list, tools/call.
+    This enables any MCP-compatible Agent to interact with Shoplive tools.
+    """
+    from flask import jsonify as _jsonify
+    rpc_body = request.get_json(silent=True) or {}
+    result = handle_mcp_request(rpc_body)
+    return _jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Audit & Observability Endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/audit/stats")
+def api_audit_stats():
+    """Return aggregate audit statistics.
+
+    Shows: total calls, success/error counts, error rate, per-tool metrics,
+    avg duration, and token cache performance.
+    """
+    from flask import jsonify as _jsonify
+    stats = audit_log.get_stats()
+    stats["token_cache"] = get_token_cache_stats()
+    return _jsonify({"ok": True, "stats": stats})
+
+
+@app.route("/api/audit/recent")
+def api_audit_recent():
+    """Return recent audit records (last 50 by default).
+
+    Supports ?limit=N for custom count, ?trace_id=xxx for specific trace.
+    """
+    from flask import jsonify as _jsonify
+    trace_id = request.args.get("trace_id", "").strip()
+    if trace_id:
+        records = audit_log.get_trace(trace_id)
+        return _jsonify({"ok": True, "trace_id": trace_id, "records": records})
+    limit = int(request.args.get("limit", 50))
+    records = audit_log.get_recent(limit=limit)
+    return _jsonify({"ok": True, "count": len(records), "records": records})
+
+
+@app.route("/api/audit/trace")
+def api_audit_trace():
+    """Return the call chain for the current request's trace."""
+    from flask import jsonify as _jsonify
+    ctx = get_trace_context()
+    return _jsonify({"ok": True, "trace": ctx})
+
+
+# ---------------------------------------------------------------------------
+# Health Check (simple liveness + readiness probe)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/health")
+def api_health():
+    """System health check and service status summary.
+
+    Returns component status, audit metrics, token cache performance,
+    and tool/skill counts. Suitable for monitoring and debug dashboards.
+    """
+    import sys
+    from flask import jsonify as _jsonify
+    from shoplive.backend.tool_registry import TOOL_REGISTRY
+
+    stats = audit_log.get_stats()
+    token_stats = get_token_cache_stats()
+    skill_summaries = list_skills_summary()
+
+    return _jsonify({
+        "ok": True,
+        "service": "shoplive",
+        "version": "1.0.0",
+        "python_version": sys.version.split()[0],
+        "components": {
+            "audit": {
+                "status": "ok",
+                "total_calls": stats.get("total_calls", 0),
+                "success_count": stats.get("success_count", 0),
+                "error_count": stats.get("error_count", 0),
+                "error_rate": stats.get("error_rate", 0),
+                "avg_duration_ms": stats.get("avg_duration_ms", 0),
+            },
+            "token_cache": {
+                "status": "ok",
+                "hits": token_stats.get("hits", 0),
+                "misses": token_stats.get("misses", 0),
+                "refreshes": token_stats.get("refreshes", 0),
+                "hit_rate": round(
+                    token_stats.get("hits", 0) /
+                    max(token_stats.get("hits", 0) + token_stats.get("misses", 0), 1),
+                    4,
+                ),
+            },
+            "tools": {
+                "status": "ok",
+                "count": len(TOOL_REGISTRY),
+            },
+            "skills": {
+                "status": "ok",
+                "count": len(skill_summaries),
+                "ids": [s["id"] for s in skill_summaries],
+            },
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI 3.0 Spec Auto-Generation (Article: "OpenAPI 自动生成")
+# Generated from Pydantic request schemas — always in sync with code.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/openapi.json")
+def api_openapi_spec():
+    """Auto-generated OpenAPI 3.0 specification from Pydantic schemas.
+
+    Always in sync with the actual request models — no manual maintenance.
+    Compatible with Swagger UI, Redoc, and MCP tool definition converters.
+
+    Usage:
+        GET /api/openapi.json → full spec
+        Open in Swagger UI for interactive API exploration.
+    """
+    from flask import jsonify as _jsonify
+    from shoplive.backend.schemas import TOOL_SCHEMAS
+    from shoplive.backend.tool_registry import TOOL_REGISTRY
+
+    # Build components/schemas from Pydantic models
+    component_schemas: dict = {}
+    schema_name_map: dict = {}  # tool_name -> schema class name
+    for tool_name, model_cls in TOOL_SCHEMAS.items():
+        raw_schema = model_cls.model_json_schema()
+        cls_name = model_cls.__name__
+        # Hoist nested $defs into component_schemas
+        defs = raw_schema.pop("$defs", {})
+        component_schemas.update(defs)
+        component_schemas[cls_name] = raw_schema
+        schema_name_map[tool_name] = cls_name
+
+    # Reverse-map endpoint path to tool name
+    endpoint_tool_map: dict = {}
+    for tool in TOOL_REGISTRY:
+        endpoint = tool.get("endpoint", "")
+        if not endpoint:
+            continue
+        parts = endpoint.split(" ", 1)
+        if len(parts) == 2:
+            endpoint_tool_map[parts[1]] = tool["name"]
+
+    # Build OpenAPI paths from tool registry
+    paths: dict = {}
+    for tool in TOOL_REGISTRY:
+        endpoint = tool.get("endpoint", "")
+        if not endpoint:
+            continue
+        parts = endpoint.split(" ", 1)
+        if len(parts) != 2:
+            continue
+        method, path = parts[0].lower(), parts[1]
+        tool_name = tool["name"]
+        cls_name = schema_name_map.get(tool_name)
+
+        operation: dict = {
+            "summary": tool.get("display_name", tool_name),
+            "description": tool.get("description", ""),
+            "tags": tool.get("tags", []),
+            "operationId": tool_name,
+            "responses": {
+                "200": {
+                    "description": "Success",
+                    "content": {
+                        "application/json": {
+                            "schema": {"type": "object", "properties": {
+                                "ok": {"type": "boolean"},
+                            }},
+                        }
+                    },
+                },
+                "400": {"description": "Validation error — check error_code and recovery_suggestion"},
+                "500": {"description": "Internal server error"},
+            },
+        }
+
+        if method == "post" and cls_name:
+            operation["requestBody"] = {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": f"#/components/schemas/{cls_name}"},
+                        "examples": {
+                            ex.get("input", {}).get("product_url", tool_name): {
+                                "value": ex.get("input", {}),
+                            }
+                            for ex in tool.get("examples", [])[:1]
+                        } if tool.get("examples") else {},
+                    }
+                },
+            }
+
+        if path not in paths:
+            paths[path] = {}
+        paths[path][method] = operation
+
+    # Add non-tool endpoints
+    paths["/api/health"] = {
+        "get": {
+            "summary": "Health Check",
+            "description": "Service liveness and readiness probe with component status.",
+            "tags": ["observability"],
+            "operationId": "health_check",
+            "responses": {"200": {"description": "Service is healthy"}},
+        }
+    }
+    paths["/api/audit/stats"] = {
+        "get": {
+            "summary": "Audit Statistics",
+            "description": "Aggregate tool call metrics and token cache performance.",
+            "tags": ["observability"],
+            "operationId": "audit_stats",
+            "responses": {"200": {"description": "Audit statistics"}},
+        }
+    }
+    paths["/api/tools/manifest"] = {
+        "get": {
+            "summary": "Tool Manifest",
+            "description": "Full tool registry for Agent discovery. Supports ?skill= and ?tags= filters.",
+            "tags": ["discovery"],
+            "operationId": "tools_manifest",
+            "parameters": [
+                {"name": "skill", "in": "query", "schema": {"type": "string"}, "description": "Filter by skill ID"},
+                {"name": "tags", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated tag filters"},
+            ],
+            "responses": {"200": {"description": "Tool manifest"}},
+        }
+    }
+    paths["/api/skills"] = {
+        "get": {
+            "summary": "List Skills",
+            "description": "Available skills for progressive tool discovery.",
+            "tags": ["discovery"],
+            "operationId": "list_skills",
+            "responses": {"200": {"description": "Skill summaries"}},
+        }
+    }
+
+    spec = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "Shoplive Agent API",
+            "description": (
+                "AI-powered e-commerce video generation platform. "
+                "Provides tools for product scraping, script generation, "
+                "Veo video creation, image generation, and video editing. "
+                "All tools follow the Agent Tools design principles: "
+                "type-safe, LLM-friendly, self-healing with recovery suggestions."
+            ),
+            "version": "1.0.0",
+            "contact": {"name": "Shoplive Team"},
+        },
+        "servers": [{"url": "/", "description": "Local server"}],
+        "tags": [
+            {"name": "product", "description": "Product data extraction and analysis"},
+            {"name": "video", "description": "Video generation and editing"},
+            {"name": "image", "description": "Product image generation"},
+            {"name": "observability", "description": "Audit, health, and metrics"},
+            {"name": "discovery", "description": "Tool and skill discovery"},
+        ],
+        "paths": paths,
+        "components": {
+            "schemas": component_schemas,
+        },
+    }
+
+    return _jsonify(spec)
+
+
+@app.route("/api/skills")
+def api_skills_list():
+    """List available Skills for Agent discovery (summaries only).
+
+    Returns concise skill descriptions following the "渐进式披露" principle:
+    summaries first, full execution guides loaded on demand via /api/skills/<id>.
+    """
+    from flask import jsonify as _jsonify
+    return _jsonify({"ok": True, "skills": list_skills_summary()})
+
+
+@app.route("/api/skills/<skill_id>")
+def api_skill_detail(skill_id: str):
+    """Load a specific Skill with its full execution guide.
+
+    The execution_guide field acts as an "操作说明书" that guides
+    the Agent step-by-step through a complex multi-tool workflow.
+    """
+    from flask import jsonify as _jsonify
+    skill = get_skill_by_id(skill_id)
+    if not skill:
+        return json_error(
+            f"Skill '{skill_id}' not found",
+            404,
+            recovery_suggestion="Use GET /api/skills to see available skills.",
+            error_code="SKILL_NOT_FOUND",
+        )
+    return _jsonify({"ok": True, "skill": skill})
+
 
 @app.route("/")
 def index():

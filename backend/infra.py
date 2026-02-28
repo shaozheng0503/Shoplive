@@ -1,13 +1,18 @@
+import logging
 import os
 import socket
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
+
+logger = logging.getLogger(__name__)
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -100,7 +105,76 @@ def build_proxy_candidates(proxy: str) -> List[Dict[str, str]]:
     return candidates
 
 
-def get_access_token(key_file: str, proxy: str, timeout_seconds: int = 20) -> str:
+# ---------------------------------------------------------------------------
+# Dynamic Temporary Credentials (Article: "Secretless 动态临时凭证")
+#
+# Instead of loading the key file every time, we cache the credentials object
+# and its short-lived token. Tokens auto-refresh when expired (typically 1h).
+# This reduces disk I/O, speeds up auth, and aligns with "用完即失效" principle.
+# ---------------------------------------------------------------------------
+
+class _TokenCache:
+    """Thread-safe short-lived token cache with auto-refresh.
+
+    Implements the article's "Secretless" concept:
+    - Tokens are cached and reused until near expiry
+    - Auto-refresh on access when within TTL buffer
+    - Thread-safe with lock protection
+    - Metrics tracking for observability
+    """
+
+    def __init__(self, ttl_buffer_seconds: int = 120):
+        self._lock = threading.Lock()
+        self._cache: Dict[str, Dict] = {}  # key_file -> {creds, token, expiry, proxy}
+        self._ttl_buffer = ttl_buffer_seconds
+        self._stats = {"hits": 0, "misses": 0, "refreshes": 0}
+
+    def get_token(self, key_file: str, proxy: str, timeout_seconds: int = 20) -> str:
+        """Get a valid access token, using cache when possible."""
+        cache_key = key_file
+        now = time.time()
+
+        with self._lock:
+            cached = self._cache.get(cache_key)
+            if cached and cached.get("token") and cached.get("expiry", 0) > now + self._ttl_buffer:
+                self._stats["hits"] += 1
+                return cached["token"]
+            self._stats["misses"] += 1
+
+        # Cache miss or expired — refresh
+        token = self._refresh_token(key_file, proxy, timeout_seconds)
+
+        with self._lock:
+            self._cache[cache_key] = {
+                "token": token,
+                "expiry": now + 3500,  # Google tokens typically valid for 3600s
+                "refreshed_at": now,
+            }
+            self._stats["refreshes"] += 1
+
+        return token
+
+    def _refresh_token(self, key_file: str, proxy: str, timeout_seconds: int) -> str:
+        """Refresh the token using the original multi-proxy strategy."""
+        return _get_access_token_raw(key_file, proxy, timeout_seconds)
+
+    def invalidate(self, key_file: str):
+        """Force-invalidate a cached token (e.g., on auth failure)."""
+        with self._lock:
+            self._cache.pop(key_file, None)
+
+    def get_stats(self) -> Dict:
+        """Return cache statistics for observability."""
+        with self._lock:
+            return dict(self._stats)
+
+
+# Global token cache instance
+_token_cache = _TokenCache()
+
+
+def _get_access_token_raw(key_file: str, proxy: str, timeout_seconds: int = 20) -> str:
+    """Raw token refresh without caching (original implementation)."""
     def _refresh(proxy_map: Dict[str, str]) -> str:
         creds = service_account.Credentials.from_service_account_file(
             key_file, scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -131,6 +205,27 @@ def get_access_token(key_file: str, proxy: str, timeout_seconds: int = 20) -> st
         "获取访问令牌失败，已尝试多种代理策略: "
         + " | ".join(errors[:6])
     )
+
+
+def get_access_token(key_file: str, proxy: str, timeout_seconds: int = 20) -> str:
+    """Get an access token with automatic caching and refresh.
+
+    Uses the TokenCache for performance:
+    - Cached tokens reused until 2 minutes before expiry
+    - Auto-refresh on cache miss
+    - Thread-safe for concurrent requests
+    """
+    return _token_cache.get_token(key_file, proxy, timeout_seconds)
+
+
+def invalidate_token_cache(key_file: str):
+    """Force-invalidate a cached token on auth failure."""
+    _token_cache.invalidate(key_file)
+
+
+def get_token_cache_stats() -> Dict:
+    """Return token cache statistics for observability."""
+    return _token_cache.get_stats()
 
 
 def parse_common_payload(payload: Dict) -> Tuple[str, str, str, str]:

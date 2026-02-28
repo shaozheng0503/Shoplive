@@ -2,7 +2,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from flask import jsonify
@@ -12,8 +12,48 @@ from google.oauth2 import service_account
 from shoplive.backend.infra import build_proxies, get_access_token, parse_common_payload
 
 
-def json_error(message: str, status_code: int = 400):
-    return jsonify({"ok": False, "error": message}), status_code
+# ---------------------------------------------------------------------------
+# Structured error handling (Article: "构建自我修复能力，而不是直接终止")
+# ---------------------------------------------------------------------------
+
+def json_error(
+    message: str,
+    status_code: int = 400,
+    recovery_suggestion: Optional[str] = None,
+    error_code: Optional[str] = None,
+) -> Tuple:
+    """Return a structured error response with optional recovery guidance.
+
+    Following the article's principle: tools should not terminate on errors,
+    but guide the Agent to adjust its strategy with actionable suggestions.
+    """
+    body: Dict[str, Any] = {"ok": False, "error": message}
+    if error_code:
+        body["error_code"] = error_code
+    if recovery_suggestion:
+        body["recovery_suggestion"] = recovery_suggestion
+    return jsonify(body), status_code
+
+
+# Pre-defined recovery suggestions for common error scenarios
+RECOVERY_HINTS = {
+    "missing_product_url": "Provide a valid product_url starting with http:// or https://. "
+                           "Supported platforms: Amazon, Shein, Taobao, JD, Temu, Aliexpress, TikTok Shop, Etsy, Ebay, Walmart.",
+    "missing_image": "Provide at least one of: image_items (list of {base64, mime_type}), "
+                     "image_base64 (base64 string), or image_url (HTTP URL).",
+    "missing_api_key": "Set api_key in the request payload or configure LITELLM_API_KEY environment variable.",
+    "missing_prompt": "Provide a 'prompt' field with descriptive text for generation.",
+    "invalid_duration": "duration_seconds must be 4, 6, or 8. For longer videos, use chain mode with target_total_seconds: 16 or 24.",
+    "invalid_gcs_uri": "Provide a valid GCS URI starting with 'gs://'. Example: 'gs://my-bucket/videos/'",
+    "ffmpeg_missing": "Install ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Linux).",
+    "video_download_failed": "Check that video_url is accessible. Try with a proxy if the URL is behind a firewall.",
+    "scrape_failed": "The product page may have anti-bot protection. Try a different proxy or use image-insight instead.",
+    "veo_timeout": "The video generation timed out. Try reducing duration_seconds or simplifying the prompt.",
+    "category_mismatch": "The generated image doesn't match the expected product category. "
+                         "Refine product_name and main_category to be more specific.",
+    "key_file_missing": "Set GOOGLE_APPLICATION_CREDENTIALS env var or provide key_file in the request payload.",
+    "token_failed": "Failed to authenticate with Google Cloud. Check key_file permissions and network/proxy settings.",
+}
 
 
 def fetch_image_as_base64(image_url: str, proxy: str) -> Tuple[str, str]:
