@@ -1,7 +1,11 @@
+import base64
 import random
+import tempfile
 import time
 import re
-from typing import Callable, Dict, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Callable, Dict, List, Tuple
 
 import requests
 from flask import Response, g, jsonify, request, stream_with_context
@@ -28,7 +32,36 @@ def register_veo_routes(
     extract_gs_paths: Callable[[object], list],
     extract_inline_videos: Callable[[object], list],
     sign_gcs_url: Callable[[str, str], str],
+    split_prompt_for_16s: Callable[..., Dict[str, str]] = None,
+    concat_videos_ffmpeg: Callable[..., Path] = None,
+    download_gcs_blob_to_file: Callable[..., Path] = None,
+    call_litellm_chat: Callable[..., Tuple[int, Dict]] = None,
 ):
+    MAX_INLINE_VIDEO_B64_CHARS = 40 * 1024 * 1024
+    MAX_INLINE_VIDEO_BYTES = 30 * 1024 * 1024
+
+    def _write_video_data_url_to_file(data_url: str, output_path: Path) -> None:
+        m = re.match(r"^data:(video\/[a-zA-Z0-9.+-]+);base64,(.+)$", str(data_url or "").strip(), re.DOTALL)
+        if not m:
+            raise ValueError("video_data_url 必须是 data:video/...;base64,... 格式")
+        mime_type = str(m.group(1) or "").lower()
+        if mime_type not in {"video/mp4", "video/webm", "video/quicktime", "video/x-m4v"}:
+            raise ValueError(f"video_data_url 不支持的 mime_type: {mime_type}")
+        raw_b64 = m.group(2).strip()
+        if not raw_b64:
+            raise ValueError("video_data_url base64 内容为空")
+        if len(raw_b64) > MAX_INLINE_VIDEO_B64_CHARS:
+            raise ValueError("video_data_url 体积过大，请改用 gcs_uri")
+        try:
+            decoded = base64.b64decode(raw_b64, validate=True)
+        except Exception as e:
+            raise ValueError(f"video_data_url base64 解码失败: {e}") from e
+        if len(decoded) > MAX_INLINE_VIDEO_BYTES:
+            raise ValueError("video_data_url 解码后体积过大，请改用 gcs_uri")
+        output_path.write_bytes(decoded)
+        if (not output_path.exists()) or output_path.stat().st_size < 1024:
+            raise ValueError("video_data_url 解码后视频为空或过小")
+
     def _build_common_generation_parameters(payload: Dict, *, normalize_duration_seconds) -> Tuple[Dict, object, object]:
         sample_count = int(payload.get("sample_count", 1))
         parameters = {"sampleCount": sample_count}
@@ -235,6 +268,34 @@ def register_veo_routes(
                         "bytesBase64Encoded": image_b64,
                         "mimeType": image_mime_type,
                     }
+            elif veo_mode == "frame":
+                if not image_b64 and not image_url:
+                    return json_error(
+                        "veo_mode=frame 时需提供首帧（image_url 或 image_base64）",
+                        error_code="MISSING_FIRST_FRAME",
+                    )
+                if not image_b64 and image_url:
+                    image_b64, image_mime_type = fetch_image_as_base64(image_url, proxy)
+                instance["image"] = {
+                    "bytesBase64Encoded": image_b64,
+                    "mimeType": image_mime_type,
+                }
+                last_frame_b64 = (g.req.last_frame_base64 or "").strip()
+                last_frame_mime = (g.req.last_frame_mime_type or "image/png").strip()
+                last_frame_url = (g.req.last_frame_url or "").strip()
+                if last_frame_b64 and last_frame_b64.startswith("data:image/"):
+                    last_frame_b64, last_frame_mime = parse_data_url(last_frame_b64)
+                if not last_frame_b64 and last_frame_url:
+                    last_frame_b64, last_frame_mime = fetch_image_as_base64(last_frame_url, proxy)
+                if not last_frame_b64:
+                    return json_error(
+                        "veo_mode=frame 时需提供尾帧（last_frame_url 或 last_frame_base64）",
+                        error_code="MISSING_LAST_FRAME",
+                    )
+                instance["lastFrame"] = {
+                    "bytesBase64Encoded": last_frame_b64,
+                    "mimeType": last_frame_mime,
+                }
 
             parameters, raw_duration_seconds, effective_duration_seconds = _build_common_generation_parameters(
                 payload, normalize_duration_seconds=normalize_duration_seconds
@@ -948,3 +1009,356 @@ def register_veo_routes(
         except Exception as e:
             return json_error(f"Veo 播放地址生成失败: {e}", 500)
 
+    @app.post("/api/veo/concat-segments")
+    def api_veo_concat_segments():
+        """Concatenate two video segments from GCS or inline data URLs."""
+        _t0 = time.monotonic()
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, _ = parse_common_payload(payload)
+            gcs_uri_a = (payload.get("gcs_uri_a") or "").strip()
+            gcs_uri_b = (payload.get("gcs_uri_b") or "").strip()
+            data_url_a = (payload.get("video_data_url_a") or "").strip()
+            data_url_b = (payload.get("video_data_url_b") or "").strip()
+            if (not gcs_uri_a and not data_url_a) or (not gcs_uri_b and not data_url_b):
+                return json_error("Each segment requires gcs_uri_x or video_data_url_x")
+            if not concat_videos_ffmpeg or not download_gcs_blob_to_file:
+                return json_error("concat helpers not configured", 500)
+
+            import shutil
+            tmp_dir = Path(tempfile.mkdtemp(prefix="veo_concat_"))
+            try:
+                seg_a_path = tmp_dir / "seg_a.mp4"
+                seg_b_path = tmp_dir / "seg_b.mp4"
+                if gcs_uri_a:
+                    download_gcs_blob_to_file(gcs_uri_a, seg_a_path, key_file, project_id)
+                else:
+                    _write_video_data_url_to_file(data_url_a, seg_a_path)
+                if gcs_uri_b:
+                    download_gcs_blob_to_file(gcs_uri_b, seg_b_path, key_file, project_id)
+                else:
+                    _write_video_data_url_to_file(data_url_b, seg_b_path)
+                output_path = tmp_dir / "concat_16s.mp4"
+                concat_videos_ffmpeg([seg_a_path, seg_b_path], output_path)
+                final_data = output_path.read_bytes()
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            import base64 as b64mod
+            video_b64 = b64mod.b64encode(final_data).decode("utf-8")
+            data_url = f"data:video/mp4;base64,{video_b64}"
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="concat_video_segments",
+                action="ffmpeg_concat",
+                input_summary={
+                    "gcs_a": gcs_uri_a[-40:],
+                    "gcs_b": gcs_uri_b[-40:],
+                    "use_data_url_a": bool(data_url_a and not gcs_uri_a),
+                    "use_data_url_b": bool(data_url_b and not gcs_uri_b),
+                },
+                output_summary={"concat_size_bytes": len(final_data)},
+                status="success",
+                duration_ms=_dur_ms,
+            )
+            return jsonify({"ok": True, "video_data_url": data_url})
+        except ValueError as e:
+            return json_error(str(e))
+        except Exception as e:
+            return json_error(f"视频拼接失败: {e}", 500)
+
+    @app.post("/api/veo/extract-frame")
+    def api_veo_extract_frame():
+        """Extract a single frame from a GCS or inline data-url video using ffmpeg."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, _ = parse_common_payload(payload)
+            gcs_uri = (payload.get("gcs_uri") or "").strip()
+            video_data_url = (payload.get("video_data_url") or "").strip()
+            position = (payload.get("position") or "last").strip()
+            if not gcs_uri and not video_data_url:
+                return json_error("gcs_uri or video_data_url is required")
+            if not download_gcs_blob_to_file:
+                return json_error("extract-frame helpers not configured", 500)
+
+            import shutil
+            import subprocess
+            import base64 as b64mod
+            tmp_dir = Path(tempfile.mkdtemp(prefix="veo_frame_"))
+            try:
+                video_path = tmp_dir / "input.mp4"
+                if gcs_uri:
+                    download_gcs_blob_to_file(gcs_uri, video_path, key_file, project_id)
+                else:
+                    _write_video_data_url_to_file(video_data_url, video_path)
+
+                if not video_path.exists() or video_path.stat().st_size < 1024:
+                    raise ValueError("Downloaded video is empty or too small")
+
+                if position == "last":
+                    # Use -sseof with fallback: if it fails (no duration metadata),
+                    # fall back to extracting the first frame instead.
+                    cmd = [
+                        "ffmpeg", "-sseof", "-0.15",
+                        "-i", str(video_path),
+                        "-frames:v", "1",
+                        "-f", "image2pipe",
+                        "-vcodec", "png",
+                        "pipe:1",
+                    ]
+                elif position == "first":
+                    cmd = [
+                        "ffmpeg",
+                        "-i", str(video_path),
+                        "-frames:v", "1",
+                        "-f", "image2pipe",
+                        "-vcodec", "png",
+                        "pipe:1",
+                    ]
+                else:
+                    sec = float(position)
+                    cmd = [
+                        "ffmpeg", "-ss", str(sec),
+                        "-i", str(video_path),
+                        "-frames:v", "1",
+                        "-f", "image2pipe",
+                        "-vcodec", "png",
+                        "pipe:1",
+                    ]
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                if (proc.returncode != 0 or not proc.stdout) and position == "last":
+                    fallback_cmd = [
+                        "ffmpeg",
+                        "-i", str(video_path),
+                        "-frames:v", "1",
+                        "-f", "image2pipe",
+                        "-vcodec", "png",
+                        "pipe:1",
+                    ]
+                    proc = subprocess.run(
+                        fallback_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=30,
+                    )
+                if proc.returncode != 0 or not proc.stdout:
+                    stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-300:]
+                    raise RuntimeError(f"ffmpeg extract failed: {stderr_tail}")
+
+                frame_b64 = b64mod.b64encode(proc.stdout).decode("utf-8")
+                return jsonify({
+                    "ok": True,
+                    "frame_base64": frame_b64,
+                    "mime_type": "image/png",
+                    "position": position,
+                })
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        except ValueError as e:
+            return json_error(str(e))
+        except Exception as e:
+            return json_error(f"帧提取失败: {e}", 500)
+
+    @app.post("/api/veo/generate-16s")
+    def api_veo_generate_16s():
+        """Generate a 16s video by splitting prompt into two 8s segments,
+        generating both in parallel, then concatenating with ffmpeg."""
+        _t0 = time.monotonic()
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, model = parse_common_payload(payload)
+            prompt = (payload.get("prompt") or "").strip()
+            if not model:
+                model = "veo-3.1-generate-preview"
+            if not prompt:
+                return json_error("prompt 不能为空", error_code="MISSING_PROMPT")
+
+            import os
+            api_base = (
+                payload.get("api_base")
+                or os.getenv("LITELLM_API_BASE")
+                or "https://litellm.shoplazza.site"
+            ).strip().rstrip("/")
+            api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
+            llm_model = (payload.get("llm_model") or "bedrock-claude-4-5-haiku").strip()
+
+            if not split_prompt_for_16s or not concat_videos_ffmpeg or not download_gcs_blob_to_file:
+                return json_error("16s generation helpers not configured", 500)
+
+            parts = split_prompt_for_16s(
+                prompt,
+                api_base=api_base,
+                api_key=api_key,
+                model=llm_model,
+                proxy=proxy,
+            )
+            prompt_a = parts["part1"]
+            prompt_b = parts["part2"]
+
+            token = get_access_token(key_file, proxy)
+
+            aspect_ratio = (payload.get("aspect_ratio") or "16:9").strip()
+            storage_uri = (payload.get("storage_uri") or "").strip() or None
+            image_b64 = (payload.get("image_base64") or "").strip()
+            image_mime_type = (payload.get("image_mime_type") or "image/png").strip()
+            image_url = (payload.get("image_url") or "").strip()
+            veo_mode = (payload.get("veo_mode") or "text").strip()
+            if image_b64 and image_b64.startswith("data:image/"):
+                image_b64, image_mime_type = parse_data_url(image_b64)
+
+            def _build_instance(seg_prompt):
+                inst = {"prompt": seg_prompt}
+                if veo_mode == "image":
+                    nonlocal image_b64, image_mime_type
+                    if not image_b64 and image_url:
+                        image_b64_local, image_mime_local = fetch_image_as_base64(image_url, proxy)
+                        inst["image"] = {"bytesBase64Encoded": image_b64_local, "mimeType": image_mime_local}
+                    elif image_b64:
+                        inst["image"] = {"bytesBase64Encoded": image_b64, "mimeType": image_mime_type}
+                return inst
+
+            base_params = {"sampleCount": 1, "durationSeconds": 8, "aspectRatio": aspect_ratio}
+            if storage_uri:
+                base_params["storageUri"] = storage_uri
+
+            def _submit_and_poll(seg_prompt, seg_label):
+                instance = _build_instance(seg_prompt)
+                body = {"instances": [instance], "parameters": dict(base_params)}
+                status_code, ok, submit_data = _call_predict_long_running(
+                    project_id=project_id,
+                    model=model,
+                    token=token,
+                    proxy=proxy,
+                    body=body,
+                )
+                if not ok:
+                    raise RuntimeError(f"Segment {seg_label} submit failed (status={status_code})")
+                operation_name = submit_data.get("name")
+                if not operation_name:
+                    raise RuntimeError(f"Segment {seg_label} operation_name missing")
+                video_uri, _ = _poll_video_ready(
+                    project_id=project_id,
+                    model=model,
+                    token=token,
+                    proxy=proxy,
+                    operation_name=operation_name,
+                    poll_interval_seconds=6,
+                    max_wait_seconds=720,
+                )
+                try:
+                    signed_url = sign_gcs_url(video_uri, key_file)
+                except Exception:
+                    signed_url = ""
+                return {
+                    "label": seg_label,
+                    "gcs_uri": video_uri,
+                    "signed_url": signed_url,
+                    "operation_name": operation_name,
+                }
+
+            segments = []
+            errors = []
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = {
+                    pool.submit(_submit_and_poll, prompt_a, "A"): "A",
+                    pool.submit(_submit_and_poll, prompt_b, "B"): "B",
+                }
+                for future in as_completed(futures):
+                    label = futures[future]
+                    try:
+                        seg = future.result()
+                        segments.append(seg)
+                    except Exception as e:
+                        errors.append({"label": label, "error": str(e)})
+
+            if errors:
+                failed_labels = ", ".join(e["label"] for e in errors)
+                _dur_ms = int((time.monotonic() - _t0) * 1000)
+                audit_log.record(
+                    tool="generate_video_16s",
+                    action="veo_16s",
+                    input_summary={"prompt_length": len(prompt), "model": model},
+                    output_summary={"errors": errors, "segments_ok": len(segments)},
+                    status="error",
+                    error_code="VEO_16S_SEGMENT_FAILED",
+                    duration_ms=_dur_ms,
+                )
+                return jsonify({
+                    "ok": False,
+                    "status_code": 502,
+                    "error": f"Segment(s) {failed_labels} failed",
+                    "errors": errors,
+                    "segments": segments,
+                    "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
+                }), 502
+
+            segments.sort(key=lambda s: s["label"])
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="veo16s_"))
+            try:
+                local_files = []
+                for seg in segments:
+                    local_path = tmp_dir / f"seg_{seg['label']}.mp4"
+                    download_gcs_blob_to_file(
+                        seg["gcs_uri"], local_path, key_file, project_id
+                    )
+                    local_files.append(local_path)
+
+                output_path = tmp_dir / "concat_16s.mp4"
+                concat_videos_ffmpeg(local_files, output_path)
+
+                final_data = output_path.read_bytes()
+            finally:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video_16s",
+                action="veo_16s",
+                input_summary={"prompt_length": len(prompt), "model": model},
+                output_summary={
+                    "segment_count": len(segments),
+                    "concat_size_bytes": len(final_data),
+                },
+                status="success",
+                duration_ms=_dur_ms,
+            )
+
+            import base64 as b64mod
+            video_b64 = b64mod.b64encode(final_data).decode("utf-8")
+            data_url = f"data:video/mp4;base64,{video_b64}"
+
+            return jsonify({
+                "ok": True,
+                "status_code": 200,
+                "model": model,
+                "mode": "prompt_split_16s",
+                "final_duration_seconds": 16,
+                "segments": [
+                    {"label": s["label"], "gcs_uri": s["gcs_uri"], "signed_url": s["signed_url"]}
+                    for s in segments
+                ],
+                "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
+                "video_data_url": data_url,
+            })
+        except ValueError as e:
+            return json_error(str(e))
+        except Exception as e:
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video_16s",
+                action="veo_16s",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="error",
+                error_code="VEO_16S_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=_dur_ms,
+            )
+            return json_error(f"16s 视频生成失败: {e}", 500)

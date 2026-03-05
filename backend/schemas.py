@@ -154,6 +154,10 @@ class AgentChatRequest(BaseModel):
         default=None,
         description="Nucleus sampling threshold. Only set when you need specific control.",
     )
+    stream: bool = Field(
+        default=False,
+        description="Whether to return Server-Sent Events (SSE) streaming chunks instead of a JSON response.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +225,11 @@ class VideoWorkflowRequest(BaseModel):
 class VeoStartRequest(CommonPayload):
     """Submit a video generation task to Google Veo.
 
-    Supports three modes:
+    Supports four modes:
     - text: Generate video from text prompt only
-    - image: Generate video from text + reference image
+    - image: Generate video from text + reference image (first frame)
     - reference: Generate video with reference images for style consistency
+    - frame: Generate video from first frame + last frame images
 
     Example:
         {
@@ -242,10 +247,11 @@ class VeoStartRequest(CommonPayload):
         description="Video generation prompt. Must be descriptive and include scene, lighting, "
                     "camera work, and action details for best results."
     )
-    veo_mode: Literal["text", "image", "reference"] = Field(
+    veo_mode: Literal["text", "image", "reference", "frame"] = Field(
         default="text",
-        description="Generation mode. 'text': prompt only. 'image': prompt + base image. "
-                    "'reference': prompt + reference images for style consistency.",
+        description="Generation mode. 'text': prompt only. 'image': prompt + first frame image. "
+                    "'reference': prompt + reference images for style consistency. "
+                    "'frame': prompt + first frame + last frame for controlled transitions.",
     )
     storage_uri: str = Field(
         default="",
@@ -277,6 +283,18 @@ class VeoStartRequest(CommonPayload):
     image_mime_type: Literal["image/png", "image/jpeg"] = Field(
         default="image/png",
         description="MIME type of the input image.",
+    )
+    last_frame_base64: str = Field(
+        default="",
+        description="Base64-encoded image for the last frame (veo_mode='frame' only).",
+    )
+    last_frame_mime_type: Literal["image/png", "image/jpeg"] = Field(
+        default="image/png",
+        description="MIME type of the last frame image.",
+    )
+    last_frame_url: str = Field(
+        default="",
+        description="URL of the last frame image (veo_mode='frame' only).",
     )
     negative_prompt: Optional[str] = Field(
         default=None,

@@ -37,7 +37,25 @@
             <div class="compact-head">
               <button id="uploadBtn" class="ghost upload-ref-btn">参考图</button>
               <button id="toggleProductUrlBtn" class="ghost">商品链接</button>
+              <button id="toggleFrameBtn" class="ghost">首尾帧</button>
               <span id="uploadHint" class="compact-hint">上传商品图后可自动识别商品信息并优化提示词。</span>
+            </div>
+            <div class="frame-upload-panel" id="framePanel" hidden>
+              <div class="frame-slot" id="firstFrameSlot">
+                <div class="frame-label">首帧</div>
+                <div class="frame-drop" id="firstFrameDrop">
+                  <span>+</span><span>上传首帧</span>
+                </div>
+                <input id="firstFrameInput" type="file" accept="image/png,image/jpeg" hidden />
+              </div>
+              <div class="frame-slot" id="lastFrameSlot">
+                <div class="frame-label">尾帧</div>
+                <div class="frame-drop" id="lastFrameDrop">
+                  <span>+</span><span>上传尾帧</span>
+                </div>
+                <input id="lastFrameInput" type="file" accept="image/png,image/jpeg" hidden />
+              </div>
+              <button id="aiGenerateFramesBtn" class="ghost" type="button">AI 自动生成</button>
             </div>
             <div class="compact-link-row">
               <input id="productUrlInput" type="url" placeholder="粘贴 Shoplazza 商品链接（可自动解析）" />
@@ -59,11 +77,7 @@
                   <option value="4">4秒</option>
                   <option value="6">6秒</option>
                   <option value="8" selected>8秒</option>
-                  <!-- Long-duration chain options temporarily disabled:
                   <option value="16">16秒</option>
-                  <option value="24">24秒</option>
-                  <option value="30">30秒</option>
-                  -->
                 </select>
               </label>
               <button id="sendBtn">生成视频</button>

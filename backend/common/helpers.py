@@ -1,15 +1,27 @@
 import base64
 import json
 import re
+import subprocess
+import tempfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import requests
 from flask import jsonify
 from google.cloud import storage
 from google.oauth2 import service_account
+from requests import Response
 
-from shoplive.backend.infra import build_proxies, get_access_token, parse_common_payload
+from shoplive.backend.infra import (
+    build_proxies,
+    build_proxy_candidates,
+    get_access_token,
+    parse_common_payload,
+)
+
+MAX_INLINE_VIDEO_B64_CHARS = 40 * 1024 * 1024
+MAX_INLINE_VIDEO_BYTES = 30 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +117,15 @@ def download_video_to_file(video_url: str, output_file: Path, proxy: str):
         raise ValueError("video_url 不能为空")
     if raw.startswith("data:video/"):
         b64, _ = parse_generic_data_url(raw, "video")
-        output_file.write_bytes(base64.b64decode(b64))
+        if len(b64) > MAX_INLINE_VIDEO_B64_CHARS:
+            raise ValueError("video_url data:video 体积过大")
+        try:
+            decoded = base64.b64decode(b64, validate=True)
+        except Exception as e:
+            raise ValueError(f"video_url data:video base64 无效: {e}") from e
+        if len(decoded) > MAX_INLINE_VIDEO_BYTES:
+            raise ValueError("video_url data:video 解码后体积过大")
+        output_file.write_bytes(decoded)
         return
     if raw.startswith("http://") or raw.startswith("https://"):
         resp = requests.get(raw, timeout=180, proxies=build_proxies(proxy), stream=True)
@@ -363,6 +383,18 @@ def call_litellm_chat(
     max_tokens=None,
     top_p=None,
 ) -> Tuple[int, Dict]:
+    def _is_retryable_status(resp: Response) -> bool:
+        return resp.status_code in {429, 500, 502, 503, 504}
+
+    def _safe_response_body(resp: Response) -> Dict:
+        content_type = (resp.headers.get("content-type", "") or "").lower()
+        if "json" in content_type:
+            try:
+                return resp.json()
+            except ValueError:
+                pass
+        return {"raw": resp.text}
+
     body = {"model": model, "messages": messages}
     model_lower = str(model or "").lower()
     is_gpt5_family = "gpt-5" in model_lower
@@ -376,15 +408,178 @@ def call_litellm_chat(
             body["max_tokens"] = max_tokens
         if top_p is not None:
             body["top_p"] = top_p
-    resp = requests.post(
-        f"{api_base}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=90,
-        proxies=build_proxies(proxy),
+
+    proxy_candidates = build_proxy_candidates(proxy)
+    max_attempts_per_route = 2
+    total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
+    total_attempt = 0
+    last_exception: Optional[Exception] = None
+    last_retryable_status: Optional[int] = None
+    for proxy_map in proxy_candidates:
+        for _ in range(max_attempts_per_route):
+            total_attempt += 1
+            try:
+                resp = requests.post(
+                    f"{api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        # Avoid stale keep-alive sockets that can trigger intermittent EOF in TLS.
+                        "Connection": "close",
+                    },
+                    json=body,
+                    timeout=(10, 90),
+                    proxies=proxy_map,
+                )
+                if _is_retryable_status(resp):
+                    last_retryable_status = resp.status_code
+                    if total_attempt < total_attempt_slots:
+                        time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                        continue
+                data = _safe_response_body(resp)
+                return resp.status_code, {"ok": resp.ok, "status_code": resp.status_code, "response": data}
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_exception = e
+                if total_attempt < total_attempt_slots:
+                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                    continue
+
+    if last_exception is not None:
+        raise RuntimeError(
+            f"LiteLLM chat transient failure after {total_attempt} attempts: {last_exception}"
+        ) from last_exception
+    raise RuntimeError(
+        f"LiteLLM chat transient failure after {total_attempt} attempts: retryable status={last_retryable_status}"
     )
-    data = resp.json() if "json" in (resp.headers.get("content-type", "") or "") else {"raw": resp.text}
-    return resp.status_code, {"ok": resp.ok, "status_code": resp.status_code, "response": data}
+
+
+def call_litellm_chat_stream(
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+    messages: List[Dict],
+    proxy: str = "",
+    temperature=None,
+    max_tokens=None,
+    top_p=None,
+) -> Iterator[Dict[str, Any]]:
+    def _is_retryable_status(resp: Response) -> bool:
+        return resp.status_code in {429, 500, 502, 503, 504}
+
+    def _extract_delta_text(choice: Dict[str, Any]) -> str:
+        delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+        content = delta.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            out = []
+            for item in content:
+                if isinstance(item, str):
+                    out.append(item)
+                elif isinstance(item, dict):
+                    txt = item.get("text") or item.get("value") or ""
+                    if isinstance(txt, str) and txt:
+                        out.append(txt)
+            return "".join(out)
+        return ""
+
+    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    model_lower = str(model or "").lower()
+    is_gpt5_family = "gpt-5" in model_lower
+
+    if not is_gpt5_family:
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if top_p is not None:
+            body["top_p"] = top_p
+
+    proxy_candidates = build_proxy_candidates(proxy)
+    max_attempts_per_route = 2
+    total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
+    total_attempt = 0
+    last_exception: Optional[Exception] = None
+    last_retryable_status: Optional[int] = None
+
+    for proxy_map in proxy_candidates:
+        for _ in range(max_attempts_per_route):
+            total_attempt += 1
+            try:
+                with requests.post(
+                    f"{api_base}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "Connection": "close",
+                    },
+                    json=body,
+                    timeout=(10, 120),
+                    proxies=proxy_map,
+                    stream=True,
+                ) as resp:
+                    if _is_retryable_status(resp):
+                        last_retryable_status = resp.status_code
+                        if total_attempt < total_attempt_slots:
+                            time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                            continue
+                    if not resp.ok:
+                        content_type = (resp.headers.get("content-type", "") or "").lower()
+                        if "json" in content_type:
+                            try:
+                                err_data = resp.json()
+                            except ValueError:
+                                err_data = {"raw": resp.text}
+                        else:
+                            err_data = {"raw": resp.text}
+                        raise RuntimeError(
+                            f"LiteLLM stream failed status={resp.status_code}: {str(err_data)[:500]}"
+                        )
+
+                    full_chunks: List[str] = []
+                    for line in resp.iter_lines(decode_unicode=True):
+                        txt = str(line or "").strip()
+                        if not txt or not txt.startswith("data:"):
+                            continue
+                        payload = txt[5:].strip()
+                        if not payload:
+                            continue
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload)
+                        except Exception:
+                            continue
+                        choices = chunk.get("choices") if isinstance(chunk, dict) else None
+                        if not isinstance(choices, list) or not choices:
+                            continue
+                        choice0 = choices[0] if isinstance(choices[0], dict) else {}
+                        delta_text = _extract_delta_text(choice0)
+                        if delta_text:
+                            full_chunks.append(delta_text)
+                            yield {"type": "delta", "delta": delta_text}
+
+                    yield {
+                        "type": "done",
+                        "content": "".join(full_chunks),
+                        "ok": True,
+                        "status_code": resp.status_code,
+                    }
+                    return
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_exception = e
+                if total_attempt < total_attempt_slots:
+                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                    continue
+
+    if last_exception is not None:
+        raise RuntimeError(
+            f"LiteLLM chat transient stream failure after {total_attempt} attempts: {last_exception}"
+        ) from last_exception
+    raise RuntimeError(
+        f"LiteLLM chat transient stream failure after {total_attempt} attempts: retryable status={last_retryable_status}"
+    )
 
 
 def extract_gs_paths(obj) -> List[str]:
@@ -805,3 +1000,119 @@ def build_shoplive_image_prompt_safe_product_only(payload: Dict) -> str:
         "No logos, no trademarks, no watermarks, no text overlays, no clutter, no collage."
     ).strip()
 
+
+# ---------------------------------------------------------------------------
+# Video concatenation (16s prompt-split workflow)
+# ---------------------------------------------------------------------------
+
+def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_seconds: int = 120) -> Path:
+    if len(video_paths) < 2:
+        raise ValueError("concat_videos_ffmpeg requires at least 2 video files")
+    for p in video_paths:
+        if not p.exists():
+            raise FileNotFoundError(f"Video segment not found: {p}")
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        for vp in video_paths:
+            f.write(f"file '{vp.resolve()}'\n")
+        list_file = Path(f.name)
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(list_file),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(output_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+        )
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-600:]
+            raise RuntimeError(f"ffmpeg concat failed (rc={proc.returncode}): {stderr_tail}")
+        if not output_path.exists() or output_path.stat().st_size < 1024:
+            raise RuntimeError("ffmpeg concat produced empty or missing output")
+        return output_path
+    finally:
+        try:
+            list_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def download_gcs_blob_to_file(
+    gcs_uri: str,
+    output_path: Path,
+    key_file: str,
+    project_id: str = "gemini-sl-20251120",
+) -> Path:
+    m = re.match(r"^gs://([^/]+)/(.+)$", gcs_uri)
+    if not m:
+        raise ValueError(f"Invalid GCS URI: {gcs_uri}")
+    bucket_name, blob_name = m.group(1), m.group(2)
+    from google.cloud import storage as gcs_storage
+    from google.oauth2 import service_account as gcs_sa
+    creds = gcs_sa.Credentials.from_service_account_file(
+        key_file, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    client = gcs_storage.Client(project=project_id, credentials=creds)
+    blob = client.bucket(bucket_name).blob(blob_name)
+    blob.download_to_filename(str(output_path))
+    return output_path
+
+
+PROMPT_SPLIT_SYSTEM = (
+    "You are an ecommerce video prompt architect. "
+    "Given a single video generation prompt, split it into exactly TWO 8-second segments "
+    "that together form a cohesive 16-second product video.\n\n"
+    "Rules:\n"
+    "- Part 1 (8s): Product introduction, first impression, core selling-point showcase.\n"
+    "- Part 2 (8s): Usage experience, emotional appeal, lifestyle context, CTA close.\n"
+    "- Both parts MUST keep identical: product identity, visual style, lighting style, "
+    "camera language, color palette, aspect ratio.\n"
+    "- NO repeated content between parts. Part 2 must narratively follow Part 1.\n"
+    "- Each part must be a complete, self-contained video prompt (not a fragment).\n"
+    "- Each part must include the compliance suffix from the original prompt if present.\n"
+    "- Output ONLY valid JSON, no markdown, no explanation.\n\n"
+    'Output schema: {"part1": "...", "part2": "..."}'
+)
+
+
+def split_prompt_for_16s(
+    original_prompt: str,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    proxy: str = "",
+) -> Dict[str, str]:
+    messages = [
+        {"role": "system", "content": PROMPT_SPLIT_SYSTEM},
+        {"role": "user", "content": original_prompt},
+    ]
+    status_code, data_wrap = call_litellm_chat(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        proxy=proxy,
+        temperature=0.3,
+        max_tokens=1200,
+    )
+    if not data_wrap.get("ok"):
+        raise RuntimeError(f"Prompt split LLM call failed (status={status_code})")
+    content = extract_chat_content(data_wrap.get("response", {}))
+    parsed = try_parse_json_object(content)
+    part1 = str(parsed.get("part1") or "").strip()
+    part2 = str(parsed.get("part2") or "").strip()
+    if not part1 or not part2:
+        raise ValueError(
+            "LLM did not return valid part1/part2 for prompt split. "
+            f"Raw: {content[:300]}"
+        )
+    return {"part1": part1, "part2": part2}

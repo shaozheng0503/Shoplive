@@ -77,13 +77,18 @@ const i18n = {
     enhanceDone: "提示词增强完成，已更新输入框。",
     enhanceFail: "提示词增强失败，已保留原文。",
     enhanceRetry: "重试提示词增强",
-    enhanceRetryDesc: "继续使用 GPT-5 再试一次",
+    enhanceRetryDesc: "再试一次提示词增强",
     enhanceRetryAck: "重试提示词增强",
     toggleLinkShow: "商品链接",
     toggleLinkHide: "收起链接",
     parseLinkBtn: "解析链接",
     parseLinkPh: "粘贴 Shoplazza 商品链接（可自动解析）",
     parseLinkWorking: "正在解析商品链接，请稍候...",
+    parseLinkStep1: "正在访问商品页面，读取 HTML 结构…",
+    parseLinkStep2: "正在提取商品名称、价格和卖点信息…",
+    parseLinkStep3: "正在下载商品主图并识别风格线索…",
+    parseLinkStep4: "正在整理评价数据与关键信息…",
+    parseLinkSlow: "解析仍在进行（已用时 {sec}s），页面较复杂，请耐心等待…",
     parseLinkDone: "商品链接解析完成，已回填关键信息并更新提示词草稿。",
     parseLinkFail: "商品链接解析失败，请检查链接或稍后重试。",
     parseLinkWeak: "链接可访问，但未稳定提取到商品主图。请点击“参考图”上传1-4张商品图，我会继续自动优化。",
@@ -270,13 +275,18 @@ const i18n = {
     enhanceDone: "Prompt enhancement completed and applied.",
     enhanceFail: "Prompt enhancement failed. Original prompt kept.",
     enhanceRetry: "Retry prompt enhancement",
-    enhanceRetryDesc: "Try again with GPT-5",
+    enhanceRetryDesc: "Retry prompt enhancement once more",
     enhanceRetryAck: "Retry prompt enhancement",
     toggleLinkShow: "Product URL",
     toggleLinkHide: "Hide URL",
     parseLinkBtn: "Parse Link",
     parseLinkPh: "Paste a Shoplazza product URL to auto parse",
     parseLinkWorking: "Parsing product URL...",
+    parseLinkStep1: "Accessing product page, reading HTML structure…",
+    parseLinkStep2: "Extracting product name, price and selling points…",
+    parseLinkStep3: "Downloading product images and detecting style cues…",
+    parseLinkStep4: "Compiling review data and key attributes…",
+    parseLinkSlow: "Still parsing ({sec}s). Complex page, please wait…",
     parseLinkDone: "Product URL parsed and draft prompt updated.",
     parseLinkFail: "Failed to parse product URL. Please verify URL and retry.",
     parseLinkWeak: "URL is reachable, but product images were not reliably extracted. Please upload 1-4 product images via \"Reference\".",
@@ -475,6 +485,10 @@ const state = {
   targetBatchIdx: 0,
   brandBatchIdx: 0,
   generating: false,
+  enhancing: false,
+  firstFrame: null,
+  lastFrame: null,
+  frameMode: false,
   videoEditorOpen: false,
   scriptEditorOpen: false,
   lastPrompt: "",
@@ -585,6 +599,33 @@ function nextInsightPulseLine() {
   deck.idx += 1;
   deck.prev = value;
   return value;
+}
+
+function startLinkParseProgress() {
+  const steps = [
+    t("parseLinkWorking"),
+    t("parseLinkStep1"),
+    t("parseLinkStep2"),
+    t("parseLinkStep3"),
+    t("parseLinkStep4"),
+  ];
+  const startedAt = Date.now();
+  let stepIdx = 0;
+  const bubble = pushMsg("system", steps[0], { typewriter: false });
+  const timer = setInterval(() => {
+    const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+    if (sec < 20) {
+      stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+      bubble.textContent = steps[stepIdx];
+    } else {
+      bubble.textContent = t("parseLinkSlow", { sec });
+    }
+    scrollToBottom();
+  }, 3000);
+  return () => {
+    clearInterval(timer);
+    if (bubble && bubble.parentNode) bubble.remove();
+  };
 }
 
 function renderWorkspaceTab(el, label, kind) {
@@ -1183,29 +1224,112 @@ function updateToolbarIndicator() {
   workspaceToolbar.classList.add("has-indicator");
 }
 
+function buildSegmentedStoryboard(segCount = 1) {
+  const points = normalizePointsList(state.sellingPoints);
+  const fallback = currentLang === "zh" ? "突出产品核心卖点" : "Highlight core product value";
+  if (segCount <= 1) {
+    const scenes = points.length ? points : [fallback];
+    return [
+      scenes
+        .map((p, idx) =>
+          currentLang === "zh"
+            ? `镜头${idx + 1}：${p}，面向「${state.targetUser || "目标人群"}」，突出「${state.salesRegion || "目标地区"}」表达。`
+            : `Scene ${idx + 1}: ${p}; target "${state.targetUser || "audience"}"; localized for "${state.salesRegion || "region"}".`
+        )
+        .join("\n"),
+    ];
+  }
+  const half = Math.ceil(points.length / segCount);
+  const segments = [];
+  for (let s = 0; s < segCount; s++) {
+    const chunk = points.slice(s * half, (s + 1) * half);
+    if (!chunk.length) chunk.push(fallback);
+    const segLabel = currentLang === "zh" ? `第${s + 1}段（8秒）` : `Segment ${s + 1} (8s)`;
+    const lines = chunk.map((p, idx) =>
+      currentLang === "zh"
+        ? `镜头${idx + 1}：${p}，面向「${state.targetUser || "目标人群"}」。`
+        : `Scene ${idx + 1}: ${p}; target "${state.targetUser || "audience"}".`
+    );
+    segments.push(`[${segLabel}]\n${lines.join("\n")}`);
+  }
+  return segments;
+}
+
 function renderScriptEditor() {
   if (!scriptEditorPanel) return;
   if (!state.scriptEditorOpen) return;
+
+  const dur = Number(state.duration || 8);
+  const segCount = dur >= 16 ? Math.floor(dur / 8) : 1;
+  const existingSegments = (state.lastStoryboard || "").split(/\n*\[第\d+段|Segment \d+/).filter(Boolean);
+  const segments = existingSegments.length === segCount
+    ? existingSegments.map((s) => s.replace(/^\(.*?\)\]\s*/, "").trim())
+    : buildSegmentedStoryboard(segCount);
+
+  const durationLabel = currentLang === "zh" ? "视频时长" : "Duration";
+  const segmentLabel = currentLang === "zh" ? "分镜段" : "Segment";
+
+  let segmentHtml = "";
+  for (let i = 0; i < segCount; i++) {
+    const title = segCount > 1
+      ? (currentLang === "zh" ? `${segmentLabel} ${i + 1}（8秒）` : `${segmentLabel} ${i + 1} (8s)`)
+      : (currentLang === "zh" ? "分镜脚本" : "Storyboard");
+    segmentHtml += `
+      <label class="editor-label">${title}</label>
+      <textarea id="storyboardSeg${i}" class="editor-textarea" rows="6">${sanitizeInputValue(segments[i] || "")}</textarea>
+    `;
+  }
+
   scriptEditorPanel.innerHTML = `
     <div class="editor-head">
       <strong>${t("scriptEditTitle")}</strong>
       <button class="editor-close-btn" id="closeScriptPanelBtn">${t("closePanel")}</button>
     </div>
     <p class="editor-hint">${t("scriptEditHint")}</p>
-    <label class="editor-label">${t("storyboardLabel")}</label>
-    <textarea id="storyboardTextarea" class="editor-textarea" rows="8">${sanitizeInputValue(state.lastStoryboard || buildStoryboardText())}</textarea>
+    <div class="editor-duration-row" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <label class="editor-label" style="margin:0;">${durationLabel}</label>
+      <select id="scriptDurationSelect" style="padding:4px 8px;border-radius:8px;border:1px solid #c0d2ec;">
+        <option value="4" ${dur === 4 ? "selected" : ""}>4${currentLang === "zh" ? "秒" : "s"}</option>
+        <option value="6" ${dur === 6 ? "selected" : ""}>6${currentLang === "zh" ? "秒" : "s"}</option>
+        <option value="8" ${dur === 8 ? "selected" : ""}>8${currentLang === "zh" ? "秒" : "s"}</option>
+        <option value="16" ${dur === 16 ? "selected" : ""}>16${currentLang === "zh" ? "秒（2段拼接）" : "s (2 segments)"}</option>
+      </select>
+    </div>
+    ${segmentHtml}
     <label class="editor-label">${t("promptLabel")}</label>
     <textarea id="promptTextarea" class="editor-textarea" rows="10">${sanitizeInputValue(state.lastPrompt || buildPrompt())}</textarea>
     <div class="editor-actions">
       <button id="regenFromScriptBtn">${t("storyboardRegenerate")}</button>
     </div>
   `;
+
+  scriptEditorPanel.querySelector("#scriptDurationSelect")?.addEventListener("change", (e) => {
+    const newDur = String(e.target.value || "8");
+    state.duration = newDur;
+    if (durationSelect) durationSelect.value = newDur;
+    renderScriptEditor();
+  });
+
   scriptEditorPanel.querySelector("#closeScriptPanelBtn")?.addEventListener("click", () => {
     state.scriptEditorOpen = false;
     applyWorkspaceMode();
   });
+
   scriptEditorPanel.querySelector("#regenFromScriptBtn")?.addEventListener("click", async () => {
-    state.lastStoryboard = scriptEditorPanel.querySelector("#storyboardTextarea")?.value?.trim() || "";
+    const currentSegCount = Number(state.duration || 8) >= 16 ? Math.floor(Number(state.duration) / 8) : 1;
+    const segs = [];
+    for (let i = 0; i < currentSegCount; i++) {
+      const el = scriptEditorPanel.querySelector(`#storyboardSeg${i}`);
+      segs.push(el?.value?.trim() || "");
+    }
+    if (currentSegCount > 1) {
+      state.lastStoryboard = segs.map((s, i) => {
+        const label = currentLang === "zh" ? `[第${i + 1}段（8秒）]` : `[Segment ${i + 1} (8s)]`;
+        return `${label}\n${s}`;
+      }).join("\n\n");
+    } else {
+      state.lastStoryboard = segs[0] || "";
+    }
     state.lastPrompt = scriptEditorPanel.querySelector("#promptTextarea")?.value?.trim() || buildPrompt();
     await generateVideo(state.lastPrompt);
   });
@@ -2068,16 +2192,66 @@ function renderOptions(container, options = []) {
 }
 
 function pushImageMsg(images) {
-  const box = pushMsg("user", t("uploaded", { count: images.length }), { typewriter: false });
+  const box = pushMsg("user", "", { typewriter: false });
+  const countSpan = document.createElement("span");
+  countSpan.className = "img-count-label";
+  countSpan.textContent = t("uploaded", { count: images.length });
+  box.appendChild(countSpan);
   const thumbs = document.createElement("div");
-  thumbs.className = "thumbs";
-  images.forEach((img) => {
-    const node = document.createElement("img");
-    node.src = img.dataUrl;
-    node.alt = "product";
-    thumbs.appendChild(node);
-  });
+  thumbs.className = "thumbs thumbs-interactive";
+  const renderThumbs = () => {
+    thumbs.innerHTML = "";
+    countSpan.textContent = t("uploaded", { count: state.images.length });
+    state.images.forEach((img, idx) => {
+      const wrap = document.createElement("div");
+      wrap.className = "thumb-wrap";
+      const node = document.createElement("img");
+      node.src = img.dataUrl;
+      node.alt = img.name || "product";
+      node.title = currentLang === "zh" ? "点击预览大图" : "Click to preview";
+      node.addEventListener("click", () => {
+        showImagePreview(img.dataUrl, img.name || `image-${idx + 1}`);
+      });
+      const delBtn = document.createElement("button");
+      delBtn.className = "thumb-del";
+      delBtn.textContent = "×";
+      delBtn.title = currentLang === "zh" ? "删除此图" : "Remove";
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.images.splice(idx, 1);
+        renderThumbs();
+      });
+      wrap.appendChild(node);
+      wrap.appendChild(delBtn);
+      thumbs.appendChild(wrap);
+    });
+    const addBtn = document.createElement("div");
+    addBtn.className = "thumb-add";
+    addBtn.innerHTML = `<span>+</span><span style="font-size:10px;">${currentLang === "zh" ? "补传" : "Add"}</span>`;
+    addBtn.title = currentLang === "zh" ? "补传商品图" : "Upload more images";
+    addBtn.addEventListener("click", () => imageInput?.click());
+    thumbs.appendChild(addBtn);
+  };
+  renderThumbs();
   box.appendChild(thumbs);
+}
+
+function showImagePreview(src, name) {
+  const existing = document.getElementById("imgPreviewOverlay");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "imgPreviewOverlay";
+  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;cursor:zoom-out;";
+  overlay.addEventListener("click", () => overlay.remove());
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = name;
+  img.style.cssText = "max-width:90vw;max-height:88vh;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.5);object-fit:contain;";
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
+  document.addEventListener("keydown", function handler(e) {
+    if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", handler); }
+  });
 }
 
 function showUploadRefQuickAction() {
@@ -2631,6 +2805,39 @@ function sanitizePromptForUser(raw = "") {
   return text;
 }
 
+function sanitizePromptForVeo(raw = "") {
+  let text = String(raw || "").trim();
+  if (!text) return text;
+  text = text.replace(/\$[\d,.]+/g, "");
+  text = text.replace(/¥[\d,.]+/g, "");
+  text = text.replace(/(?:USD|EUR|GBP|CNY|JPY)\s*[\d,.]+/gi, "");
+  text = text.replace(/\d+%\s*(?:off|discount|折)/gi, "");
+  text = text.replace(/(?:free\s+returns?|free\s+shipping|包邮|免运费|免费退[货换])/gi, "");
+  text = text.replace(/(?:buy\s+now|shop\s+now|add\s+to\s+cart|立即购买|加入购物车|立即下单)/gi, "");
+  text = text.replace(/(?:limited\s+time|flash\s+sale|限时|秒杀|大促)/gi, "");
+  text = text.replace(/(?:Amazon|Walmart|Shein|Temu|AliExpress|eBay|Etsy)\s*(?:Luxury|Prime|Plus)?/gi, "brand");
+  text = text.replace(/\b(?:TM|®|©)\b/g, "");
+  text = text.replace(/(?:text\s+overlay|文字叠加|字幕覆盖|字幕|subtitle|caption)[^.;；。]*[.;；。]?/gi, "");
+  // Remove quotation marks — Veo renders quoted text as on-screen text (official best practice).
+  text = text.replace(/(?:CTA\s*:\s*"[^"]*")/gi, "CTA: confident closing gesture.");
+  text = text.replace(/[""\u201c\u201d]/g, "");
+  text = text.replace(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+/g, " ");
+  text = text
+    .split(/\n+/)
+    .filter((line) => !/(禁用词|合规要求|support codes|allowlisting)/i.test(line))
+    .join("\n")
+    .replace(/\s{3,}/g, " ")
+    .trim();
+  if (!/no\s+text/i.test(text)) {
+    text += " No text overlay, no subtitles, no captions, no on-screen characters in any language.";
+  }
+  return text.slice(0, 1600);
+}
+
+function isVeoSafetyRejection(msg = "") {
+  return /violate.*usage guidelines|Responsible AI|sensitive words|support codes/i.test(String(msg));
+}
+
 function buildAutoPromptDraftFromParsed(source = "image") {
   const duration = state.duration || "8";
   const ratio = state.aspectRatio || "16:9";
@@ -2728,7 +2935,7 @@ async function refreshPlayableUrlByOperation(operationName) {
       `${getApiBase()}/api/veo/status`,
       {
         project_id: "gemini-sl-20251120",
-        model: "veo-3.1-generate-preview",
+        model: "veo-3.1-fast-generate-001",
         operation_name: op,
       },
       25000
@@ -2740,11 +2947,7 @@ async function refreshPlayableUrlByOperation(operationName) {
 }
 
 function isChainDuration(value) {
-  // Temporarily disable chained long-duration flow (16/24/30s) without deleting implementation.
-  // Original logic kept for quick restore:
-  // return ["16", "24", "30"].includes(String(value || ""));
-  void value;
-  return false;
+  return String(value || "") === "16";
 }
 
 function renderChainSummary(chainResp) {
@@ -2820,6 +3023,16 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "") {
         return;
       }
     }
+    const hasGcsSource = String(gcsUri || "").startsWith("gs://");
+    if (hasGcsSource) {
+      pushMsg(
+        "system",
+        currentLang === "zh"
+          ? "视频播放失败：当前账号缺少 GCS 对象读取权限（storage.objects.get）。请联系管理员授权后重试，或重新生成（不指定 storage_uri）。"
+          : "Video playback failed: current account lacks GCS object read permission (storage.objects.get). Grant permission and retry, or regenerate without storage_uri."
+      );
+      return;
+    }
     pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.");
   });
   surface.appendChild(video);
@@ -2862,6 +3075,248 @@ async function postJson(url, body, timeout = 30000) {
   }
 }
 
+async function postSse(url, body, onEvent, timeout = 90000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) {
+      let errText = `HTTP ${resp.status}`;
+      try {
+        const data = await resp.json();
+        errText = data?.error || data?.message || errText;
+      } catch (_e) {
+        try {
+          errText = (await resp.text()) || errText;
+        } catch (_e2) {}
+      }
+      throw new Error(errText);
+    }
+    if (!resp.body) throw new Error("empty stream body");
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true });
+      const blocks = pending.split("\n\n");
+      pending = blocks.pop() || "";
+      for (const block of blocks) {
+        const lines = block.split(/\r?\n/);
+        let eventName = "message";
+        const dataLines = [];
+        for (const line of lines) {
+          if (!line) continue;
+          if (line.startsWith(":")) continue;
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim() || "message";
+            continue;
+          }
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+        if (!dataLines.length) continue;
+        const rawPayload = dataLines.join("\n");
+        let payload = null;
+        try {
+          payload = JSON.parse(rawPayload);
+        } catch (_e) {
+          payload = { raw: rawPayload };
+        }
+        onEvent?.(eventName, payload);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function generate16sWithProgress(base, startBody, finalPrompt) {
+  const zh = currentLang === "zh";
+  const statusBubble = pushMsg("system", zh ? "⏳ 步骤 1/4：正在用 AI 拆分提示词为前后两段…" : "Step 1/4: Splitting prompt into two segments…", { typewriter: false });
+
+  let promptA = "";
+  let promptB = "";
+  try {
+    const splitResp = await postJson(
+      `${base}/api/agent/chat`,
+      {
+        model: "bedrock-claude-4-5-haiku",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an expert ecommerce video prompt architect for Google Veo 3.1.\n"
+              + "Given a single video generation prompt, split it into exactly TWO 8-second segments "
+              + "that together form a cohesive 16-second product video.\n\n"
+              + "Each segment MUST follow this 5-part formula:\n"
+              + "[Cinematography] + [Subject] + [Action] + [Context] + [Style & Ambiance]\n\n"
+              + "Each segment MUST use timestamp prompting for precise 2-second shot control:\n"
+              + "[00:00-00:02] first shot description.\n"
+              + "[00:02-00:04] second shot description.\n"
+              + "[00:04-00:06] third shot description.\n"
+              + "[00:06-00:08] fourth shot description.\n\n"
+              + "Rules:\n"
+              + "- Part 1 (8s): Product introduction, first impression, core selling-point showcase.\n"
+              + "- Part 2 (8s): Usage experience, emotional appeal, lifestyle context, confident closing.\n"
+              + "- Both parts MUST keep identical: product identity, visual style, lighting, camera language, color palette, aspect ratio.\n"
+              + "- NO repeated content between parts. Part 2 must narratively follow Part 1.\n"
+              + "- Each part must be a complete, self-contained video prompt (not a fragment).\n"
+              + "- NEVER use quotation marks (Veo renders them as on-screen text). Use colons for speech.\n"
+              + "- NEVER include text overlay, subtitles, captions, or on-screen characters.\n"
+              + "- Focus each 8s segment on a single coherent scene (official Veo best practice).\n"
+              + "- Write in English only. No Chinese characters.\n\n"
+              + 'Output ONLY valid JSON: {"part1": "...", "part2": "..."}'
+          },
+          { role: "user", content: finalPrompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 1200,
+      },
+      30000
+    );
+    const raw = String(splitResp?.content || "").trim();
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (_e) {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) try { parsed = JSON.parse(m[0]); } catch (_e2) {}
+    }
+    promptA = sanitizePromptForVeo(String(parsed?.part1 || "").trim()) || "";
+    promptB = sanitizePromptForVeo(String(parsed?.part2 || "").trim()) || "";
+  } catch (_e) {}
+  if (!promptA) promptA = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+  if (!promptB) promptB = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+
+  const segBody = { ...startBody, duration_seconds: 8 };
+
+  async function submitSafe(prompt, label) {
+    try {
+      return await postJson(`${base}/api/veo/start`, { ...segBody, prompt }, 30000);
+    } catch (e) {
+      if (isVeoSafetyRejection(String(e?.message || ""))) {
+        const saferPrompt = `Clean cinematic ecommerce product video, 8 seconds, natural lighting, smooth camera. ${label === "A" ? "Product introduction." : "Usage and confident closing."}`;
+        return await postJson(`${base}/api/veo/start`, { ...segBody, prompt: saferPrompt }, 30000);
+      }
+      throw e;
+    }
+  }
+
+  async function pollUntilDone(op, label) {
+    const start = Date.now();
+    while (true) {
+      const elapsed = Math.floor((Date.now() - start) / 1000);
+      statusBubble.textContent = zh
+        ? `⏳ 步骤 ${label}：生成中（${elapsed}s）…`
+        : `Step ${label}: Generating (${elapsed}s)…`;
+      const waitMs = elapsed < 40 ? 3000 : 12000;
+      await new Promise((r) => setTimeout(r, waitMs));
+      if (elapsed < 30) continue;
+      try {
+        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: "veo-3.1-fast-generate-001", operation_name: op }, 15000);
+        const pUrl = pickPlayableUrl(st);
+        const gUri = String(st?.video_uris?.[0] || "").trim();
+        if (pUrl || gUri) return { url: pUrl, gcs: gUri };
+        const errMsg = st?.response?.done ? (st?.response?.error?.message || "") : "";
+        if (errMsg) throw new Error(errMsg);
+      } catch (e) {
+        const msg = String(e?.message || "");
+        if (msg.length > 5 && !/timeout|abort/i.test(msg)) throw e;
+      }
+      if ((Date.now() - start) > 360000) throw new Error(zh ? `第${label}段超时` : `Segment ${label} timed out`);
+    }
+  }
+
+  // Step 2/5: Generate segment 1
+  statusBubble.textContent = zh ? "⏳ 步骤 2/5：正在生成第 1 段（8s）…" : "Step 2/5: Generating segment 1 (8s)…";
+  scrollToBottom();
+  const startA = await submitSafe(promptA, "A");
+  const opA = startA?.operation_name;
+  if (!opA) throw new Error(zh ? "第1段提交失败" : "Segment 1 submit failed");
+  const resA = await pollUntilDone(opA, "2/5");
+
+  // Step 3/5: Extract last frame from segment 1 for seamless bridging
+  statusBubble.textContent = zh ? "⏳ 步骤 3/5：提取第 1 段尾帧用于衔接…" : "Step 3/5: Extracting last frame for bridging…";
+  scrollToBottom();
+  let bridgeFrameB64 = "";
+  let bridgeFrameMime = "image/png";
+  try {
+    const frameBody = {
+      project_id: "gemini-sl-20251120",
+      position: "last",
+    };
+    if (resA.gcs) frameBody.gcs_uri = resA.gcs;
+    else if (resA.url && resA.url.startsWith("data:video/")) frameBody.video_data_url = resA.url;
+    if (frameBody.gcs_uri || frameBody.video_data_url) {
+      const frameResp = await postJson(`${base}/api/veo/extract-frame`, frameBody, 45000);
+      bridgeFrameB64 = String(frameResp?.frame_base64 || "").trim();
+      bridgeFrameMime = String(frameResp?.mime_type || "image/png").trim();
+    }
+  } catch (_e) {}
+
+  // Step 4/5: Generate segment 2 with bridging frame as first frame
+  statusBubble.textContent = zh ? "⏳ 步骤 4/5：正在生成第 2 段（8s，首帧衔接）…" : "Step 4/5: Generating segment 2 (8s, bridged)…";
+  scrollToBottom();
+  const seg2Body = { ...segBody, prompt: promptB };
+  if (bridgeFrameB64) {
+    seg2Body.veo_mode = "image";
+    seg2Body.image_base64 = bridgeFrameB64;
+    seg2Body.image_mime_type = bridgeFrameMime;
+  }
+  let startB;
+  try {
+    startB = await postJson(`${base}/api/veo/start`, seg2Body, 30000);
+  } catch (e) {
+    if (isVeoSafetyRejection(String(e?.message || ""))) {
+      const saferBody = { ...segBody, prompt: `Clean cinematic product video continuation, 8 seconds, natural lighting, smooth camera, usage experience.` };
+      if (bridgeFrameB64) { saferBody.veo_mode = "image"; saferBody.image_base64 = bridgeFrameB64; saferBody.image_mime_type = bridgeFrameMime; }
+      startB = await postJson(`${base}/api/veo/start`, saferBody, 30000);
+    } else { throw e; }
+  }
+  const opB = startB?.operation_name;
+  if (!opB) throw new Error(zh ? "第2段提交失败" : "Segment 2 submit failed");
+  const resB = await pollUntilDone(opB, "4/5");
+
+  // Step 5/5: Concatenate
+  statusBubble.textContent = zh ? "⏳ 步骤 5/5：正在拼接为 16 秒视频…" : "Step 5/5: Concatenating into 16s video…";
+  scrollToBottom();
+
+  let concatUrl = "";
+  try {
+    const concatBody = { project_id: "gemini-sl-20251120" };
+    if (resA.gcs && resB.gcs) {
+      concatBody.gcs_uri_a = resA.gcs;
+      concatBody.gcs_uri_b = resB.gcs;
+    } else if (
+      resA.url && resA.url.startsWith("data:video/")
+      && resB.url && resB.url.startsWith("data:video/")
+    ) {
+      concatBody.video_data_url_a = resA.url;
+      concatBody.video_data_url_b = resB.url;
+    }
+    if (concatBody.gcs_uri_a || concatBody.video_data_url_a) {
+      const concatResp = await postJson(`${base}/api/veo/concat-segments`, concatBody, 120000);
+      concatUrl = String(concatResp?.video_data_url || "").trim();
+    }
+  } catch (_e) {}
+
+  if (statusBubble.parentNode) statusBubble.remove();
+
+  const playable = concatUrl || resA.url || resB.url || "";
+  if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
+
+  pushMsg("system", zh
+    ? `16 秒视频生成完成（2 段串行衔接）。${concatUrl ? "" : "⚠️ 拼接未完成，暂展示第一段。"}`
+    : `16s video ready (2 segments, frame-bridged).${concatUrl ? "" : " Concat incomplete, showing first segment."}`);
+  renderGeneratedVideoCard(playable, resA.gcs || resB.gcs || "", opA || "");
+}
+
 async function generateVideo(promptOverride = "") {
   if (state.generating) {
     return;
@@ -2878,78 +3333,37 @@ async function generateVideo(promptOverride = "") {
     const imageParsed = parseDataUrl(state.images[0]?.dataUrl);
     const fallbackImageUrl = Array.isArray(state.productImageUrls) ? String(state.productImageUrls[0] || "").trim() : "";
     const useImageMode = Boolean((imageParsed?.base64 && imageParsed?.mime) || fallbackImageUrl);
+    const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const base = getApiBase();
+    const safePrompt = sanitizePromptForVeo(finalPrompt) || finalPrompt;
     const startBody = {
       project_id: "gemini-sl-20251120",
-      model: "veo-3.1-generate-preview",
-      prompt: finalPrompt,
+      model: "veo-3.1-fast-generate-001",
+      prompt: safePrompt,
       sample_count: 1,
-      veo_mode: useImageMode ? "image" : "text",
+      veo_mode: useFrameMode ? "frame" : useImageMode ? "image" : "text",
       duration_seconds: Number(state.duration),
       aspect_ratio: state.aspectRatio || "16:9",
-      storage_uri: "gs://gemini_video_shoplive/agent/",
     };
-    if (imageParsed?.base64 && imageParsed?.mime) {
+    if (useFrameMode) {
+      const firstParsed = parseDataUrl(state.firstFrame);
+      const lastParsed = parseDataUrl(state.lastFrame);
+      if (firstParsed?.base64) {
+        startBody.image_base64 = firstParsed.base64;
+        startBody.image_mime_type = firstParsed.mime;
+      }
+      if (lastParsed?.base64) {
+        startBody.last_frame_base64 = lastParsed.base64;
+        startBody.last_frame_mime_type = lastParsed.mime;
+      }
+    } else if (imageParsed?.base64 && imageParsed?.mime) {
       startBody.image_base64 = imageParsed.base64;
       startBody.image_mime_type = imageParsed.mime;
     } else if (fallbackImageUrl) {
       startBody.image_url = fallbackImageUrl;
     }
     if (isChainDuration(state.duration)) {
-      const totalSeconds = Number(state.duration || 16);
-      pushMsg("system", t("chainSubmit", { total: totalSeconds }));
-      const segmentRounds = Math.max(1, Math.floor(totalSeconds / 8));
-      const chainMaxWaitSeconds = totalSeconds >= 24 ? 900 : 780;
-      const chainPollIntervalSeconds = 6;
-      const chainExtendRetryMax = 2;
-      const chainExtendRetryDelaySeconds = 3;
-      const chainTimeout =
-        (chainMaxWaitSeconds * segmentRounds + chainExtendRetryDelaySeconds * chainExtendRetryMax * Math.max(0, segmentRounds - 1) + 45) *
-        1000;
-      let chainResp = null;
-      chainResp = await postJson(
-        `${base}/api/veo/chain`,
-        {
-          ...startBody,
-          target_total_seconds: totalSeconds,
-          duration_seconds: 8,
-          max_wait_seconds: chainMaxWaitSeconds,
-          poll_interval_seconds: chainPollIntervalSeconds,
-          extend_retry_max: chainExtendRetryMax,
-          extend_retry_delay_seconds: chainExtendRetryDelaySeconds,
-        },
-        chainTimeout
-      );
-      let chainVideoUrl =
-        String(chainResp?.final_signed_video_url || "").trim() ||
-        String(chainResp?.segments?.[chainResp.segments.length - 1]?.signed_video_url || "").trim();
-      let chainFinalGcsUri = String(chainResp?.final_video_gcs_uri || "").trim();
-      const finalOp = String(chainResp?.segments?.[chainResp.segments.length - 1]?.operation_name || "").trim();
-      if (finalOp) {
-        try {
-          const freshStatus = await postJson(
-            `${base}/api/veo/status`,
-            {
-              project_id: "gemini-sl-20251120",
-              model: "veo-3.1-generate-preview",
-              operation_name: finalOp,
-            },
-            30000
-          );
-          const freshUrl = pickPlayableUrl(freshStatus);
-          if (freshUrl) chainVideoUrl = freshUrl;
-          if (!chainFinalGcsUri) {
-            chainFinalGcsUri = String(freshStatus?.video_uris?.[0] || "").trim();
-          }
-        } catch (_e) {}
-      }
-      if (!chainVideoUrl) throw new Error("chain video url missing");
-      const segmentCount =
-        Number(chainResp?.segment_count || 0) || (Array.isArray(chainResp?.segments) ? chainResp.segments.length : 0);
-      if (segmentCount > 0) {
-        pushMsg("system", t("chainDoneDetail", { segments: segmentCount }));
-      }
-      renderGeneratedVideoCard(chainVideoUrl, chainFinalGcsUri, finalOp);
+      await generate16sWithProgress(base, startBody, finalPrompt);
       state.generating = false;
       return;
     }
@@ -2957,19 +3371,41 @@ async function generateVideo(promptOverride = "") {
     const start = await postJson(`${base}/api/veo/start`, startBody);
     const operationName = start?.operation_name;
     if (!operationName) throw new Error("operation_name missing");
-    pushMsg("system", t("polling"));
-
-    let pollBusy = false;
+    const zh = currentLang === "zh";
+    const pollBubble = pushMsg("system", zh ? "视频生成中（Fast 模式），预计 60-90 秒…" : "Generating video (Fast mode), ~60-90s…", { typewriter: false });
+    const pollStartedAt = Date.now();
+    const POLL_TIMEOUT_MS = 300000;
     let pollStopped = false;
-    const timer = setInterval(async () => {
-      if (pollStopped || pollBusy) return;
-      pollBusy = true;
+
+    const doPoll = async () => {
+      if (pollStopped) return;
+      const elapsedMs = Date.now() - pollStartedAt;
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      pollBubble.textContent = zh
+        ? `视频生成中（${elapsedSec}s）…`
+        : `Generating video (${elapsedSec}s)…`;
+
+      if (elapsedMs > POLL_TIMEOUT_MS) {
+        pollStopped = true;
+        if (pollBubble.parentNode) pollBubble.remove();
+        pushMsg("system", zh
+          ? `视频生成超时（已等待 ${elapsedSec}s）。请稍后重试或简化提示词。`
+          : `Video generation timed out (${elapsedSec}s). Retry later or simplify the prompt.`);
+        state.generating = false;
+        return;
+      }
+
+      if (elapsedMs < 30000) {
+        scheduleNext(2000);
+        return;
+      }
+
       try {
         const status = await postJson(
           `${base}/api/veo/status`,
           {
             project_id: "gemini-sl-20251120",
-            model: "veo-3.1-generate-preview",
+            model: "veo-3.1-fast-generate-001",
             operation_name: operationName,
           },
           20000
@@ -2977,8 +3413,14 @@ async function generateVideo(promptOverride = "") {
         const opError = status?.response?.error?.message || "";
         if (status?.response?.done && opError) {
           pollStopped = true;
-          clearInterval(timer);
-          pushMsg("system", t("genFail"));
+          if (pollBubble.parentNode) pollBubble.remove();
+          if (isVeoSafetyRejection(opError)) {
+            pushMsg("system", zh
+              ? `视频生成被安全策略拦截：${opError.slice(0, 120)}。请简化提示词后重试。`
+              : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`);
+          } else {
+            pushMsg("system", t("genFail"));
+          }
           state.generating = false;
           return;
         }
@@ -2986,20 +3428,22 @@ async function generateVideo(promptOverride = "") {
         const gcsUri = String(status?.video_uris?.[0] || "").trim();
         if (videoUrl) {
           pollStopped = true;
-          clearInterval(timer);
+          if (pollBubble.parentNode) pollBubble.remove();
           renderGeneratedVideoCard(videoUrl, gcsUri, operationName);
           state.generating = false;
           return;
         }
       } catch (_e) {
         pollStopped = true;
-        clearInterval(timer);
+        if (pollBubble.parentNode) pollBubble.remove();
         pushMsg("system", t("pollFail"));
         state.generating = false;
-      } finally {
-        pollBusy = false;
+        return;
       }
-    }, 3000);
+      scheduleNext(elapsedMs < 90000 ? 10000 : 15000);
+    };
+    function scheduleNext(ms) { if (!pollStopped) setTimeout(doPoll, ms); }
+    scheduleNext(2000);
   } catch (e) {
     const detailRaw = String(e?.message || "").trim();
     const detail = /aborted|abort/i.test(detailRaw)
@@ -3098,17 +3542,29 @@ async function onUpload(files) {
   }
 }
 
-function onSend() {
+async function onSend() {
   if (SIMPLE_AGENT_MODE) {
-    const text = (chatInput.value || "").trim();
-    if (!text) return;
+    const linkText = String(productUrlInput?.value || "").trim();
+    const promptText = String(chatInput.value || "").trim();
+    // Clear immediately after submit to avoid stale text staying in composer.
+    if (chatInput) chatInput.value = "";
+    const firstUrlMatch = (linkText || promptText).match(/(?:https?:\/\/|www\.)[^\s]+/i);
+    const urlCandidate = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : "";
+    const needPrefillFromUrl = Boolean(
+      urlCandidate && (!state.productName || !state.mainBusiness || !state.sellingPoints)
+    );
+    if (needPrefillFromUrl) {
+      await parseShopProductByUrl(urlCandidate);
+    }
+    const finalText = String(chatInput.value || "").trim() || promptText;
+    if (!finalText) return;
     if (state.generating) return;
     syncStateFromSimpleControls();
-    state.lastPrompt = text;
+    state.lastPrompt = finalText;
     state.primarySubmitLocked = false;
     state.workflowHydrated = true;
-    pushMsg("user", text, { typewriter: false });
-    generateVideo(text);
+    pushMsg("user", finalText, { typewriter: false });
+    generateVideo(finalText);
     return;
   }
 
@@ -3210,7 +3666,9 @@ function onSend() {
 async function enhancePromptByAgent() {
   const raw = (chatInput.value || "").trim();
   if (!raw) return;
-  if (state.generating) return;
+  if (state.generating || state.enhancing) return;
+  state.enhancing = true;
+  if (enhancePromptBtn) enhancePromptBtn.disabled = true;
   syncStateFromSimpleControls();
   if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
   let templateText = "";
@@ -3268,30 +3726,56 @@ async function enhancePromptByAgent() {
     ].join("\n");
     let optimized = "";
     try {
-      const resp = await postJson(
+      let streamed = "";
+      let donePayload = null;
+      await postSse(
         `${base}/api/agent/chat`,
         {
-          model: "azure-gpt-5",
+          model: "bedrock-claude-4-5-haiku",
           prompt: composedPrompt,
+          stream: true,
           temperature: 0.4,
-          max_tokens: 780,
+          max_tokens: 640,
         },
-        60000
+        (eventName, payload) => {
+          if (eventName === "delta") {
+            const delta = String(payload?.delta || "");
+            if (!delta) return;
+            streamed += delta;
+            chatInput.value = sanitizePromptForUser(streamed);
+            state.lastPrompt = chatInput.value.trim();
+            return;
+          }
+          if (eventName === "done") {
+            donePayload = payload || {};
+            return;
+          }
+          if (eventName === "error") {
+            throw new Error(String(payload?.error || "stream error"));
+          }
+        },
+        30000
       );
-      optimized = String(resp?.content || "").trim();
+      optimized = String(donePayload?.content || streamed || "").trim();
     } catch (_firstErr) {
-      // Retry with minimal payload for stricter gpt-5 style deployments.
-      const retryResp = await postJson(
-        `${base}/api/agent/chat`,
-        {
-          model: "azure-gpt-5",
+      try {
+        const retryResp = await postJson(
+          `${base}/api/agent/chat`,
+          {
+          model: "bedrock-claude-4-5-haiku",
           messages: [{ role: "user", content: composedPrompt }],
-        },
-        90000
-      );
-      optimized = String(retryResp?.content || "").trim();
+          },
+          20000
+        );
+        optimized = String(retryResp?.content || "").trim();
+      } catch (_secondErr) {
+        // Both LLM attempts failed — use local template as immediate fallback.
+        optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
+      }
     }
-    if (!optimized) throw new Error("empty optimization");
+    if (!optimized) {
+      optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
+    }
     const cleaned = sanitizePromptForUser(optimized);
     chatInput.value = cleaned;
     state.lastPrompt = cleaned;
@@ -3315,16 +3799,60 @@ async function enhancePromptByAgent() {
         },
       },
     ]);
+  } finally {
+    state.enhancing = false;
+    if (enhancePromptBtn) enhancePromptBtn.disabled = false;
   }
 }
 
 async function parseShopProductByUrl(inputUrl = "") {
-  const url = String(inputUrl || productUrlInput?.value || "").trim();
+  const normalizeProductUrl = (raw = "") => {
+    const cleaned = String(raw || "")
+      .replace(/[<>"'`]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) return "";
+    const firstUrlMatch = cleaned.match(/https?:\/\/[^\s]+/i);
+    const picked = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : cleaned;
+    if (/^www\./i.test(picked)) return `https://${picked}`;
+    return picked;
+  };
+  const inferProductNameFromUrl = (rawUrl = "") => {
+    const text = String(rawUrl || "").trim();
+    if (!text) return "";
+    try {
+      const u = new URL(text);
+      const path = decodeURIComponent(u.pathname || "");
+      const seg = String(path.split("/").filter(Boolean).pop() || "")
+        .replace(/\.(html|htm)$/i, "")
+        .replace(/[-_]+/g, " ")
+        .replace(/\b(?:dp|product|products|item)\b/gi, " ")
+        .replace(/\bB0[A-Z0-9]{8,}\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!seg) return "";
+      return seg.slice(0, 48);
+    } catch (_e) {
+      return "";
+    }
+  };
+  const isLikelyUrlOnlyText = (raw = "") => {
+    const txt = String(raw || "").trim();
+    if (!txt) return false;
+    const normalized = txt.replace(/[，；;,\n\r\t]+/g, " ").trim();
+    if (!normalized) return false;
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    if (!parts.length || parts.length > 4) return false;
+    const urlLike = parts.filter((p) => /^(https?:\/\/|www\.)/i.test(p));
+    return urlLike.length === parts.length;
+  };
+
+  const url = normalizeProductUrl(inputUrl || productUrlInput?.value || "");
   if (!url) return;
-  if (productUrlInput && inputUrl) productUrlInput.value = url;
+  if (productUrlInput) productUrlInput.value = url;
   const base = getApiBase();
+  const stopParseProgress = startLinkParseProgress();
   try {
-    pushMsg("system", t("parseLinkWorking"));
     const data = await postJson(
       `${base}/api/agent/shop-product-insight`,
       {
@@ -3333,6 +3861,7 @@ async function parseShopProductByUrl(inputUrl = "") {
       },
       45000
     );
+    stopParseProgress();
     const insight = data?.insight || {};
     const parsedProductName = String(insight.product_name || "").trim();
     const parsedSellingPoints = Array.isArray(insight.selling_points)
@@ -3356,6 +3885,18 @@ async function parseShopProductByUrl(inputUrl = "") {
       : [];
 
     if (!parsedProductName && !parsedSellingPoints.length && !parsedImageUrls.length && !imageItems.length) {
+      const urlFallbackName = inferProductNameFromUrl(url);
+      if (urlFallbackName) {
+        state.productName = state.productName || urlFallbackName;
+        state.mainBusiness = state.mainBusiness || guessBusinessByName(urlFallbackName);
+        state.template = state.template || guessTemplateByName(urlFallbackName);
+        const draft = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
+        const currentText = String(chatInput.value || "").trim();
+        if (!currentText || isLikelyUrlOnlyText(currentText)) {
+          chatInput.value = draft;
+          state.lastPrompt = draft;
+        }
+      }
       pushMsg("system", t("parseLinkWeak"));
       showUploadScreenshotGuide();
       showUploadRefQuickAction();
@@ -3389,11 +3930,29 @@ async function parseShopProductByUrl(inputUrl = "") {
     const positiveText = state.reviewPositivePoints.length ? state.reviewPositivePoints.slice(0, 2).join("；") : "";
     const negativeText = state.reviewNegativePoints.length ? state.reviewNegativePoints.slice(0, 2).join("；") : "";
     const sellingText = state.sellingPoints || (currentLang === "zh" ? "突出核心卖点" : "highlight core selling points");
-    if (!chatInput.value.trim()) {
+    if (!state.productName) {
+      const urlFallbackName = inferProductNameFromUrl(url);
+      if (urlFallbackName) state.productName = urlFallbackName;
+    }
+    if (!state.mainBusiness) state.mainBusiness = guessBusinessByName(state.productName || "");
+    if (!state.template) state.template = guessTemplateByName(state.productName || "");
+    const currentText = String(chatInput.value || "").trim();
+    const shouldOverwriteDraft = !currentText || isLikelyUrlOnlyText(currentText) || currentText === url;
+    if (shouldOverwriteDraft) {
       chatInput.value =
         currentLang === "zh"
           ? `请为商品「${state.productName || "该商品"}」生成一条${state.duration || "8"}秒电商短视频，比例${state.aspectRatio || "16:9"}，重点卖点：${sellingText}。${positiveText ? `好评强调点：${positiveText}。` : ""}${negativeText ? `差评规避点：${negativeText}。` : ""}${reviewSummary ? `补充反馈：${reviewSummary}。` : ""}镜头自然、真实质感、突出转化。`
           : `Create a ${state.duration || "8"}s ecommerce video for "${state.productName || "this product"}" in ${state.aspectRatio || "16:9"}. Key selling points: ${sellingText}. ${positiveText ? `Emphasize positive review signals: ${positiveText}.` : ""}${negativeText ? `Avoid negative feedback triggers: ${negativeText}.` : ""}${reviewSummary ? `Additional review cues: ${reviewSummary}.` : ""} Natural cinematic motion, realistic texture, conversion-focused.`;
+      state.lastPrompt = String(chatInput.value || "").trim();
+    }
+    const refillOk = Boolean(state.productName && state.mainBusiness && state.template);
+    if (!refillOk) {
+      pushMsg(
+        "system",
+        currentLang === "zh"
+          ? "解析已完成，但关键信息回填不完整。请补充商品名称后重试解析，或上传商品图辅助识别。"
+          : "Parsing finished, but key fields are not fully backfilled. Please add product name and retry, or upload product images."
+      );
     }
     if (fetchConfidence === "low") {
       pushMsg(
@@ -3404,7 +3963,17 @@ async function parseShopProductByUrl(inputUrl = "") {
       );
     }
     pushMsg("system", t("parseLinkDone"));
+    pushMsg(
+      "system",
+      t("parseDone", {
+        product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+        business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+        style: state.template || "clean",
+      }),
+      { typewriter: false }
+    );
   } catch (_e) {
+    stopParseProgress();
     pushMsg("system", t("parseLinkFail"));
   }
 }
@@ -3491,9 +4060,130 @@ imageInput.addEventListener("change", (e) => onUpload(e.target.files));
 sendBtn.addEventListener("click", onSend);
 if (enhancePromptBtn) enhancePromptBtn.addEventListener("click", enhancePromptByAgent);
 if (parseProductUrlBtn) parseProductUrlBtn.addEventListener("click", parseShopProductByUrl);
+if (productUrlInput) {
+  productUrlInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    parseShopProductByUrl();
+  });
+}
 if (aspectRatioSelect) {
   aspectRatioSelect.addEventListener("change", () => {
     state.aspectRatio = aspectRatioSelect.value || "16:9";
+  });
+}
+
+// --- First & Last Frame Panel ---
+const toggleFrameBtn = document.getElementById("toggleFrameBtn");
+const framePanel = document.getElementById("framePanel");
+const firstFrameInput = document.getElementById("firstFrameInput");
+const lastFrameInput = document.getElementById("lastFrameInput");
+const firstFrameDrop = document.getElementById("firstFrameDrop");
+const lastFrameDrop = document.getElementById("lastFrameDrop");
+const aiGenerateFramesBtn = document.getElementById("aiGenerateFramesBtn");
+
+function renderFrameSlot(dropEl, dataUrl, inputEl, stateKey) {
+  if (!dropEl) return;
+  if (dataUrl) {
+    dropEl.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = dataUrl;
+    img.alt = stateKey;
+    dropEl.appendChild(img);
+    const del = document.createElement("button");
+    del.className = "frame-del";
+    del.textContent = "x";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state[stateKey] = null;
+      state.frameMode = Boolean(state.firstFrame && state.lastFrame);
+      renderFrameSlot(dropEl, null, inputEl, stateKey);
+    });
+    dropEl.appendChild(del);
+  } else {
+    const label = stateKey === "firstFrame"
+      ? (currentLang === "zh" ? "上传首帧" : "First frame")
+      : (currentLang === "zh" ? "上传尾帧" : "Last frame");
+    dropEl.innerHTML = `<span>+</span><span>${label}</span>`;
+  }
+}
+
+function handleFrameUpload(file, stateKey, dropEl, inputEl) {
+  if (!file || !/^image\/(png|jpeg)$/i.test(file.type)) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    state[stateKey] = String(reader.result || "");
+    state.frameMode = Boolean(state.firstFrame && state.lastFrame);
+    renderFrameSlot(dropEl, state[stateKey], inputEl, stateKey);
+  };
+  reader.readAsDataURL(file);
+}
+
+if (toggleFrameBtn && framePanel) {
+  toggleFrameBtn.addEventListener("click", () => {
+    const isHidden = framePanel.hidden;
+    framePanel.hidden = !isHidden;
+    toggleFrameBtn.textContent = isHidden
+      ? (currentLang === "zh" ? "收起首尾帧" : "Hide frames")
+      : (currentLang === "zh" ? "首尾帧" : "Frames");
+  });
+}
+if (firstFrameDrop && firstFrameInput) {
+  firstFrameDrop.addEventListener("click", () => firstFrameInput.click());
+  firstFrameInput.addEventListener("change", (e) => {
+    handleFrameUpload(e.target.files?.[0], "firstFrame", firstFrameDrop, firstFrameInput);
+  });
+}
+if (lastFrameDrop && lastFrameInput) {
+  lastFrameDrop.addEventListener("click", () => lastFrameInput.click());
+  lastFrameInput.addEventListener("change", (e) => {
+    handleFrameUpload(e.target.files?.[0], "lastFrame", lastFrameDrop, lastFrameInput);
+  });
+}
+if (aiGenerateFramesBtn) {
+  aiGenerateFramesBtn.addEventListener("click", async () => {
+    const product = state.productName || "ecommerce product";
+    const base = getApiBase();
+    const zh = currentLang === "zh";
+    aiGenerateFramesBtn.disabled = true;
+    aiGenerateFramesBtn.textContent = zh ? "生成中…" : "Generating…";
+    try {
+      const firstPrompt = `Product front view, ${product}, clean studio photography, centered composition, white seamless background, 16:9 aspect ratio, professional product still, sharp focus.`;
+      const lastPrompt = `Product in lifestyle context, ${product}, model using/wearing the product, natural setting, warm lighting, 16:9 aspect ratio, cinematic quality.`;
+      const [firstResp, lastResp] = await Promise.all([
+        postJson(`${base}/api/media/image-generate`, {
+          project_id: "gemini-sl-20251120",
+          prompt: firstPrompt,
+          sample_count: 1,
+          aspect_ratio: "16:9",
+        }, 60000),
+        postJson(`${base}/api/media/image-generate`, {
+          project_id: "gemini-sl-20251120",
+          prompt: lastPrompt,
+          sample_count: 1,
+          aspect_ratio: "16:9",
+        }, 60000),
+      ]);
+      const firstImg = firstResp?.images?.[0];
+      const lastImg = lastResp?.images?.[0];
+      if (firstImg?.base64) {
+        state.firstFrame = `data:image/png;base64,${firstImg.base64}`;
+        renderFrameSlot(firstFrameDrop, state.firstFrame, firstFrameInput, "firstFrame");
+      }
+      if (lastImg?.base64) {
+        state.lastFrame = `data:image/png;base64,${lastImg.base64}`;
+        renderFrameSlot(lastFrameDrop, state.lastFrame, lastFrameInput, "lastFrame");
+      }
+      state.frameMode = Boolean(state.firstFrame && state.lastFrame);
+      pushMsg("system", zh
+        ? `AI 已生成首尾帧${state.frameMode ? "，可直接用于视频生成。" : "（部分生成失败，请手动上传）。"}`
+        : `AI generated frames${state.frameMode ? ". Ready for video generation." : " (partial failure, please upload manually)."}`);
+    } catch (e) {
+      pushMsg("system", zh ? `首尾帧生成失败: ${e.message}` : `Frame generation failed: ${e.message}`);
+    } finally {
+      aiGenerateFramesBtn.disabled = false;
+      aiGenerateFramesBtn.textContent = zh ? "AI 自动生成" : "AI Generate";
+    }
   });
 }
 if (durationSelect) {

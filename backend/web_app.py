@@ -44,6 +44,7 @@ from shoplive.backend.common.helpers import (
     parse_category_judge_text,
     judge_generated_image_category,
     call_litellm_chat,
+    call_litellm_chat_stream,
     extract_gs_paths,
     extract_inline_videos,
     sign_gcs_url,
@@ -53,6 +54,9 @@ from shoplive.backend.common.helpers import (
     build_shoplive_image_prompt,
     build_shoplive_image_prompt_compact,
     build_shoplive_image_prompt_safe_product_only,
+    split_prompt_for_16s,
+    concat_videos_ffmpeg,
+    download_gcs_blob_to_file,
 )
 from shoplive.backend.api.shoplive_api import register_shoplive_routes
 from shoplive.backend.api.agent_api import register_agent_routes
@@ -183,6 +187,7 @@ register_agent_routes(
     extract_vertex_text=extract_vertex_text,
     try_parse_json_object=try_parse_json_object,
     call_litellm_chat=call_litellm_chat,
+    call_litellm_chat_stream=call_litellm_chat_stream,
     extract_chat_content=extract_chat_content,
 )
 register_veo_routes(
@@ -199,6 +204,10 @@ register_veo_routes(
     extract_gs_paths=extract_gs_paths,
     extract_inline_videos=extract_inline_videos,
     sign_gcs_url=sign_gcs_url,
+    split_prompt_for_16s=split_prompt_for_16s,
+    concat_videos_ffmpeg=concat_videos_ffmpeg,
+    download_gcs_blob_to_file=download_gcs_blob_to_file,
+    call_litellm_chat=call_litellm_chat,
 )
 register_media_routes(
     app,

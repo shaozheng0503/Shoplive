@@ -110,6 +110,7 @@ class TestAgentChatRequest:
         assert req.temperature is None
         assert req.max_tokens is None
         assert req.top_p is None
+        assert req.stream is False
 
     def test_with_prompt(self):
         req = AgentChatRequest(prompt="Tell me about this product", model="azure-gpt-5")
@@ -129,6 +130,10 @@ class TestAgentChatRequest:
     def test_temperature_none_allowed(self):
         req = AgentChatRequest(temperature=None)
         assert req.temperature is None
+
+    def test_stream_true_allowed(self):
+        req = AgentChatRequest(prompt="optimize this prompt", stream=True)
+        assert req.stream is True
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 from typing import Callable, Dict, Tuple
 
 import requests
-from flask import g, jsonify, request
+from flask import Response, g, jsonify, request, stream_with_context
 
 from shoplive.backend.audit import audit_log
 from shoplive.backend.validation import validate_request
@@ -44,6 +44,7 @@ def register_agent_routes(
     extract_vertex_text: Callable[[Dict], str],
     try_parse_json_object: Callable[[str], Dict],
     call_litellm_chat: Callable[..., Tuple[int, Dict]],
+    call_litellm_chat_stream: Callable[..., object],
     extract_chat_content: Callable[[Dict], str],
 ):
     def _pick_first_non_empty(candidates):
@@ -779,6 +780,7 @@ def register_agent_routes(
             temperature = req.temperature
             max_tokens = req.max_tokens
             top_p = req.top_p
+            stream = bool(req.stream)
 
             if not api_key:
                 return json_error(
@@ -804,6 +806,126 @@ def register_agent_routes(
                         error_code="MISSING_INPUT",
                     )
                 messages = [{"role": "user", "content": prompt}]
+
+            if stream:
+                def _pack_sse(event_name: str, payload: Dict) -> str:
+                    return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                def _event_stream():
+                    started = time.monotonic()
+                    full_content_parts = []
+                    yield _pack_sse(
+                        "start",
+                        {
+                            "ok": True,
+                            "model": model,
+                            "message_count": len(messages),
+                        },
+                    )
+                    try:
+                        for chunk in call_litellm_chat_stream(
+                            api_base=api_base,
+                            api_key=api_key,
+                            model=model,
+                            messages=messages,
+                            proxy=proxy,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            top_p=top_p,
+                        ):
+                            chunk_type = str(chunk.get("type") or "").strip().lower()
+                            if chunk_type == "delta":
+                                delta = str(chunk.get("delta") or "")
+                                if delta:
+                                    full_content_parts.append(delta)
+                                    yield _pack_sse("delta", {"delta": delta})
+                                continue
+                            if chunk_type == "done":
+                                final_content = str(chunk.get("content") or "".join(full_content_parts))
+                                status_code = int(chunk.get("status_code") or 200)
+                                _dur_ms = int((time.monotonic() - started) * 1000)
+                                audit_log.record(
+                                    tool="chat_with_llm",
+                                    action="litellm_chat_stream",
+                                    input_summary={
+                                        "model": model,
+                                        "message_count": len(messages),
+                                        "prompt_length": len(prompt),
+                                    },
+                                    output_summary={
+                                        "status_code": status_code,
+                                        "content_length": len(final_content),
+                                        "ok": True,
+                                    },
+                                    status="success",
+                                    duration_ms=_dur_ms,
+                                )
+                                yield _pack_sse(
+                                    "done",
+                                    {
+                                        "ok": True,
+                                        "status_code": status_code,
+                                        "model": model,
+                                        "content": final_content,
+                                    },
+                                )
+                                return
+                        final_content = "".join(full_content_parts)
+                        _dur_ms = int((time.monotonic() - started) * 1000)
+                        audit_log.record(
+                            tool="chat_with_llm",
+                            action="litellm_chat_stream",
+                            input_summary={
+                                "model": model,
+                                "message_count": len(messages),
+                                "prompt_length": len(prompt),
+                            },
+                            output_summary={
+                                "status_code": 200,
+                                "content_length": len(final_content),
+                                "ok": True,
+                            },
+                            status="success",
+                            duration_ms=_dur_ms,
+                        )
+                        yield _pack_sse(
+                            "done",
+                            {"ok": True, "status_code": 200, "model": model, "content": final_content},
+                        )
+                    except Exception as e:
+                        _dur_ms = int((time.monotonic() - started) * 1000)
+                        audit_log.record(
+                            tool="chat_with_llm",
+                            action="litellm_chat_stream",
+                            input_summary={
+                                "model": model,
+                                "message_count": len(messages),
+                            },
+                            output_summary={},
+                            status="error",
+                            error_code="CHAT_STREAM_FAILED",
+                            error_message=str(e)[:200],
+                            duration_ms=_dur_ms,
+                        )
+                        yield _pack_sse(
+                            "error",
+                            {
+                                "ok": False,
+                                "error": str(e),
+                                "error_code": "CHAT_STREAM_FAILED",
+                            },
+                        )
+
+                headers = {
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                }
+                return Response(
+                    stream_with_context(_event_stream()),
+                    headers=headers,
+                    mimetype="text/event-stream",
+                )
 
             status_code, data_wrap = call_litellm_chat(
                 api_base=api_base,
