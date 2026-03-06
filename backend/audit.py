@@ -28,6 +28,7 @@ Usage:
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import uuid
@@ -178,6 +179,30 @@ class AuditLogger:
         if self._log_file:
             self._log_file.parent.mkdir(parents=True, exist_ok=True)
 
+        # Async file writer: fire-and-forget queue → daemon thread
+        # Keeps disk I/O off the request thread (saves 1-5ms per audit call).
+        self._write_queue: queue.Queue = queue.Queue(maxsize=2000)
+        if self._log_file:
+            self._writer_thread = threading.Thread(
+                target=self._file_writer_loop, daemon=True, name="audit-writer"
+            )
+            self._writer_thread.start()
+
+    def _file_writer_loop(self) -> None:
+        """Background daemon: drains _write_queue to the audit log file."""
+        while True:
+            try:
+                line = self._write_queue.get(timeout=1)
+                try:
+                    with open(self._log_file, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except Exception as e:
+                    logger.warning(f"Audit log write failed: {e}")
+                finally:
+                    self._write_queue.task_done()
+            except queue.Empty:
+                continue
+
     def record(
         self,
         *,
@@ -229,13 +254,12 @@ class AuditLogger:
             if status != "success":
                 self._stats["tools"][tool]["errors"] += 1
 
-        # Log to file (non-blocking)
+        # Enqueue for async file write (fire-and-forget, never blocks request thread)
         if self._log_file:
             try:
-                with open(self._log_file, "a", encoding="utf-8") as f:
-                    f.write(entry.to_json() + "\n")
-            except Exception as e:
-                logger.warning(f"Audit log write failed: {e}")
+                self._write_queue.put_nowait(entry.to_json())
+            except queue.Full:
+                logger.warning("Audit write queue full — log entry dropped")
 
         # Also log via standard logging
         log_fn = logger.info if status == "success" else logger.warning

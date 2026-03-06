@@ -172,6 +172,21 @@ class TestAuditLoggerRetrieval:
 # ---------------------------------------------------------------------------
 
 class TestAuditLoggerFilePersistence:
+    def _wait_for_file(self, path: Path, min_lines: int = 1, timeout: float = 3.0):
+        """Wait until the async writer has flushed at least min_lines to path."""
+        import time as _t
+        deadline = _t.monotonic() + timeout
+        while _t.monotonic() < deadline:
+            if path.exists():
+                try:
+                    lines = [l for l in path.read_text().strip().split("\n") if l]
+                    if len(lines) >= min_lines:
+                        return lines
+                except Exception:
+                    pass
+            _t.sleep(0.05)
+        raise AssertionError(f"Timed out waiting for {min_lines} line(s) in {path}")
+
     def test_records_written_to_jsonl(self):
         import json
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -180,7 +195,7 @@ class TestAuditLoggerFilePersistence:
             logger.record(tool="veo", action="start", duration_ms=50)
             logger.record(tool="veo", action="status", status="error")
 
-            lines = log_path.read_text().strip().split("\n")
+            lines = self._wait_for_file(log_path, min_lines=2)
             assert len(lines) == 2
             first = json.loads(lines[0])
             assert first["tool"] == "veo"
@@ -191,6 +206,7 @@ class TestAuditLoggerFilePersistence:
             deep_path = Path(tmpdir) / "a" / "b" / "audit.jsonl"
             logger = AuditLogger(log_file=deep_path)
             logger.record(tool="t", action="a")
+            self._wait_for_file(deep_path, min_lines=1)
             assert deep_path.exists()
 
 

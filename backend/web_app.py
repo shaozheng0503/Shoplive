@@ -355,10 +355,15 @@ def api_health():
     from flask import jsonify as _jsonify
     from shoplive.backend.tool_registry import TOOL_REGISTRY
 
+    from shoplive.backend.async_executor import product_insight_cache
+    from shoplive.backend.scraper.fetchers import get_playwright_pool_stats
+
     stats = audit_log.get_stats()
     token_stats = get_token_cache_stats()
     skill_summaries = list_skills_summary()
     veo_status_metrics = app.config.get("veo_status_metrics", {}) or {}
+    pw_stats = get_playwright_pool_stats()
+    cache_stats = product_insight_cache.get_stats()
 
     return _jsonify({
         "ok": True,
@@ -402,6 +407,20 @@ def api_health():
                 "count": len(skill_summaries),
                 "ids": [s["id"] for s in skill_summaries],
             },
+            "playwright_pool": {
+                "status": "ok",
+                "launches": pw_stats.get("launches", 0),
+                "reuses": pw_stats.get("reuses", 0),
+                "crashes": pw_stats.get("crashes", 0),
+            },
+            "product_insight_cache": {
+                "status": "ok",
+                "hits": cache_stats.get("hits", 0),
+                "misses": cache_stats.get("misses", 0),
+                "active": cache_stats.get("active", 0),
+                "evictions": cache_stats.get("evictions", 0),
+                "ttl_seconds": cache_stats.get("ttl_seconds", 0),
+            },
         },
     })
 
@@ -410,6 +429,8 @@ def api_health():
 # OpenAPI 3.0 Spec Auto-Generation (Article: "OpenAPI 自动生成")
 # Generated from Pydantic request schemas — always in sync with code.
 # ---------------------------------------------------------------------------
+
+_openapi_spec_cache: dict = {}  # cached once at first request
 
 @app.route("/api/openapi.json")
 def api_openapi_spec():
@@ -423,6 +444,9 @@ def api_openapi_spec():
         Open in Swagger UI for interactive API exploration.
     """
     from flask import jsonify as _jsonify
+    if _openapi_spec_cache:
+        return _jsonify(_openapi_spec_cache)
+
     from shoplive.backend.schemas import TOOL_SCHEMAS
     from shoplive.backend.tool_registry import TOOL_REGISTRY
 
@@ -572,6 +596,7 @@ def api_openapi_spec():
         },
     }
 
+    _openapi_spec_cache.update(spec)
     return _jsonify(spec)
 
 

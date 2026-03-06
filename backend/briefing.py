@@ -9,11 +9,7 @@ DEFAULT_VIDEO_DURATION = 8
 
 def normalize_selling_points(raw: str) -> List[str]:
     points = [x.strip() for x in re.split(r"[，,、;；\n]+", str(raw or "")) if x.strip()]
-    dedup = []
-    for p in points:
-        if p not in dedup:
-            dedup.append(p)
-    return dedup
+    return list(dict.fromkeys(points))
 
 
 def normalize_duration_seconds(raw) -> int:
@@ -37,9 +33,9 @@ def normalize_shoplive_brief(payload: Dict) -> Dict:
     raw_total_duration = payload.get("total_duration", payload.get("duration", DEFAULT_VIDEO_DURATION))
     total_duration = normalize_total_duration_seconds(raw_total_duration)
     duration = normalize_duration_seconds(payload.get("duration", total_duration))
-    aspect_ratio = str(payload.get("aspect_ratio", "16:9") or "16:9").strip() or "16:9"
-    if aspect_ratio != "16:9":
-        aspect_ratio = "16:9"
+    raw_aspect_ratio = str(payload.get("aspect_ratio", "16:9") or "16:9").strip() or "16:9"
+    aspect_ratio_overridden = raw_aspect_ratio != "16:9"
+    aspect_ratio = "16:9"
     return {
         "product_name": str(payload.get("product_name", "")).strip(),
         "main_category": str(payload.get("main_category", "")).strip(),
@@ -55,6 +51,10 @@ def normalize_shoplive_brief(payload: Dict) -> Dict:
         "quality_reports": payload.get("quality_reports", [])
         if isinstance(payload.get("quality_reports", []), list)
         else [],
+        "aspect_ratio_warning": (
+            f"aspect_ratio '{raw_aspect_ratio}' 暂不支持，已自动设为 '16:9'"
+            if aspect_ratio_overridden else ""
+        ),
     }
 
 

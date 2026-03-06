@@ -3,7 +3,7 @@ import os
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -187,11 +187,13 @@ def _get_access_token_raw(key_file: str, proxy: str, timeout_seconds: int = 20) 
         creds.refresh(auth_req)
         return creds.token
 
+    from shoplive.backend.async_executor import get_executor
+
     errors: List[str] = []
     candidates = build_proxy_candidates(proxy)
+    executor = get_executor()
     for idx, proxy_map in enumerate(candidates, start=1):
         tag = proxy_map.get("https") or proxy_map.get("http") or "DIRECT"
-        executor = ThreadPoolExecutor(max_workers=1)
         future = executor.submit(_refresh, proxy_map)
         try:
             return future.result(timeout=timeout_seconds)
@@ -199,8 +201,6 @@ def _get_access_token_raw(key_file: str, proxy: str, timeout_seconds: int = 20) 
             errors.append(f"[{idx}] {tag} -> timeout")
         except Exception as e:
             errors.append(f"[{idx}] {tag} -> {type(e).__name__}: {e}")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
     raise TimeoutError(
         "获取访问令牌失败，已尝试多种代理策略: "
         + " | ".join(errors[:6])

@@ -11,6 +11,8 @@ Design principles (from article):
 """
 
 import asyncio
+import hashlib
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
@@ -229,3 +231,75 @@ def run_sync_in_thread(fn: Callable, *args, **kwargs) -> Any:
 def get_executor() -> ThreadPoolExecutor:
     """Get the shared thread pool executor."""
     return _executor
+
+
+# ---------------------------------------------------------------------------
+# Product insight TTL cache (P0: avoid re-scraping the same URL)
+# ---------------------------------------------------------------------------
+
+class _TTLCache:
+    """Thread-safe in-memory TTL cache with bounded size.
+
+    Entries expire after `ttl_seconds`. When full, the oldest entry is evicted.
+    Expired entries are cleaned up opportunistically on every `set()` call.
+    """
+
+    def __init__(self, ttl_seconds: int = 600, max_size: int = 50) -> None:
+        self._lock = threading.Lock()
+        self._store: Dict[str, Dict] = {}  # key -> {value, expire_ts, created_at}
+        self._ttl = ttl_seconds
+        self._max_size = max_size
+        self._stats = {"hits": 0, "misses": 0, "evictions": 0}
+
+    def get(self, key: str) -> Optional[Any]:
+        now = time.time()
+        with self._lock:
+            entry = self._store.get(key)
+            if entry is None:
+                self._stats["misses"] += 1
+                return None
+            if entry["expire_ts"] < now:
+                del self._store[key]
+                self._stats["misses"] += 1
+                return None
+            self._stats["hits"] += 1
+            return entry["value"]
+
+    def set(self, key: str, value: Any) -> None:
+        now = time.time()
+        with self._lock:
+            # Evict all expired entries first
+            expired = [k for k, v in self._store.items() if v["expire_ts"] < now]
+            for k in expired:
+                del self._store[k]
+            # If still full, evict the oldest live entry
+            if len(self._store) >= self._max_size:
+                oldest = min(self._store, key=lambda k: self._store[k]["created_at"])
+                del self._store[oldest]
+                self._stats["evictions"] += 1
+            self._store[key] = {
+                "value": value,
+                "expire_ts": now + self._ttl,
+                "created_at": now,
+            }
+
+    def get_stats(self) -> Dict:
+        now = time.time()
+        with self._lock:
+            active = sum(1 for v in self._store.values() if v["expire_ts"] >= now)
+            return {
+                **self._stats,
+                "size": len(self._store),
+                "active": active,
+                "ttl_seconds": self._ttl,
+            }
+
+
+# Global cache: 10-minute TTL, max 50 product URLs
+# Each entry holds the full insight response including base64 image_items (~400 KB/entry → ~20 MB max).
+product_insight_cache = _TTLCache(ttl_seconds=600, max_size=50)
+
+
+def make_cache_key(url: str) -> str:
+    """Stable hash of a product URL for use as a cache key."""
+    return hashlib.sha256(url.strip().encode()).hexdigest()[:32]

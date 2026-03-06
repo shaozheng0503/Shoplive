@@ -1,3 +1,4 @@
+import threading
 from typing import Callable, Dict
 from urllib.parse import urlparse
 
@@ -167,11 +168,174 @@ def fetch_html_with_requests(product_url: str, proxy: str, build_proxies: Callab
         )
 
 
+class _PlaywrightPool:
+    """Thread-local Playwright browser pool.
+
+    Each Flask worker thread keeps its own Chromium browser alive, avoiding
+    the ~2-3 s cold-start cost on every scrape call. Browsers are restarted
+    automatically on crash or proxy change.
+
+    Thread-safety note: Playwright objects must not be shared across threads.
+    Using threading.local() gives each worker thread its own isolated set of
+    Playwright / Browser objects — no locking needed for page operations.
+    """
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+        self._stats_lock = threading.Lock()
+        self._stats: Dict[str, int] = {"launches": 0, "reuses": 0, "crashes": 0}
+
+    # ------------------------------------------------------------------
+    # Internal helpers — must only be called from the owning thread
+    # ------------------------------------------------------------------
+
+    def _close_thread_browser(self) -> None:
+        browser = getattr(self._local, "browser", None)
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            self._local.browser = None
+
+    def _ensure_browser(self, proxy: str) -> None:
+        """Get or create a browser for this thread; restart on proxy change or crash."""
+        proxy_key = proxy or ""
+        tl = self._local
+
+        # Proxy changed → close existing and start fresh
+        if getattr(tl, "proxy_key", None) != proxy_key:
+            self._close_thread_browser()
+
+        browser = getattr(tl, "browser", None)
+
+        # Detect crashed browser
+        if browser is not None:
+            try:
+                alive = browser.is_connected()
+            except Exception:
+                alive = False
+            if not alive:
+                tl.browser = None
+                browser = None
+
+        if browser is None:
+            playwright = getattr(tl, "playwright", None)
+            if playwright is None:
+                from playwright.sync_api import sync_playwright as _sw
+                pw_cm = _sw()
+                playwright = pw_cm.__enter__()
+                tl.pw_cm = pw_cm
+                tl.playwright = playwright
+
+            pw_proxy = {"server": proxy} if proxy else None
+            tl.browser = playwright.chromium.launch(headless=True, proxy=pw_proxy)
+            tl.proxy_key = proxy_key
+            with self._stats_lock:
+                self._stats["launches"] += 1
+        else:
+            with self._stats_lock:
+                self._stats["reuses"] += 1
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def fetch(
+        self,
+        url: str,
+        proxy: str,
+        platform: str = "",
+        wait_ms: int = 2200,
+    ) -> FetchArtifact:
+        platform_key = str(platform or "").lower()
+        render_wait_ms = max(1000, min(int(wait_ms or 2200), 12000))
+        if platform_key in {"amazon", "tiktok-shop", "temu"}:
+            render_wait_ms = max(render_wait_ms, 3500)
+
+        try:
+            self._ensure_browser(proxy)
+        except Exception as e:
+            return FetchArtifact(
+                engine="playwright",
+                url=url,
+                status_code=599,
+                html="",
+                error=f"browser start failed: {e}",
+                failure_tag="playwright_unavailable",
+            )
+
+        html_text = ""
+        status_code = 599
+        final_url = url
+        context = None
+        try:
+            context = self._local.browser.new_context(
+                user_agent=DESKTOP_UA,
+                locale="zh-CN",
+                viewport={"width": 1365, "height": 1024},
+            )
+            page = context.new_page()
+            try:
+                resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(render_wait_ms)
+                html_text = page.content() or ""
+                status_code = resp.status if resp else 200
+                final_url = page.url or url
+            finally:
+                page.close()
+        except Exception as e:
+            with self._stats_lock:
+                self._stats["crashes"] += 1
+            # Invalidate browser so next request triggers a fresh launch
+            try:
+                if self._local.browser and not self._local.browser.is_connected():
+                    self._local.browser = None
+            except Exception:
+                self._local.browser = None
+            return FetchArtifact(
+                engine="playwright",
+                url=url,
+                status_code=599,
+                html="",
+                error=str(e),
+                failure_tag="render_failed",
+            )
+        finally:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+
+        anti_bot = _is_anti_bot_page(html_text)
+        return FetchArtifact(
+            engine="playwright",
+            url=final_url,
+            status_code=status_code,
+            html=html_text,
+            anti_bot=anti_bot,
+            failure_tag=_detect_failure_tag(html_text, anti_bot, platform=platform_key),
+        )
+
+    def get_stats(self) -> Dict:
+        with self._stats_lock:
+            return dict(self._stats)
+
+
+_playwright_pool = _PlaywrightPool()
+
+
+def get_playwright_pool_stats() -> Dict:
+    """Return browser pool statistics (launches / reuses / crashes) for /api/health."""
+    return _playwright_pool.get_stats()
+
+
 def fetch_html_with_playwright(product_url: str, proxy: str, platform: str = "", wait_ms: int = 2200) -> FetchArtifact:
-    # Optional dependency; if unavailable we return a typed failure and let caller fallback.
+    # Availability check — if playwright isn't installed, return typed failure immediately.
     try:
-        from playwright.sync_api import sync_playwright
-    except Exception as e:
+        import playwright  # noqa: F401
+    except ImportError as e:
         return FetchArtifact(
             engine="playwright",
             url=product_url,
@@ -180,45 +344,4 @@ def fetch_html_with_playwright(product_url: str, proxy: str, platform: str = "",
             error=f"playwright unavailable: {e}",
             failure_tag="playwright_unavailable",
         )
-
-    pw_proxy = None
-    if proxy:
-        pw_proxy = {"server": proxy}
-    platform_key = str(platform or "").strip().lower()
-    render_wait_ms = max(1000, min(int(wait_ms or 2200), 12000))
-    if platform_key in {"amazon", "tiktok-shop", "temu"}:
-        render_wait_ms = max(render_wait_ms, 3500)
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, proxy=pw_proxy)
-            context = browser.new_context(
-                user_agent=DESKTOP_UA,
-                locale="zh-CN",
-                viewport={"width": 1365, "height": 1024},
-            )
-            page = context.new_page()
-            resp = page.goto(product_url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(render_wait_ms)
-            html_text = page.content() or ""
-            status_code = resp.status if resp else 200
-            final_url = page.url or product_url
-            context.close()
-            browser.close()
-            anti_bot = _is_anti_bot_page(html_text)
-            return FetchArtifact(
-                engine="playwright",
-                url=final_url,
-                status_code=status_code,
-                html=html_text,
-                anti_bot=anti_bot,
-                failure_tag=_detect_failure_tag(html_text, anti_bot, platform=platform_key),
-            )
-    except Exception as e:
-        return FetchArtifact(
-            engine="playwright",
-            url=product_url,
-            status_code=599,
-            html="",
-            error=str(e),
-            failure_tag="render_failed",
-        )
+    return _playwright_pool.fetch(product_url, proxy, platform=platform, wait_ms=wait_ms)

@@ -4,6 +4,7 @@ import tempfile
 import time
 import re
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
@@ -49,6 +50,38 @@ def register_veo_routes(
             "retry_exhausted": 0,
         }
     _veo_status_metrics_lock = threading.Lock()
+
+    # Async chain job store (job_id → state dict)
+    # Completed/failed jobs are evicted after CHAIN_JOB_TTL_SECONDS or when
+    # the store exceeds CHAIN_JOB_MAX to prevent unbounded memory growth.
+    _chain_jobs: Dict[str, Dict] = {}
+    _chain_jobs_lock = threading.Lock()
+    CHAIN_JOB_TTL_SECONDS = 3600   # 1 hour
+    CHAIN_JOB_MAX = 100
+
+    def _update_chain_job(job_id: str, **kwargs):
+        now = time.time()
+        with _chain_jobs_lock:
+            job = _chain_jobs.get(job_id)
+            if job:
+                job.update(kwargs)
+                if kwargs.get("status") in {"done", "failed"}:
+                    job["finished_at"] = now
+            # Evict expired terminal jobs
+            expired = [
+                k for k, v in _chain_jobs.items()
+                if v.get("status") in {"done", "failed"}
+                and now - v.get("finished_at", now) > CHAIN_JOB_TTL_SECONDS
+            ]
+            for k in expired:
+                del _chain_jobs[k]
+            # Hard cap: evict oldest terminal job if still over limit
+            if len(_chain_jobs) > CHAIN_JOB_MAX:
+                terminal = [(k, v.get("finished_at", 0)) for k, v in _chain_jobs.items()
+                            if v.get("status") in {"done", "failed"}]
+                if terminal:
+                    oldest_key = min(terminal, key=lambda x: x[1])[0]
+                    del _chain_jobs[oldest_key]
 
     def _inc_veo_status_metric(key: str, amount: int = 1):
         with _veo_status_metrics_lock:
@@ -108,6 +141,26 @@ def register_veo_routes(
         video_exts = (".mp4", ".mov", ".webm", ".m4v")
         return [x for x in gs_paths if x.lower().endswith(video_exts)]
 
+    # Thread-local Session for Vertex AI calls — reuses TLS connections within
+    # a Flask worker thread, saving ~100-200ms TLS handshake per Veo API call.
+    _vertex_session_local = threading.local()
+
+    def _get_vertex_session(proxy: str) -> requests.Session:
+        tl = _vertex_session_local
+        proxy_key = proxy or ""
+        if getattr(tl, "proxy_key", None) != proxy_key or getattr(tl, "session", None) is None:
+            sess = requests.Session()
+            if proxy_key:
+                sess.proxies.update({"http": proxy_key, "https": proxy_key})
+            tl.session = sess
+            tl.proxy_key = proxy_key
+        return tl.session
+
+    def _vertex_post(url: str, headers: Dict, body: Dict, proxy: str) -> requests.Response:
+        sess = _get_vertex_session(proxy)
+        return sess.post(url, headers=headers, json=body, timeout=90,
+                         proxies=build_proxies(proxy))
+
     def _call_predict_long_running(*, project_id: str, model: str, token: str, proxy: str, body: Dict):
         url = (
             "https://us-central1-aiplatform.googleapis.com/v1/projects/"
@@ -117,13 +170,7 @@ def register_veo_routes(
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
         }
-        resp = requests.post(
-            url,
-            headers=headers,
-            json=body,
-            timeout=90,
-            proxies=build_proxies(proxy),
-        )
+        resp = _vertex_post(url, headers, body, proxy)
         data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
         return resp.status_code, resp.ok, data
 
@@ -143,14 +190,7 @@ def register_veo_routes(
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json; charset=utf-8",
         }
-        body = {"operationName": operation_name}
-        resp = requests.post(
-            url,
-            headers=headers,
-            json=body,
-            timeout=90,
-            proxies=build_proxies(proxy),
-        )
+        resp = _vertex_post(url, headers, {"operationName": operation_name}, proxy)
         data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
         return resp.status_code, resp.ok, data
 
@@ -163,9 +203,14 @@ def register_veo_routes(
         operation_name: str,
         poll_interval_seconds: int = 6,
         max_wait_seconds: int = 720,
+        initial_wait_seconds: int = 20,
     ):
         started = time.time()
         last_data = {}
+        # Veo requires at least ~30s to start generating; skip early polls to
+        # conserve API quota (saves 3-5 wasted calls per video).
+        if initial_wait_seconds > 0:
+            time.sleep(min(initial_wait_seconds, max_wait_seconds))
         while time.time() - started <= max_wait_seconds:
             _, _, op_data = _call_fetch_predict_operation(
                 project_id=project_id,
@@ -611,6 +656,150 @@ def register_veo_routes(
             base_parameters, _, base_effective_duration = _build_common_generation_parameters(
                 base_payload, normalize_duration_seconds=normalize_duration_seconds
             )
+
+            async_mode = bool(payload.get("async_mode", False))
+            if async_mode:
+                from shoplive.backend.async_executor import get_executor
+                job_id = f"chain-job-{uuid.uuid4().hex[:12]}"
+                with _chain_jobs_lock:
+                    _chain_jobs[job_id] = {
+                        "job_id": job_id,
+                        "status": "running",
+                        "progress": 0,
+                        "started_at": time.time(),
+                        "result": None,
+                        "error": None,
+                    }
+                # Capture all validated state for the background thread
+                _captured = dict(
+                    project_id=project_id, model=model, token=token, proxy=proxy,
+                    key_file=key_file, prompt=prompt, veo_mode=veo_mode,
+                    base_instance=base_instance, base_parameters=base_parameters,
+                    base_effective_duration=base_effective_duration,
+                    seeded_payload=seeded_payload,
+                    target_total_seconds=target_total_seconds,
+                    extend_rounds=extend_rounds,
+                    poll_interval_seconds=poll_interval_seconds,
+                    max_wait_seconds=max_wait_seconds,
+                    extend_retry_max=extend_retry_max,
+                    extend_retry_delay_seconds=extend_retry_delay_seconds,
+                )
+
+                def _bg_chain(_jid=job_id, _c=_captured):
+                    try:
+                        _update_chain_job(_jid, progress=5, message="submitting base generation")
+                        _st, _ok, _sdata = _call_predict_long_running(
+                            project_id=_c["project_id"], model=_c["model"],
+                            token=_c["token"], proxy=_c["proxy"],
+                            body={"instances": [_c["base_instance"]], "parameters": _c["base_parameters"]},
+                        )
+                        if not _ok:
+                            _update_chain_job(_jid, status="failed", error=f"base_generate failed: status={_st}")
+                            return
+                        _base_op = _sdata.get("name")
+                        if not _base_op:
+                            _update_chain_job(_jid, status="failed", error="base operation_name missing")
+                            return
+                        _update_chain_job(_jid, progress=15, message="polling base video")
+                        _base_uri, _ = _poll_video_ready(
+                            project_id=_c["project_id"], model=_c["model"],
+                            token=_c["token"], proxy=_c["proxy"],
+                            operation_name=_base_op,
+                            poll_interval_seconds=_c["poll_interval_seconds"],
+                            max_wait_seconds=_c["max_wait_seconds"],
+                        )
+                        try:
+                            _base_signed = sign_gcs_url(_base_uri, _c["key_file"])
+                        except Exception:
+                            _base_signed = ""
+                        _segments = [{
+                            "step": 1, "type": "base_generate",
+                            "operation_name": _base_op,
+                            "effective_duration_seconds": _c["base_effective_duration"],
+                            "video_gcs_uri": _base_uri,
+                            "signed_video_url": _base_signed,
+                        }]
+                        _current_uri = _base_uri
+                        for _idx in range(_c["extend_rounds"]):
+                            _update_chain_job(_jid, progress=15 + int(70 * (_idx + 1) / max(1, _c["extend_rounds"])),
+                                              message=f"extend round {_idx + 1}/{_c['extend_rounds']}")
+                            _ep = (
+                                (_c["seeded_payload"].get("extend_prompt") or "").strip()
+                                or (
+                                    f"{_c['prompt']} Continue seamlessly from previous segment. "
+                                    "Keep the same product identity, camera language, lighting, "
+                                    "color palette, and motion style. No abrupt scene jump."
+                                )
+                            )
+                            _ext_inst = {"prompt": _ep, "video": {"gcsUri": _current_uri, "mimeType": "video/mp4"}}
+                            _ext_payload = dict(_c["seeded_payload"])
+                            _ext_payload.pop("duration_seconds", None)
+                            _ext_params, _, _ = _build_common_generation_parameters(
+                                _ext_payload, normalize_duration_seconds=normalize_duration_seconds
+                            )
+                            _ext_op = ""
+                            _ext_retry_errs = []
+                            for _att in range(_c["extend_retry_max"] + 1):
+                                _st2, _ok2, _edata = _call_predict_long_running(
+                                    project_id=_c["project_id"], model=_c["model"],
+                                    token=_c["token"], proxy=_c["proxy"],
+                                    body={"instances": [_ext_inst], "parameters": _ext_params},
+                                )
+                                if not _ok2:
+                                    _ext_retry_errs.append(f"att{_att+1}: submit_failed st={_st2}")
+                                    if _att < _c["extend_retry_max"]:
+                                        time.sleep(_c["extend_retry_delay_seconds"])
+                                    continue
+                                _ext_op = str(_edata.get("name") or "").strip()
+                                if not _ext_op:
+                                    _ext_retry_errs.append(f"att{_att+1}: op_name_missing")
+                                    if _att < _c["extend_retry_max"]:
+                                        time.sleep(_c["extend_retry_delay_seconds"])
+                                    continue
+                                try:
+                                    _current_uri, _ = _poll_video_ready(
+                                        project_id=_c["project_id"], model=_c["model"],
+                                        token=_c["token"], proxy=_c["proxy"],
+                                        operation_name=_ext_op,
+                                        poll_interval_seconds=_c["poll_interval_seconds"],
+                                        max_wait_seconds=_c["max_wait_seconds"],
+                                    )
+                                    break
+                                except Exception as _pe:
+                                    _ext_retry_errs.append(f"att{_att+1}: {_pe}")
+                                    if _att < _c["extend_retry_max"]:
+                                        time.sleep(_c["extend_retry_delay_seconds"])
+                            else:
+                                _update_chain_job(_jid, status="failed",
+                                                  error=f"extend_{_idx+1} failed: {'; '.join(_ext_retry_errs)}")
+                                return
+                            try:
+                                _ext_signed = sign_gcs_url(_current_uri, _c["key_file"])
+                            except Exception:
+                                _ext_signed = ""
+                            _segments.append({
+                                "step": _idx + 2, "type": "extend",
+                                "operation_name": _ext_op,
+                                "video_gcs_uri": _current_uri,
+                                "signed_video_url": _ext_signed,
+                            })
+                        _result = {
+                            "ok": True, "status_code": 200,
+                            "model": _c["model"], "mode": "chain_extend",
+                            "seed": _c["seeded_payload"].get("seed"),
+                            "target_total_seconds": _c["target_total_seconds"],
+                            "segment_count": len(_segments),
+                            "segments": _segments,
+                            "final_video_gcs_uri": _current_uri,
+                            "final_signed_video_url": _segments[-1].get("signed_video_url") if _segments else "",
+                        }
+                        _update_chain_job(_jid, status="done", progress=100, result=_result)
+                    except Exception as _exc:
+                        _update_chain_job(_jid, status="failed", error=str(_exc)[:400])
+
+                get_executor().submit(_bg_chain)
+                return jsonify({"ok": True, "async": True, "job_id": job_id, "status": "running"}), 202
+
             status_code, ok, submit_data = _call_predict_long_running(
                 project_id=project_id,
                 model=model,
@@ -845,6 +1034,34 @@ def register_veo_routes(
             )
             return json_error(f"Veo 链式生成失败: {e}", 500)
 
+    @app.get("/api/veo/chain/status")
+    def api_veo_chain_status():
+        """Poll status of an async /api/veo/chain job.
+
+        Query params:
+            job_id: str — returned by POST /api/veo/chain when async_mode=true
+
+        Returns:
+            {"job_id", "status": "running"|"done"|"failed", "progress": 0-100,
+             "result": {...} (on done), "error": str (on failed)}
+        """
+        job_id = str(request.args.get("job_id") or "").strip()
+        if not job_id:
+            return json_error("job_id 不能为空")
+        with _chain_jobs_lock:
+            job = _chain_jobs.get(job_id)
+            if not job:
+                return json_error("job 不存在", 404)
+            return jsonify({
+                "job_id": job["job_id"],
+                "status": job["status"],
+                "progress": job.get("progress", 0),
+                "message": job.get("message", ""),
+                "started_at": job.get("started_at"),
+                "result": job.get("result"),
+                "error": job.get("error"),
+            })
+
     @app.post("/api/veo/status")
     @validate_request(VeoStatusRequest)
     def api_veo_status():
@@ -1052,10 +1269,8 @@ def register_veo_routes(
             if not m:
                 return json_error("gcs_uri 格式错误")
             bucket_name, blob_name = m.group(1), m.group(2)
-            creds = service_account.Credentials.from_service_account_file(
-                key_file, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-            client = storage.Client(project=project_id, credentials=creds)
+            from shoplive.backend.common.helpers import _get_gcs_client
+            client = _get_gcs_client(key_file)
             blob = client.bucket(bucket_name).blob(blob_name)
             blob.reload()
             total_size = int(blob.size or 0)
@@ -1362,18 +1577,19 @@ def register_veo_routes(
 
             segments = []
             errors = []
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                futures = {
-                    pool.submit(_submit_and_poll, prompt_a, "A"): "A",
-                    pool.submit(_submit_and_poll, prompt_b, "B"): "B",
-                }
-                for future in as_completed(futures):
-                    label = futures[future]
-                    try:
-                        seg = future.result()
-                        segments.append(seg)
-                    except Exception as e:
-                        errors.append({"label": label, "error": str(e)})
+            from shoplive.backend.async_executor import get_executor
+            _pool = get_executor()
+            futures = {
+                _pool.submit(_submit_and_poll, prompt_a, "A"): "A",
+                _pool.submit(_submit_and_poll, prompt_b, "B"): "B",
+            }
+            for future in as_completed(futures, timeout=1500):
+                label = futures[future]
+                try:
+                    seg = future.result()
+                    segments.append(seg)
+                except Exception as e:
+                    errors.append({"label": label, "error": str(e)})
 
             if errors:
                 failed_labels = ", ".join(e["label"] for e in errors)

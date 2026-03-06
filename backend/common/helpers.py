@@ -3,7 +3,9 @@ import json
 import re
 import subprocess
 import tempfile
+import threading
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -372,6 +374,28 @@ def judge_generated_image_category(payload: Dict, image_item: Dict) -> Dict[str,
         return {"ok": False, "is_match": True, "reason": f"judge_exception_skip_block: {e}", "raw": ""}
 
 
+def _is_retryable_litellm_status(resp: Response) -> bool:
+    """Shared retryable-status check for both sync and streaming LiteLLM calls."""
+    return resp.status_code in {429, 500, 502, 503, 504}
+
+
+def _build_litellm_body(model: str, messages: List[Dict], temperature, max_tokens, top_p,
+                        stream: bool = False) -> Dict:
+    """Build the LiteLLM request body, skipping unsupported params for gpt-5 family."""
+    body: Dict[str, Any] = {"model": model, "messages": messages}
+    if stream:
+        body["stream"] = True
+    is_gpt5_family = "gpt-5" in str(model or "").lower()
+    if not is_gpt5_family:
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
+        if top_p is not None:
+            body["top_p"] = top_p
+    return body
+
+
 def call_litellm_chat(
     *,
     api_base: str,
@@ -383,9 +407,6 @@ def call_litellm_chat(
     max_tokens=None,
     top_p=None,
 ) -> Tuple[int, Dict]:
-    def _is_retryable_status(resp: Response) -> bool:
-        return resp.status_code in {429, 500, 502, 503, 504}
-
     def _safe_response_body(resp: Response) -> Dict:
         content_type = (resp.headers.get("content-type", "") or "").lower()
         if "json" in content_type:
@@ -395,20 +416,7 @@ def call_litellm_chat(
                 pass
         return {"raw": resp.text}
 
-    body = {"model": model, "messages": messages}
-    model_lower = str(model or "").lower()
-    is_gpt5_family = "gpt-5" in model_lower
-
-    # Some gpt-5 deployments reject classic sampling/token params on chat/completions.
-    # Keep payload minimal for compatibility and let provider defaults apply.
-    if not is_gpt5_family:
-        if temperature is not None:
-            body["temperature"] = temperature
-        if max_tokens is not None:
-            body["max_tokens"] = max_tokens
-        if top_p is not None:
-            body["top_p"] = top_p
-
+    body = _build_litellm_body(model, messages, temperature, max_tokens, top_p)
     proxy_candidates = build_proxy_candidates(proxy)
     max_attempts_per_route = 2
     total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
@@ -431,7 +439,7 @@ def call_litellm_chat(
                     timeout=(10, 90),
                     proxies=proxy_map,
                 )
-                if _is_retryable_status(resp):
+                if _is_retryable_litellm_status(resp):
                     last_retryable_status = resp.status_code
                     if total_attempt < total_attempt_slots:
                         time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
@@ -464,9 +472,6 @@ def call_litellm_chat_stream(
     max_tokens=None,
     top_p=None,
 ) -> Iterator[Dict[str, Any]]:
-    def _is_retryable_status(resp: Response) -> bool:
-        return resp.status_code in {429, 500, 502, 503, 504}
-
     def _extract_delta_text(choice: Dict[str, Any]) -> str:
         delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
         content = delta.get("content")
@@ -484,18 +489,7 @@ def call_litellm_chat_stream(
             return "".join(out)
         return ""
 
-    body: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
-    model_lower = str(model or "").lower()
-    is_gpt5_family = "gpt-5" in model_lower
-
-    if not is_gpt5_family:
-        if temperature is not None:
-            body["temperature"] = temperature
-        if max_tokens is not None:
-            body["max_tokens"] = max_tokens
-        if top_p is not None:
-            body["top_p"] = top_p
-
+    body = _build_litellm_body(model, messages, temperature, max_tokens, top_p, stream=True)
     proxy_candidates = build_proxy_candidates(proxy)
     max_attempts_per_route = 2
     total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
@@ -519,7 +513,7 @@ def call_litellm_chat_stream(
                     proxies=proxy_map,
                     stream=True,
                 ) as resp:
-                    if _is_retryable_status(resp):
+                    if _is_retryable_litellm_status(resp):
                         last_retryable_status = resp.status_code
                         if total_attempt < total_attempt_slots:
                             time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
@@ -623,13 +617,19 @@ def extract_inline_videos(obj) -> List[Dict[str, str]]:
     return videos
 
 
+@lru_cache(maxsize=4)
+def _get_gcs_client(key_file: str) -> storage.Client:
+    """Cache GCS Storage Client per key_file (avoids re-reading JSON on every sign call)."""
+    creds = service_account.Credentials.from_service_account_file(key_file)
+    return storage.Client(project=creds.project_id, credentials=creds)
+
+
 def sign_gcs_url(gs_uri: str, key_file: str, expires_seconds: int = 3600) -> str:
     m = re.match(r"^gs:\/\/([^\/]+)\/(.+)$", gs_uri)
     if not m:
         return ""
     bucket_name, blob_name = m.group(1), m.group(2)
-    creds = service_account.Credentials.from_service_account_file(key_file)
-    client = storage.Client(project=creds.project_id, credentials=creds)
+    client = _get_gcs_client(key_file)
     blob = client.bucket(bucket_name).blob(blob_name)
     return blob.generate_signed_url(version="v4", expiration=expires_seconds, method="GET")
 

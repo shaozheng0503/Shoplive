@@ -10,6 +10,7 @@ import requests
 from flask import Response, g, jsonify, request, stream_with_context
 
 from shoplive.backend.audit import audit_log
+from shoplive.backend.async_executor import make_cache_key, product_insight_cache
 from shoplive.backend.validation import validate_request
 from shoplive.backend.schemas import (
     AgentChatRequest,
@@ -346,36 +347,6 @@ def register_agent_routes(
             return out
         return _dedup(pos), _dedup(neg)
 
-    def _is_anti_bot_page(html_text: str):
-        text = (html_text or "").lower()
-        title = ""
-        mt = re.search(r"<title>([\s\S]*?)</title>", html_text or "", flags=re.IGNORECASE)
-        if mt:
-            title = _clean_text(mt.group(1)).lower()
-        strong = [
-            "pardon our interruption",
-            "robot check",
-            "verify you are human",
-            "access denied",
-            "service unavailable",
-        ]
-        if any(k in title for k in strong):
-            return True
-        weak_hits = 0
-        weak_flags = [
-            "cf-chl",
-            "/challenge-platform/",
-            "hcaptcha",
-            "g-recaptcha",
-            "unusual traffic",
-            "automated access",
-            "bot detection",
-        ]
-        for k in weak_flags:
-            if k in text:
-                weak_hits += 1
-        return weak_hits >= 2
-
     @app.post("/api/agent/shop-product-insight")
     @validate_request(ProductInsightRequest)
     def api_agent_shop_product_insight():
@@ -395,6 +366,21 @@ def register_agent_routes(
             product_url = req.product_url
             proxy = req.proxy
             language = req.language
+
+            # Cache hit: skip scraping + image fetching entirely
+            _cache_key = make_cache_key(product_url)
+            _cached = product_insight_cache.get(_cache_key)
+            if _cached is not None:
+                audit_log.record(
+                    tool="parse_product_url",
+                    action="cache_hit",
+                    input_summary={"url_domain": urlparse(product_url).netloc, "language": language},
+                    output_summary={"cached": True},
+                    status="success",
+                    duration_ms=int((time.monotonic() - _t0) * 1000),
+                )
+                return jsonify({**_cached, "cache_hit": True})
+
             platform = guess_platform_by_url(product_url)
             parser = get_platform_parser(platform)
             js_first_platforms = {"amazon", "tiktok-shop", "temu"}
@@ -527,17 +513,18 @@ def register_agent_routes(
                 status="success",
                 duration_ms=_dur_ms,
             )
-            return jsonify(
-                {
-                    "ok": True,
-                    "status_code": 200,
-                    "url": product_url,
-                    "insight": insight,
-                    "source": parsed.source,
-                    "confidence": parsed.confidence,
-                    "fallback_reason": fallback_reason,
-                }
-            )
+            _result = {
+                "ok": True,
+                "status_code": 200,
+                "url": product_url,
+                "insight": insight,
+                "source": parsed.source,
+                "confidence": parsed.confidence,
+                "fallback_reason": fallback_reason,
+                "cache_hit": False,
+            }
+            product_insight_cache.set(_cache_key, _result)
+            return jsonify(_result)
         except Exception as e:
             audit_log.record(
                 tool="parse_product_url",

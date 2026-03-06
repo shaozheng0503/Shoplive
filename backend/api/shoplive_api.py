@@ -5,6 +5,12 @@ from typing import Callable, Dict, Tuple
 
 from flask import jsonify, request
 
+from shoplive.backend.async_executor import _TTLCache
+
+# 5-min LLM response cache: key = (input_fingerprint, action, model)
+# Avoids re-calling LLM for identical brief + action within the same session.
+_llm_response_cache = _TTLCache(ttl_seconds=300, max_size=200)
+
 
 def _build_shoplive_script_via_llm(
     *,
@@ -197,39 +203,37 @@ def register_shoplive_routes(
             model = (payload.get("model") or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
             proxy = (payload.get("proxy") or "").strip()
 
+            def _base(ready: bool, **extra) -> dict:
+                """Shared base fields for all workflow action responses."""
+                return {
+                    "ok": True,
+                    "action": action,
+                    "ready": ready,
+                    "validation": validation,
+                    "normalized_input": normalized,
+                    "effective_duration_seconds": normalized.get("duration", default_video_duration),
+                    "input_diff": input_diff,
+                    "input_fingerprint": input_fingerprint,
+                    **extra,
+                }
+
             if action == "validate":
-                return jsonify(
-                    {
-                        "ok": True,
-                        "action": action,
-                        "ready": validation["ok"],
-                        "validation": validation,
-                        "normalized_input": normalized,
-                        "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                        "input_diff": input_diff,
-                        "input_fingerprint": input_fingerprint,
-                    }
-                )
+                return jsonify(_base(validation["ok"]))
 
             if action == "generate_script":
                 if not validation["ok"]:
-                    return jsonify(
-                        {
-                            "ok": True,
-                            "action": action,
-                            "ready": False,
-                            "validation": validation,
-                            "normalized_input": normalized,
-                            "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                            "input_diff": input_diff,
-                            "input_fingerprint": input_fingerprint,
-                        }
-                    )
+                    return jsonify(_base(False))
                 user_message = str(payload.get("user_message", "") or "")
                 script = ""
                 script_source = "template"
                 llm_error = ""
-                if api_key:
+                _ab_hash = hashlib.md5(api_base.encode()).hexdigest()[:6]
+                _script_cache_key = f"script:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(user_message.encode()).hexdigest()[:8]}"
+                _cached_script = _llm_response_cache.get(_script_cache_key)
+                if _cached_script:
+                    script = _cached_script["script"]
+                    script_source = "llm_cached"
+                elif api_key:
                     try:
                         status_code, data_wrap = _build_shoplive_script_via_llm(
                             normalized=normalized,
@@ -246,6 +250,7 @@ def register_shoplive_routes(
                             script = extract_chat_content(data).strip()
                             if script:
                                 script_source = "llm"
+                                _llm_response_cache.set(_script_cache_key, {"script": script})
                             else:
                                 llm_error = "LLM 未返回有效脚本内容"
                         else:
@@ -255,53 +260,16 @@ def register_shoplive_routes(
                 if not script:
                     script = build_shoplive_script(normalized)
                 check = selfcheck_script(script)
-                return jsonify(
-                    {
-                        "ok": True,
-                        "action": action,
-                        "ready": check["ok"],
-                        "validation": validation,
-                        "script": script,
-                        "script_source": script_source,
-                        "script_fallback_reason": llm_error,
-                        "selfcheck": check,
-                        "normalized_input": normalized,
-                        "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                        "input_diff": input_diff,
-                        "input_fingerprint": input_fingerprint,
-                    }
-                )
+                return jsonify(_base(check["ok"],
+                    script=script, script_source=script_source,
+                    script_fallback_reason=llm_error, selfcheck=check,
+                ))
 
             if action == "pre_export_check":
                 script_text = str(payload.get("script_text", "") or "")
                 check = selfcheck_script(script_text)
-                if not validation["ok"] or not check["ok"]:
-                    return jsonify(
-                        {
-                            "ok": True,
-                            "action": action,
-                            "ready": False,
-                            "validation": validation,
-                            "selfcheck": check,
-                            "normalized_input": normalized,
-                            "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                            "input_diff": input_diff,
-                            "input_fingerprint": input_fingerprint,
-                        }
-                    )
-                return jsonify(
-                    {
-                        "ok": True,
-                        "action": action,
-                        "ready": True,
-                        "validation": validation,
-                        "selfcheck": check,
-                        "normalized_input": normalized,
-                        "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                        "input_diff": input_diff,
-                        "input_fingerprint": input_fingerprint,
-                    }
-                )
+                ready = validation["ok"] and check["ok"]
+                return jsonify(_base(ready, selfcheck=check))
 
             if action == "build_export_prompt":
                 script_text = str(payload.get("script_text", "") or "")
@@ -323,7 +291,13 @@ def register_shoplive_routes(
                 prompt_text = ""
                 prompt_source = "template_fallback"
                 llm_error = ""
-                if api_key:
+                _ab_hash = hashlib.md5(api_base.encode()).hexdigest()[:6]
+                _prompt_cache_key = f"prompt:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(script_text.encode()).hexdigest()[:8]}"
+                _cached_prompt = _llm_response_cache.get(_prompt_cache_key)
+                if _cached_prompt:
+                    prompt_text = _cached_prompt["prompt"]
+                    prompt_source = "llm_cached"
+                elif api_key:
                     try:
                         status_code, data_wrap = _build_shoplive_video_prompt_via_llm(
                             normalized=normalized,
@@ -340,6 +314,7 @@ def register_shoplive_routes(
                             prompt_text = extract_chat_content(data).strip()
                             if prompt_text:
                                 prompt_source = "llm"
+                                _llm_response_cache.set(_prompt_cache_key, {"prompt": prompt_text})
                             else:
                                 llm_error = "LLM 未返回可用视频提示词"
                         else:
@@ -349,24 +324,11 @@ def register_shoplive_routes(
                 if not prompt_text:
                     prompt_text = build_shoplive_video_prompt_template(normalized, script_text)
                     prompt_source = "template_fallback"
-                return jsonify(
-                    {
-                        "ok": True,
-                        "status_code": 200,
-                        "action": action,
-                        "ready": bool(prompt_text),
-                        "validation": validation,
-                        "selfcheck": check,
-                        "prompt": prompt_text,
-                        "prompt_source": prompt_source,
-                        "prompt_fallback_reason": llm_error,
-                        "normalized_input": normalized,
-                        "effective_duration_seconds": normalized.get("duration", default_video_duration),
-                        "input_diff": input_diff,
-                        "input_fingerprint": input_fingerprint,
-                        "response": {},
-                    }
-                )
+                return jsonify(_base(bool(prompt_text),
+                    status_code=200, selfcheck=check,
+                    prompt=prompt_text, prompt_source=prompt_source,
+                    prompt_fallback_reason=llm_error, response={},
+                ))
 
             if action == "build_enhance_template":
                 script_text = str(payload.get("script_text", "") or "")
