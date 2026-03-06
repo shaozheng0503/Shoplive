@@ -446,6 +446,120 @@ class VideoEditExportRequest(BaseModel):
     )
 
 
+class TimelineSegmentRequest(BaseModel):
+    id: str = Field(default="", description="Segment ID. Auto-generated if omitted.")
+    title: str = Field(default="", description="Segment title for UI display.")
+    left: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Segment start position in percentage (0-100).",
+    )
+    width: float = Field(
+        default=10.0,
+        gt=0.0,
+        le=100.0,
+        description="Segment width in percentage (>0, <=100).",
+    )
+    start_seconds: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Optional segment absolute start time in seconds. If provided, overrides left.",
+    )
+    end_seconds: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional segment absolute end time in seconds. If provided, overrides width.",
+    )
+
+    @field_validator("end_seconds")
+    @classmethod
+    def validate_end_seconds(cls, v: Optional[float], info):
+        if v is None:
+            return v
+        start = info.data.get("start_seconds")
+        if start is not None and float(v) <= float(start):
+            raise ValueError("end_seconds must be greater than start_seconds")
+        return v
+
+
+class TimelineTrackRequest(BaseModel):
+    label: str = Field(description="Track label, e.g. Video/Voice/Subtitle/BGM.")
+    track_type: Literal["video", "voice", "subtitle", "bgm", "other"] = Field(
+        default="video",
+        description="Track type. The MVP renderer consumes only video track segments.",
+    )
+    enabled: bool = Field(
+        default=True,
+        description="Whether this track is enabled for rendering.",
+    )
+    muted: bool = Field(
+        default=False,
+        description="Whether audio from this track should be muted. MVP applies to video track audio.",
+    )
+    order: int = Field(
+        default=0,
+        description="Optional track order priority. Lower value renders first.",
+    )
+    segments: List[TimelineSegmentRequest] = Field(
+        default_factory=list,
+        description="Ordered list of segments within this track.",
+    )
+
+
+class VideoTimelineRenderRequest(BaseModel):
+    source_video_url: str = Field(
+        description="Source video URL. Supports HTTP(S) URL or data:video/* base64.",
+    )
+    proxy: str = Field(default="", description="HTTP proxy for downloading source video.")
+    duration_seconds: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        le=600.0,
+        description="Optional timeline duration in seconds for percent-to-time conversion.",
+    )
+    include_audio: bool = Field(
+        default=True,
+        description="Whether to keep and concatenate source audio.",
+    )
+    segment_sort_strategy: Literal["track_then_start", "start_then_track"] = Field(
+        default="track_then_start",
+        description="How segments are ordered before rendering. "
+                    "'track_then_start' keeps track priority first; "
+                    "'start_then_track' uses global timeline order first.",
+    )
+    async_job: bool = Field(
+        default=False,
+        description="If true, create an async render job and return job_id immediately.",
+    )
+    tracks: List[TimelineTrackRequest] = Field(
+        default_factory=list,
+        description="Timeline tracks and segments. Uses video tracks for MVP rendering.",
+    )
+
+    @field_validator("source_video_url")
+    @classmethod
+    def validate_source_video_url(cls, v: str) -> str:
+        v = str(v or "").strip()
+        if not v:
+            raise ValueError("source_video_url is required")
+        if not (v.startswith("http://") or v.startswith("https://") or v.startswith("data:video/")):
+            raise ValueError("source_video_url must be http(s) or data:video/*")
+        return v
+
+    @field_validator("tracks")
+    @classmethod
+    def validate_tracks(cls, tracks: List[TimelineTrackRequest]) -> List[TimelineTrackRequest]:
+        if not tracks:
+            raise ValueError("tracks is required")
+        total_segments = sum(len(t.segments) for t in tracks)
+        if total_segments <= 0:
+            raise ValueError("at least one segment is required")
+        if total_segments > 80:
+            raise ValueError("too many segments (max 80)")
+        return tracks
+
+
 # ---------------------------------------------------------------------------
 # Image Generation
 # ---------------------------------------------------------------------------
@@ -521,5 +635,6 @@ TOOL_SCHEMAS: Dict[str, type] = {
     "check_video_status": VeoStatusRequest,
     "extend_video": VeoExtendRequest,
     "export_edited_video": VideoEditExportRequest,
+    "render_video_timeline": VideoTimelineRenderRequest,
     "generate_product_image": ShopliveImageGenerateRequest,
 }

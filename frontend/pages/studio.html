@@ -91,7 +91,10 @@
         <section class="panel video-panel">
           <div class="panel-title">
             <h2 data-i18n="panelVideo">Video</h2>
-            <button id="exportBtn" class="export-btn" data-i18n="exportBtn">Generate Video</button>
+            <div class="video-export-actions">
+              <button id="cancelTimelineRenderBtn" class="ghost-btn" data-i18n="cancelTimelineRenderBtn" hidden>取消渲染</button>
+              <button id="exportBtn" class="export-btn" data-i18n="exportBtn">Generate Video</button>
+            </div>
           </div>
           <div class="preview-box">
             <div class="preview-stage">
@@ -99,6 +102,13 @@
               <img id="previewImage" alt="Selected asset preview" />
               <span id="previewStatus" data-i18n="noPreview">No Preview</span>
             </div>
+            <div id="timelineRenderProgress" class="timeline-render-progress" hidden>
+              <div class="timeline-render-progress-bar">
+                <span id="timelineRenderProgressFill"></span>
+              </div>
+              <span id="timelineRenderProgressText">0%</span>
+            </div>
+            <p id="timelineRenderStats" class="timeline-render-stats" hidden></p>
             <p id="previewHint" data-i18n="previewHint">Upload clips and send command to generate timeline.</p>
           </div>
           <div class="timeline-toolbar">
@@ -111,8 +121,32 @@
           <div class="timeline-actions">
             <button id="splitSegBtn" data-i18n="splitSegment">Split Segment</button>
             <button id="deleteSegBtn" data-i18n="deleteSegment">Delete Segment</button>
+            <button id="optimizeTimelineBtn" data-i18n="optimizeTimeline">一键优化</button>
+            <button id="aggressiveOptimizeTimelineBtn" data-i18n="aggressiveOptimizeTimeline">激进优化</button>
+            <label class="twick-toggle">
+              <input id="useTwickToggle" type="checkbox" />
+              <span data-i18n="useTwickTimeline">Use Twick Timeline (MVP)</span>
+            </label>
             <span id="timelineHint" data-i18n="timelineHintDefault">Select a segment to edit</span>
           </div>
+          <div class="timeline-optimize-config">
+            <label>
+              <span data-i18n="aggrDropThreshold">短片段阈值</span>
+              <input id="aggrDropThresholdRange" type="range" min="0.8" max="4.0" step="0.1" value="1.8" />
+              <b id="aggrDropThresholdValue">1.8</b>
+            </label>
+            <label>
+              <span data-i18n="aggrMergeGap">合并间隔</span>
+              <input id="aggrMergeGapRange" type="range" min="0.8" max="5.0" step="0.1" value="2.2" />
+              <b id="aggrMergeGapValue">2.2</b>
+            </label>
+            <label>
+              <span data-i18n="aggrMaxSegments">单轨上限</span>
+              <input id="aggrMaxSegmentsRange" type="range" min="3" max="12" step="1" value="6" />
+              <b id="aggrMaxSegmentsValue">6</b>
+            </label>
+          </div>
+          <div id="twickTimelineHost" class="twick-timeline-host" hidden></div>
           <div id="timelineTracks" class="timeline-tracks"></div>
         </section>
 

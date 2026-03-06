@@ -3,6 +3,7 @@ import random
 import tempfile
 import time
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple
@@ -39,6 +40,20 @@ def register_veo_routes(
 ):
     MAX_INLINE_VIDEO_B64_CHARS = 40 * 1024 * 1024
     MAX_INLINE_VIDEO_BYTES = 30 * 1024 * 1024
+    if "veo_status_metrics" not in app.config:
+        app.config["veo_status_metrics"] = {
+            "total_calls": 0,
+            "retried_calls": 0,
+            "retry_attempts_total": 0,
+            "transient_events": 0,
+            "retry_exhausted": 0,
+        }
+    _veo_status_metrics_lock = threading.Lock()
+
+    def _inc_veo_status_metric(key: str, amount: int = 1):
+        with _veo_status_metrics_lock:
+            metrics = app.config.setdefault("veo_status_metrics", {})
+            metrics[key] = int(metrics.get(key, 0)) + int(amount)
 
     def _write_video_data_url_to_file(data_url: str, output_path: Path) -> None:
         m = re.match(r"^data:(video\/[a-zA-Z0-9.+-]+);base64,(.+)$", str(data_url or "").strip(), re.DOTALL)
@@ -853,14 +868,95 @@ def register_veo_routes(
                 "Content-Type": "application/json; charset=utf-8",
             }
             body = {"operationName": operation_name}
-            resp = requests.post(
-                url,
-                headers=headers,
-                json=body,
-                timeout=90,
-                proxies=build_proxies(proxy),
-            )
+            _inc_veo_status_metric("total_calls", 1)
+            attempt = 0
+            max_attempts = 3
+            retry_delays = [0.6, 1.2]
+            transient_events = 0
+            had_retry = False
+            last_exc = None
+            resp = None
+            try:
+                while attempt < max_attempts:
+                    attempt += 1
+                    try:
+                        candidate = requests.post(
+                            url,
+                            headers=headers,
+                            json=body,
+                            timeout=(10, 25),
+                            proxies=build_proxies(proxy),
+                        )
+                        if candidate.status_code in {429, 500, 502, 503, 504} and attempt < max_attempts:
+                            transient_events += 1
+                            had_retry = True
+                            last_exc = RuntimeError(f"upstream status={candidate.status_code}")
+                            time.sleep(retry_delays[min(attempt - 1, len(retry_delays) - 1)])
+                            continue
+                        resp = candidate
+                        break
+                    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                        transient_events += 1
+                        had_retry = True
+                        last_exc = e
+                        if attempt >= max_attempts:
+                            break
+                        time.sleep(retry_delays[min(attempt - 1, len(retry_delays) - 1)])
+
+                if resp is None:
+                    raise last_exc or requests.exceptions.Timeout("fetchPredictOperation timeout")
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                _inc_veo_status_metric("transient_events", max(1, transient_events))
+                if had_retry:
+                    _inc_veo_status_metric("retried_calls", 1)
+                    _inc_veo_status_metric("retry_attempts_total", max(0, attempt - 1))
+                _inc_veo_status_metric("retry_exhausted", 1)
+                _dur_ms = int((time.monotonic() - _t0) * 1000)
+                audit_log.record(
+                    tool="check_video_status",
+                    action="veo_status",
+                    input_summary={
+                        "model": model,
+                        "operation_name": operation_name[:80],
+                    },
+                    output_summary={
+                        "ok": False,
+                        "status_code": 504,
+                        "done": False,
+                        "video_count": 0,
+                        "inline_video_count": 0,
+                        "transient": True,
+                        "retry_attempts": max(0, attempt - 1),
+                    },
+                    status="error",
+                    error_code="VEO_STATUS_UPSTREAM_TIMEOUT",
+                    duration_ms=_dur_ms,
+                )
+                return jsonify(
+                    {
+                        "ok": False,
+                        "status_code": 504,
+                        "model": model,
+                        "video_uris": [],
+                        "signed_all_urls": [],
+                        "signed_video_urls": [],
+                        "inline_videos": [],
+                        "transient": True,
+                        "retry_attempts": max(0, attempt - 1),
+                        "response": {
+                            "done": False,
+                            "error": {
+                                "message": "fetchPredictOperation timeout; please poll again",
+                            },
+                        },
+                    }
+                ), 200
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+            if transient_events:
+                _inc_veo_status_metric("transient_events", transient_events)
+            if had_retry:
+                _inc_veo_status_metric("retried_calls", 1)
+                _inc_veo_status_metric("retry_attempts_total", max(0, attempt - 1))
             gs_paths = extract_gs_paths(data)
             video_exts = (".mp4", ".mov", ".webm", ".m4v")
             video_uris = [x for x in gs_paths if x.lower().endswith(video_exts)]
@@ -892,6 +988,7 @@ def register_veo_routes(
                     "done": is_done,
                     "video_count": len(video_uris),
                     "inline_video_count": len(inline_videos),
+                    "retry_attempts": max(0, attempt - 1),
                 },
                 status="success" if resp.ok else "error",
                 error_code=None if resp.ok else "VEO_STATUS_ERROR",
@@ -906,6 +1003,8 @@ def register_veo_routes(
                     "signed_all_urls": signed_all_urls,
                     "signed_video_urls": signed_video_urls,
                     "inline_videos": inline_videos,
+                    "retry_attempts": max(0, attempt - 1),
+                    "transient": bool(transient_events),
                     "response": data,
                 }
             ), resp.status_code

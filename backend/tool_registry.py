@@ -317,6 +317,48 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "mask_applied": "Whether text overlay was successfully applied",
         },
     },
+    {
+        "name": "render_video_timeline",
+        "display_name": "Render Video Timeline",
+        "description": (
+            "Render and export a video based on timeline tracks and segments. "
+            "This MVP tool consumes video timeline segments (N segments), cuts the source video, "
+            "concatenates clips in order, and exports a final MP4 file. "
+            "Use this for Studio timeline editing workflows."
+        ),
+        "endpoint": "POST /api/video/timeline/render",
+        "tags": ["video", "timeline", "editing", "render", "ffmpeg"],
+        "skill": "video_editing",
+        "parameters": {
+            "source_video_url": {
+                "type": "string",
+                "required": True,
+                "description": "Source video URL. Supports HTTPS or data:video/* base64.",
+            },
+            "duration_seconds": {
+                "type": "number",
+                "description": "Optional timeline duration in seconds for percent-to-time conversion.",
+            },
+            "include_audio": {
+                "type": "boolean",
+                "default": True,
+                "description": "Whether to keep and export audio.",
+            },
+            "tracks": {
+                "type": "array",
+                "required": True,
+                "description": "Timeline tracks with segments. MVP renderer consumes video-track segments.",
+            },
+        },
+        "output_summary": {
+            "video_url": "Rendered timeline output URL",
+            "segments_rendered": "Number of segments rendered into final video",
+            "timeline_duration_seconds": "Duration used for timeline normalization",
+        },
+        "next_tools": [
+            "After rendering → use export_edited_video for color/BGM/mask post-processing",
+        ],
+    },
 
     # === Skill: Image Generation ===
     {
@@ -390,10 +432,10 @@ SKILL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "Apply post-production edits to generated videos: speed, color grading, "
             "text overlay, and BGM mixing."
         ),
-        "tools": ["export_edited_video"],
+        "tools": ["render_video_timeline", "export_edited_video"],
         "typical_flow": [
-            "1. Get video URL from video_generation skill",
-            "2. export_edited_video with desired edits",
+            "1. render_video_timeline to produce timeline-based draft (optional)",
+            "2. export_edited_video with desired post-processing edits",
         ],
     },
     "image_generation": {

@@ -11,6 +11,7 @@ from shoplive.backend.schemas import (
     AgentChatRequest,
     ImageInsightRequest,
     ProductInsightRequest,
+    VideoTimelineRenderRequest,
     VeoChainRequest,
     VeoExtendRequest,
     VeoStartRequest,
@@ -262,6 +263,77 @@ class TestVideoWorkflowRequest:
 
 
 # ---------------------------------------------------------------------------
+# VideoTimelineRenderRequest
+# ---------------------------------------------------------------------------
+
+class TestVideoTimelineRenderRequest:
+    def test_valid_minimal_request(self):
+        req = VideoTimelineRenderRequest(
+            source_video_url="https://example.com/video.mp4",
+            tracks=[
+                {
+                    "label": "Video",
+                    "track_type": "video",
+                    "segments": [{"id": "s1", "left": 0, "width": 50}],
+                }
+            ],
+        )
+        assert req.source_video_url.startswith("https://")
+        assert req.include_audio is True
+        assert req.segment_sort_strategy == "track_then_start"
+        assert req.async_job is False
+        assert len(req.tracks) == 1
+
+    def test_data_url_source_allowed(self):
+        req = VideoTimelineRenderRequest(
+            source_video_url="data:video/mp4;base64,AAAA",
+            tracks=[{"label": "Video", "segments": [{"left": 0, "width": 100}]}],
+        )
+        assert req.source_video_url.startswith("data:video/")
+
+    def test_invalid_source_rejected(self):
+        with pytest.raises(ValidationError):
+            VideoTimelineRenderRequest(
+                source_video_url="file:///tmp/a.mp4",
+                tracks=[{"label": "Video", "segments": [{"left": 0, "width": 100}]}],
+            )
+
+    def test_empty_tracks_rejected(self):
+        with pytest.raises(ValidationError):
+            VideoTimelineRenderRequest(source_video_url="https://example.com/video.mp4", tracks=[])
+
+    def test_end_seconds_must_be_after_start(self):
+        with pytest.raises(ValidationError):
+            VideoTimelineRenderRequest(
+                source_video_url="https://example.com/video.mp4",
+                tracks=[
+                    {
+                        "label": "Video",
+                        "segments": [{"start_seconds": 3, "end_seconds": 2}],
+                    }
+                ],
+            )
+
+    def test_sort_strategy_literal(self):
+        req = VideoTimelineRenderRequest(
+            source_video_url="https://example.com/video.mp4",
+            segment_sort_strategy="start_then_track",
+            async_job=True,
+            tracks=[{"label": "Video", "segments": [{"left": 0, "width": 100}]}],
+        )
+        assert req.segment_sort_strategy == "start_then_track"
+        assert req.async_job is True
+
+    def test_invalid_sort_strategy_rejected(self):
+        with pytest.raises(ValidationError):
+            VideoTimelineRenderRequest(
+                source_video_url="https://example.com/video.mp4",
+                segment_sort_strategy="custom",
+                tracks=[{"label": "Video", "segments": [{"left": 0, "width": 100}]}],
+            )
+
+
+# ---------------------------------------------------------------------------
 # TOOL_SCHEMAS registry
 # ---------------------------------------------------------------------------
 
@@ -277,6 +349,7 @@ class TestToolSchemasRegistry:
             "check_video_status",
             "extend_video",
             "export_edited_video",
+            "render_video_timeline",
             "generate_product_image",
         }
         assert expected == set(TOOL_SCHEMAS.keys())

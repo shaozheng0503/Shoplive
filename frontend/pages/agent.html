@@ -32,6 +32,13 @@
 
         <section class="chat-shell">
           <div id="chatList" class="chat-list"></div>
+          <section id="taskQueuePanel" class="task-queue-panel" hidden>
+            <div class="task-queue-head">
+              <div id="taskQueueTitle" class="task-queue-title">并发任务</div>
+              <button id="taskQueueClearBtn" class="task-queue-clear-btn" type="button">清理已完成</button>
+            </div>
+            <div id="taskQueueList" class="task-queue-list"></div>
+          </section>
 
           <div class="composer composer-compact">
             <div class="compact-head">

@@ -57,6 +57,7 @@ from shoplive.backend.common.helpers import (
     split_prompt_for_16s,
     concat_videos_ffmpeg,
     download_gcs_blob_to_file,
+    normalize_timeline_video_segments,
 )
 from shoplive.backend.api.shoplive_api import register_shoplive_routes
 from shoplive.backend.api.agent_api import register_agent_routes
@@ -228,6 +229,8 @@ register_video_edit_routes(
     parse_generic_data_url=parse_generic_data_url,
     escape_drawtext_text=escape_drawtext_text,
     download_video_to_file=download_video_to_file,
+    normalize_timeline_video_segments=normalize_timeline_video_segments,
+    concat_videos_ffmpeg=concat_videos_ffmpeg,
     video_edit_export_dir=VIDEO_EDIT_EXPORT_DIR,
 )
 
@@ -355,6 +358,7 @@ def api_health():
     stats = audit_log.get_stats()
     token_stats = get_token_cache_stats()
     skill_summaries = list_skills_summary()
+    veo_status_metrics = app.config.get("veo_status_metrics", {}) or {}
 
     return _jsonify({
         "ok": True,
@@ -384,6 +388,14 @@ def api_health():
             "tools": {
                 "status": "ok",
                 "count": len(TOOL_REGISTRY),
+            },
+            "veo_status": {
+                "status": "ok",
+                "total_calls": int(veo_status_metrics.get("total_calls", 0)),
+                "retried_calls": int(veo_status_metrics.get("retried_calls", 0)),
+                "retry_attempts_total": int(veo_status_metrics.get("retry_attempts_total", 0)),
+                "transient_events": int(veo_status_metrics.get("transient_events", 0)),
+                "retry_exhausted": int(veo_status_metrics.get("retry_exhausted", 0)),
             },
             "skills": {
                 "status": "ok",

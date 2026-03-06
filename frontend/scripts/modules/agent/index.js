@@ -1,4 +1,10 @@
+import { createTransientBackoffByPreset } from "../../shared/polling.js";
+
 const chatList = document.getElementById("chatList");
+const taskQueuePanel = document.getElementById("taskQueuePanel");
+const taskQueueTitle = document.getElementById("taskQueueTitle");
+const taskQueueList = document.getElementById("taskQueueList");
+const taskQueueClearBtn = document.getElementById("taskQueueClearBtn");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
 const uploadBtn = document.getElementById("uploadBtn");
@@ -71,8 +77,18 @@ const i18n = {
     chainSummaryLineExtend: "第{step}段（延展）｜尝试次数={attempt}｜输入：{source}｜输出：{uri}",
     op: "视频任务已创建，正在生成。",
     polling: "视频生成中，请稍候...",
+    pollTransient: "上游状态查询抖动，已自动重试（重试 {retry} 次），稍后继续轮询…",
+    pollContinue: "当前阶段耗时较长（总计 {sec}s），已自动继续轮询，请稍候…",
     pollFail: "当前生成失败，请调整信息后重试。",
     genFail: "当前生成失败，请调整信息后重试。",
+    tooManyJobs: "当前已有 3 个视频任务在生成中，请稍候其中一个完成后再提交。",
+    taskQueueTitle: "并发任务（最多3个）",
+    taskQueued: "排队中",
+    taskRunning: "进行中",
+    taskDone: "已完成",
+    taskFailed: "失败",
+    taskView: "查看",
+    taskClearDone: "清理已完成",
     enhanceWorking: "正在进行提示词增强，请稍候...",
     enhanceDone: "提示词增强完成，已更新输入框。",
     enhanceFail: "提示词增强失败，已保留原文。",
@@ -269,8 +285,18 @@ const i18n = {
     chainSummaryLineExtend: "Segment {step} (extend) | attempts={attempt} | input: {source} | output: {uri}",
     op: "Video task created. Generating now.",
     polling: "Generating video, please wait...",
+    pollTransient: "Upstream status jitter detected. Auto retry applied ({retry} retries). Polling will continue shortly…",
+    pollContinue: "This stage is taking longer than expected ({sec}s total). Auto-continue polling is active…",
     pollFail: "Generation failed. Please adjust inputs and retry.",
     genFail: "Generation failed. Please adjust inputs and retry.",
+    tooManyJobs: "There are already 3 video jobs running. Please wait for one to finish before submitting another.",
+    taskQueueTitle: "Concurrent jobs (max 3)",
+    taskQueued: "Queued",
+    taskRunning: "Running",
+    taskDone: "Done",
+    taskFailed: "Failed",
+    taskView: "View",
+    taskClearDone: "Clear done",
     enhanceWorking: "Enhancing prompt, please wait...",
     enhanceDone: "Prompt enhancement completed and applied.",
     enhanceFail: "Prompt enhancement failed. Original prompt kept.",
@@ -463,6 +489,7 @@ const REGION_ITEMS = [
 
 let currentLang = localStorage.getItem("shoplive.lang") || "zh";
 let thinkingNode = null;
+const MAX_CONCURRENT_VIDEO_JOBS = 3;
 
 const state = {
   stage: "awaitMain",
@@ -485,6 +512,9 @@ const state = {
   targetBatchIdx: 0,
   brandBatchIdx: 0,
   generating: false,
+  activeVideoJobs: 0,
+  taskSeq: 0,
+  taskMap: {},
   enhancing: false,
   firstFrame: null,
   lastFrame: null,
@@ -540,6 +570,108 @@ const state = {
     },
   },
 };
+
+function formatElapsedSec(ms) {
+  return Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+}
+
+function renderTaskQueue() {
+  if (!taskQueuePanel || !taskQueueList) return;
+  const items = Object.values(state.taskMap || {}).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const doneCount = items.filter((item) => item.status === "done").length;
+  if (!items.length) {
+    taskQueuePanel.hidden = true;
+    taskQueueList.innerHTML = "";
+    if (taskQueueClearBtn) taskQueueClearBtn.disabled = true;
+    return;
+  }
+  taskQueuePanel.hidden = false;
+  if (taskQueueTitle) taskQueueTitle.textContent = t("taskQueueTitle");
+  if (taskQueueClearBtn) {
+    taskQueueClearBtn.textContent = t("taskClearDone");
+    taskQueueClearBtn.disabled = doneCount <= 0;
+  }
+  taskQueueList.innerHTML = items
+    .slice(0, 8)
+    .map((item) => {
+      const elapsed = formatElapsedSec(Date.now() - (item.startedAt || item.createdAt || Date.now()));
+      const stateText =
+        item.status === "done" ? t("taskDone")
+          : item.status === "failed" ? t("taskFailed")
+            : item.status === "queued" ? t("taskQueued")
+              : t("taskRunning");
+      const safeStage = sanitizeInputValue(String(item.stage || "").slice(0, 80));
+      const safeTitle = sanitizeInputValue(item.title || "Task");
+      const canView = Boolean(item.resultCardId);
+      const btn = canView
+        ? `<button class="task-view-btn" type="button" data-task-action="view" data-task-id="${item.id}">${t("taskView")}</button>`
+        : "";
+      return `<div class="task-item ${item.status || "running"}"><strong>${safeTitle}</strong><small>${stateText} · ${elapsed}s${safeStage ? ` · ${safeStage}` : ""}${btn}</small></div>`;
+    })
+    .join("");
+}
+
+function createVideoTask(durationLabel = "8s") {
+  state.taskSeq = Number(state.taskSeq || 0) + 1;
+  const id = `video-task-${Date.now()}-${state.taskSeq}`;
+  state.taskMap[id] = {
+    id,
+    title: `#${state.taskSeq} · ${durationLabel}`,
+    status: "queued",
+    stage: "",
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+  };
+  renderTaskQueue();
+  return id;
+}
+
+function updateVideoTask(id, patch = {}) {
+  if (!id || !state.taskMap[id]) return;
+  state.taskMap[id] = { ...state.taskMap[id], ...patch };
+  renderTaskQueue();
+}
+
+function finishVideoTask(id, ok = true, stage = "") {
+  if (!id || !state.taskMap[id]) return;
+  state.taskMap[id] = {
+    ...state.taskMap[id],
+    status: ok ? "done" : "failed",
+    stage: stage || state.taskMap[id].stage || "",
+  };
+  renderTaskQueue();
+}
+
+function clearCompletedTasks() {
+  const nextMap = {};
+  for (const [id, item] of Object.entries(state.taskMap || {})) {
+    if (item?.status !== "done") nextMap[id] = item;
+  }
+  state.taskMap = nextMap;
+  renderTaskQueue();
+}
+
+function scrollToTaskResult(taskId = "") {
+  const task = state.taskMap?.[taskId];
+  if (!task?.resultCardId) return;
+  const card = document.querySelector(`[data-task-card-id="${task.resultCardId}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function canStartVideoJob() {
+  return Number(state.activeVideoJobs || 0) < MAX_CONCURRENT_VIDEO_JOBS;
+}
+
+function acquireVideoJobSlot() {
+  state.activeVideoJobs = Math.max(0, Number(state.activeVideoJobs || 0)) + 1;
+  state.generating = state.activeVideoJobs > 0;
+}
+
+function releaseVideoJobSlot() {
+  state.activeVideoJobs = Math.max(0, Number(state.activeVideoJobs || 0) - 1);
+  state.generating = state.activeVideoJobs > 0;
+}
 
 const smartOptionCache = {
   signature: "",
@@ -656,6 +788,7 @@ function applyLang() {
   if (ratioLabel) ratioLabel.textContent = t("ratioLabel");
   if (durationLabel) durationLabel.textContent = t("durationLabel");
   if (langToggleBtn) langToggleBtn.textContent = currentLang === "zh" ? "EN" : "中文";
+  if (taskQueueClearBtn) taskQueueClearBtn.textContent = t("taskClearDone");
   const back = document.querySelector(".back-link");
   if (back) back.textContent = t("back");
   if (toggleScriptTab) {
@@ -672,6 +805,7 @@ function applyLang() {
   }
   renderVideoEditor();
   renderScriptEditor();
+  renderTaskQueue();
 }
 
 function syncSimpleControlsFromState() {
@@ -2834,6 +2968,71 @@ function sanitizePromptForVeo(raw = "") {
   return text.slice(0, 1600);
 }
 
+function hasCjkChars(raw = "") {
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(String(raw || ""));
+}
+
+function buildSingleVeoFallbackPrompt() {
+  const duration = Math.max(4, Math.min(8, Number(state.duration) || 8));
+  const ratio = state.aspectRatio || "16:9";
+  const product = String(state.productName || "ecommerce product").trim() || "ecommerce product";
+  const business = String(state.mainBusiness || "ecommerce").trim() || "ecommerce";
+  const region = String(state.salesRegion || "target market").trim() || "target market";
+  const target = String(state.targetUser || "target audience").trim() || "target audience";
+  const style = String(state.template || "clean cinematic").trim() || "clean cinematic";
+  const points = normalizePointsList(state.sellingPoints || "").slice(0, 2).join("; ") || "one core selling point";
+  const modelText = state.needModel === false ? "without model showcase" : "with model showcase";
+  return [
+    `[Style] ${style}, commercial ultra-HD quality, cinematic lighting.`,
+    `[Subject] ${product} for ${business}, keep identity consistent with uploaded references.`,
+    `[Context] For ${region}, aimed at ${target}, ${modelText}.`,
+    `[Action] Focus on ${points}.`,
+    `[00:00-00:02] Hero intro shot and product silhouette.`,
+    `[00:02-00:04] Medium shot of key usage moment.`,
+    `[00:04-00:06] Macro close-up for texture and material details.`,
+    `[00:06-00:08] Confident closing composition with conversion intent.`,
+    `[Technical] Aspect ratio ${ratio}, duration ${duration}s, natural camera movement, realistic texture.`,
+  ].join(" ");
+}
+
+async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
+  const source = String(rawPrompt || "").trim();
+  if (!source) return "";
+  const needsRewrite = hasCjkChars(source);
+  if (!needsRewrite) {
+    return sanitizePromptForVeo(source) || source;
+  }
+  try {
+    updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提示词语义对齐中" : "Aligning prompt semantics" });
+    const rewriteResp = await postJson(
+      `${base}/api/agent/chat`,
+      {
+        model: "bedrock-claude-4-5-haiku",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Rewrite the user's ecommerce video prompt into ONE Veo-ready English prompt.\n"
+              + "Keep original product intent and selling points.\n"
+              + "Output must be plain text only (no markdown), max 220 words.\n"
+              + "Must include four timestamp shots: [00:00-00:02], [00:02-00:04], [00:04-00:06], [00:06-00:08].\n"
+              + "Must avoid text overlays/subtitles/captions and avoid quotation marks.",
+          },
+          { role: "user", content: source },
+        ],
+        temperature: 0.3,
+        max_tokens: 700,
+      },
+      20000
+    );
+    const rewritten = String(rewriteResp?.content || "").trim();
+    const cleaned = sanitizePromptForVeo(rewritten);
+    if (cleaned && cleaned.length > 40) return cleaned;
+  } catch (_e) {}
+  const fallback = buildSingleVeoFallbackPrompt();
+  return sanitizePromptForVeo(fallback) || sanitizePromptForVeo(source) || source;
+}
+
 function isVeoSafetyRejection(msg = "") {
   return /violate.*usage guidelines|Responsible AI|sensitive words|support codes/i.test(String(msg));
 }
@@ -2982,13 +3181,15 @@ function renderChainSummary(chainResp) {
   pushMsg("system", lines.join("\n"), { speed: 20 });
 }
 
-function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "") {
+function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "") {
   const sourceCandidates = buildVideoSourceCandidates(videoUrl, gcsUri);
   const finalPlayableUrl = sourceCandidates[0] || "";
   state.lastVideoUrl = finalPlayableUrl;
   state.canUseEditors = true;
   const card = document.createElement("article");
   card.className = "msg system video-msg";
+  const cardId = `task-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  card.dataset.taskCardId = cardId;
   const title = document.createElement("div");
   title.textContent = t("done");
 
@@ -3050,11 +3251,15 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "") {
   chatList.appendChild(card);
   card.querySelector("#openVideoEditorBtn")?.addEventListener("click", () => toggleEditorPanel("video"));
   card.querySelector("#openScriptEditorBtn")?.addEventListener("click", () => toggleEditorPanel("script"));
+  if (taskId && state.taskMap?.[taskId]) {
+    updateVideoTask(taskId, { resultCardId: cardId });
+  }
   applyWorkspaceMode();
   renderVideoEditor();
   renderScriptEditor();
   applyVideoEditsToPreview();
   scrollToBottom();
+  return cardId;
 }
 
 async function postJson(url, body, timeout = 30000) {
@@ -3138,9 +3343,10 @@ async function postSse(url, body, onEvent, timeout = 90000) {
   }
 }
 
-async function generate16sWithProgress(base, startBody, finalPrompt) {
+async function generate16sWithProgress(base, startBody, finalPrompt, workflowStartedAt = Date.now(), taskId = "") {
   const zh = currentLang === "zh";
   const statusBubble = pushMsg("system", zh ? "⏳ 步骤 1/4：正在用 AI 拆分提示词为前后两段…" : "Step 1/4: Splitting prompt into two segments…", { typewriter: false });
+  updateVideoTask(taskId, { status: "running", stage: zh ? "步骤1/5 拆分提示词" : "Step 1/5 split prompt" });
 
   let promptA = "";
   let promptB = "";
@@ -3210,16 +3416,34 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
 
   async function pollUntilDone(op, label) {
     const start = Date.now();
+    const transientBackoff = createTransientBackoffByPreset("agentChainPoll");
+    const SOFT_TIMEOUT_MS = 360000; // soft limit, keep polling after notice
+    const SOFT_TIMEOUT_STEP_MS = 180000;
+    const HARD_TIMEOUT_MS = 1800000;
+    let nextSoftTimeoutAt = SOFT_TIMEOUT_MS;
+    let lastContinueNoticeAt = 0;
     while (true) {
       const elapsed = Math.floor((Date.now() - start) / 1000);
+      const totalElapsed = Math.floor((Date.now() - workflowStartedAt) / 1000);
       statusBubble.textContent = zh
-        ? `⏳ 步骤 ${label}：生成中（${elapsed}s）…`
-        : `Step ${label}: Generating (${elapsed}s)…`;
+        ? `⏳ 步骤 ${label}：生成中（总计 ${totalElapsed}s）…`
+        : `Step ${label}: Generating (${totalElapsed}s total)…`;
+      updateVideoTask(taskId, { status: "running", stage: zh ? `步骤 ${label} 生成中（总计${totalElapsed}s）` : `Step ${label} running (${totalElapsed}s total)` });
       const waitMs = elapsed < 40 ? 3000 : 12000;
       await new Promise((r) => setTimeout(r, waitMs));
       if (elapsed < 30) continue;
       try {
         const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: "veo-3.1-fast-generate-001", operation_name: op }, 15000);
+        if (st?.transient) {
+          const retryAttempts = Math.max(0, Number(st?.retry_attempts || 0));
+          const waitMs = transientBackoff.apply(retryAttempts);
+          if (transientBackoff.shouldNotify()) {
+            pushMsg("system", t("pollTransient", { retry: retryAttempts }));
+          }
+          updateVideoTask(taskId, { status: "running", stage: zh ? `步骤 ${label} 退避重试` : `Step ${label} backoff retry` });
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
         const pUrl = pickPlayableUrl(st);
         const gUri = String(st?.video_uris?.[0] || "").trim();
         if (pUrl || gUri) return { url: pUrl, gcs: gUri };
@@ -3229,12 +3453,26 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
         const msg = String(e?.message || "");
         if (msg.length > 5 && !/timeout|abort/i.test(msg)) throw e;
       }
-      if ((Date.now() - start) > 360000) throw new Error(zh ? `第${label}段超时` : `Segment ${label} timed out`);
+      const elapsedMs = Date.now() - start;
+      if (elapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
+        lastContinueNoticeAt = Date.now();
+        pushMsg("system", t("pollContinue", { sec: totalElapsed }));
+        nextSoftTimeoutAt += SOFT_TIMEOUT_STEP_MS;
+        updateVideoTask(taskId, { status: "running", stage: zh ? `步骤 ${label} 自动续轮询` : `Step ${label} auto-continue polling` });
+      }
+      if (elapsedMs > HARD_TIMEOUT_MS) {
+        throw new Error(
+          zh
+            ? `第${label}段超时（总计>${Math.floor(HARD_TIMEOUT_MS / 1000)}s）`
+            : `Segment ${label} timed out (>${Math.floor(HARD_TIMEOUT_MS / 1000)}s total)`
+        );
+      }
     }
   }
 
   // Step 2/5: Generate segment 1
   statusBubble.textContent = zh ? "⏳ 步骤 2/5：正在生成第 1 段（8s）…" : "Step 2/5: Generating segment 1 (8s)…";
+  updateVideoTask(taskId, { status: "running", stage: zh ? "步骤2/5 生成第1段" : "Step 2/5 segment A" });
   scrollToBottom();
   const startA = await submitSafe(promptA, "A");
   const opA = startA?.operation_name;
@@ -3243,6 +3481,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
 
   // Step 3/5: Extract last frame from segment 1 for seamless bridging
   statusBubble.textContent = zh ? "⏳ 步骤 3/5：提取第 1 段尾帧用于衔接…" : "Step 3/5: Extracting last frame for bridging…";
+  updateVideoTask(taskId, { status: "running", stage: zh ? "步骤3/5 提取尾帧" : "Step 3/5 extract bridge frame" });
   scrollToBottom();
   let bridgeFrameB64 = "";
   let bridgeFrameMime = "image/png";
@@ -3262,6 +3501,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
 
   // Step 4/5: Generate segment 2 with bridging frame as first frame
   statusBubble.textContent = zh ? "⏳ 步骤 4/5：正在生成第 2 段（8s，首帧衔接）…" : "Step 4/5: Generating segment 2 (8s, bridged)…";
+  updateVideoTask(taskId, { status: "running", stage: zh ? "步骤4/5 生成第2段" : "Step 4/5 segment B" });
   scrollToBottom();
   const seg2Body = { ...segBody, prompt: promptB };
   if (bridgeFrameB64) {
@@ -3285,6 +3525,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
 
   // Step 5/5: Concatenate
   statusBubble.textContent = zh ? "⏳ 步骤 5/5：正在拼接为 16 秒视频…" : "Step 5/5: Concatenating into 16s video…";
+  updateVideoTask(taskId, { status: "running", stage: zh ? "步骤5/5 拼接中" : "Step 5/5 concatenating" });
   scrollToBottom();
 
   let concatUrl = "";
@@ -3314,14 +3555,23 @@ async function generate16sWithProgress(base, startBody, finalPrompt) {
   pushMsg("system", zh
     ? `16 秒视频生成完成（2 段串行衔接）。${concatUrl ? "" : "⚠️ 拼接未完成，暂展示第一段。"}`
     : `16s video ready (2 segments, frame-bridged).${concatUrl ? "" : " Concat incomplete, showing first segment."}`);
-  renderGeneratedVideoCard(playable, resA.gcs || resB.gcs || "", opA || "");
+  updateVideoTask(taskId, { status: "done", stage: zh ? "16秒任务完成" : "16s completed" });
+  renderGeneratedVideoCard(playable, resA.gcs || resB.gcs || "", opA || "", taskId);
 }
 
 async function generateVideo(promptOverride = "") {
-  if (state.generating) {
+  if (!canStartVideoJob()) {
+    pushMsg("system", t("tooManyJobs"));
     return;
   }
-  state.generating = true;
+  acquireVideoJobSlot();
+  let slotReleased = false;
+  const releaseSlotOnce = () => {
+    if (slotReleased) return;
+    slotReleased = true;
+    releaseVideoJobSlot();
+  };
+  const taskId = createVideoTask(`${state.duration || "8"}s`);
   try {
     if (!promptOverride) {
       await hydrateWorkflowTexts(false);
@@ -3330,12 +3580,13 @@ async function generateVideo(promptOverride = "") {
     state.lastPrompt = finalPrompt;
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
     pushMsg("system", t("submit"));
+    updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提交任务中" : "Submitting job" });
     const imageParsed = parseDataUrl(state.images[0]?.dataUrl);
     const fallbackImageUrl = Array.isArray(state.productImageUrls) ? String(state.productImageUrls[0] || "").trim() : "";
     const useImageMode = Boolean((imageParsed?.base64 && imageParsed?.mime) || fallbackImageUrl);
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const base = getApiBase();
-    const safePrompt = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+    const safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
     const startBody = {
       project_id: "gemini-sl-20251120",
       model: "veo-3.1-fast-generate-001",
@@ -3363,19 +3614,30 @@ async function generateVideo(promptOverride = "") {
       startBody.image_url = fallbackImageUrl;
     }
     if (isChainDuration(state.duration)) {
-      await generate16sWithProgress(base, startBody, finalPrompt);
-      state.generating = false;
+      await generate16sWithProgress(base, startBody, finalPrompt, Date.now(), taskId);
+      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
+      releaseSlotOnce();
       return;
     }
 
     const start = await postJson(`${base}/api/veo/start`, startBody);
     const operationName = start?.operation_name;
     if (!operationName) throw new Error("operation_name missing");
+    updateVideoTask(taskId, {
+      status: "running",
+      stage: currentLang === "zh" ? "已提交，轮询中" : "Submitted, polling",
+      operationName,
+    });
     const zh = currentLang === "zh";
     const pollBubble = pushMsg("system", zh ? "视频生成中（Fast 模式），预计 60-90 秒…" : "Generating video (Fast mode), ~60-90s…", { typewriter: false });
     const pollStartedAt = Date.now();
-    const POLL_TIMEOUT_MS = 300000;
+    const POLL_SOFT_TIMEOUT_MS = 300000;
+    const POLL_SOFT_STEP_MS = 180000;
+    const POLL_HARD_TIMEOUT_MS = 1800000;
     let pollStopped = false;
+    let nextSoftTimeoutAt = POLL_SOFT_TIMEOUT_MS;
+    let lastContinueNoticeAt = 0;
+    const transientBackoff = createTransientBackoffByPreset("agentFastPoll");
 
     const doPoll = async () => {
       if (pollStopped) return;
@@ -3384,14 +3646,21 @@ async function generateVideo(promptOverride = "") {
       pollBubble.textContent = zh
         ? `视频生成中（${elapsedSec}s）…`
         : `Generating video (${elapsedSec}s)…`;
+      updateVideoTask(taskId, { status: "running", stage: zh ? `轮询中（总计${elapsedSec}s）` : `Polling (${elapsedSec}s total)` });
 
-      if (elapsedMs > POLL_TIMEOUT_MS) {
+      if (elapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
+        lastContinueNoticeAt = Date.now();
+        pushMsg("system", t("pollContinue", { sec: elapsedSec }));
+        nextSoftTimeoutAt += POLL_SOFT_STEP_MS;
+      }
+      if (elapsedMs > POLL_HARD_TIMEOUT_MS) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
         pushMsg("system", zh
-          ? `视频生成超时（已等待 ${elapsedSec}s）。请稍后重试或简化提示词。`
-          : `Video generation timed out (${elapsedSec}s). Retry later or simplify the prompt.`);
-        state.generating = false;
+          ? `视频生成超时（总计 ${elapsedSec}s）。请稍后重试或简化提示词。`
+          : `Video generation timed out (${elapsedSec}s total). Retry later or simplify the prompt.`);
+        finishVideoTask(taskId, false, zh ? "超时" : "Timeout");
+        releaseSlotOnce();
         return;
       }
 
@@ -3410,6 +3679,15 @@ async function generateVideo(promptOverride = "") {
           },
           20000
         );
+        if (status?.transient) {
+          const retryAttempts = Math.max(0, Number(status?.retry_attempts || 0));
+          const waitMs = transientBackoff.apply(retryAttempts);
+          if (transientBackoff.shouldNotify()) {
+            pushMsg("system", t("pollTransient", { retry: retryAttempts }));
+          }
+          scheduleNext(waitMs);
+          return;
+        }
         const opError = status?.response?.error?.message || "";
         if (status?.response?.done && opError) {
           pollStopped = true;
@@ -3421,7 +3699,8 @@ async function generateVideo(promptOverride = "") {
           } else {
             pushMsg("system", t("genFail"));
           }
-          state.generating = false;
+          finishVideoTask(taskId, false, zh ? "失败" : "Failed");
+          releaseSlotOnce();
           return;
         }
         const videoUrl = pickPlayableUrl(status);
@@ -3429,15 +3708,17 @@ async function generateVideo(promptOverride = "") {
         if (videoUrl) {
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
-          renderGeneratedVideoCard(videoUrl, gcsUri, operationName);
-          state.generating = false;
+          renderGeneratedVideoCard(videoUrl, gcsUri, operationName, taskId);
+          finishVideoTask(taskId, true, zh ? "完成" : "Done");
+          releaseSlotOnce();
           return;
         }
       } catch (_e) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
         pushMsg("system", t("pollFail"));
-        state.generating = false;
+        finishVideoTask(taskId, false, zh ? "轮询异常" : "Polling error");
+        releaseSlotOnce();
         return;
       }
       scheduleNext(elapsedMs < 90000 ? 10000 : 15000);
@@ -3452,7 +3733,8 @@ async function generateVideo(promptOverride = "") {
         : "request timeout, please retry"
       : detailRaw;
     pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"));
-    state.generating = false;
+    finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
+    releaseSlotOnce();
   }
 }
 
@@ -3558,7 +3840,10 @@ async function onSend() {
     }
     const finalText = String(chatInput.value || "").trim() || promptText;
     if (!finalText) return;
-    if (state.generating) return;
+    if (!canStartVideoJob()) {
+      pushMsg("system", t("tooManyJobs"));
+      return;
+    }
     syncStateFromSimpleControls();
     state.lastPrompt = finalText;
     state.primarySubmitLocked = false;
@@ -3666,7 +3951,7 @@ async function onSend() {
 async function enhancePromptByAgent() {
   const raw = (chatInput.value || "").trim();
   if (!raw) return;
-  if (state.generating || state.enhancing) return;
+  if (state.enhancing) return;
   state.enhancing = true;
   if (enhancePromptBtn) enhancePromptBtn.disabled = true;
   syncStateFromSimpleControls();
@@ -3793,7 +4078,6 @@ async function enhancePromptByAgent() {
         title: t("enhanceRetry"),
         desc: t("enhanceRetryDesc"),
         onClick: () => {
-          if (state.generating) return;
           pushMsg("user", t("enhanceRetryAck"), { typewriter: false });
           enhancePromptByAgent();
         },
@@ -4205,6 +4489,19 @@ if (langToggleBtn) {
 }
 if (toggleScriptTab) toggleScriptTab.addEventListener("click", () => toggleEditorPanel("script"));
 if (toggleVideoTab) toggleVideoTab.addEventListener("click", () => toggleEditorPanel("video"));
+if (taskQueueClearBtn) {
+  taskQueueClearBtn.addEventListener("click", () => {
+    clearCompletedTasks();
+  });
+}
+if (taskQueueList) {
+  taskQueueList.addEventListener("click", (e) => {
+    const btn = e.target instanceof Element ? e.target.closest("[data-task-action='view']") : null;
+    if (!btn) return;
+    const taskId = String(btn.getAttribute("data-task-id") || "");
+    scrollToTaskResult(taskId);
+  });
+}
 window.addEventListener("resize", () => updateToolbarIndicator());
 
 applyLang();

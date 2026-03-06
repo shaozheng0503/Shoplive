@@ -1,13 +1,20 @@
+import { createTransientBackoffByPreset } from "../../shared/polling.js";
+
 const taskName = document.getElementById("taskName");
 const uploadBtn = document.getElementById("uploadBtn");
 const filePicker = document.getElementById("filePicker");
 const uploadBox = document.getElementById("uploadBox");
 const exportBtn = document.getElementById("exportBtn");
+const cancelTimelineRenderBtn = document.getElementById("cancelTimelineRenderBtn");
 const newTaskBtn = document.getElementById("newTaskBtn");
 const studioLangToggleBtn = document.getElementById("studioLangToggleBtn");
 const assetList = document.getElementById("assetList");
 const previewStatus = document.getElementById("previewStatus");
 const previewHint = document.getElementById("previewHint");
+const timelineRenderProgress = document.getElementById("timelineRenderProgress");
+const timelineRenderProgressFill = document.getElementById("timelineRenderProgressFill");
+const timelineRenderProgressText = document.getElementById("timelineRenderProgressText");
+const timelineRenderStats = document.getElementById("timelineRenderStats");
 const previewVideo = document.getElementById("previewVideo");
 const previewImage = document.getElementById("previewImage");
 const playPauseBtn = document.getElementById("playPauseBtn");
@@ -15,8 +22,18 @@ const seekStartBtn = document.getElementById("seekStartBtn");
 const seekEndBtn = document.getElementById("seekEndBtn");
 const timecode = document.getElementById("timecode");
 const timelineTracks = document.getElementById("timelineTracks");
+const twickTimelineHost = document.getElementById("twickTimelineHost");
+const useTwickToggle = document.getElementById("useTwickToggle");
 const splitSegBtn = document.getElementById("splitSegBtn");
 const deleteSegBtn = document.getElementById("deleteSegBtn");
+const optimizeTimelineBtn = document.getElementById("optimizeTimelineBtn");
+const aggressiveOptimizeTimelineBtn = document.getElementById("aggressiveOptimizeTimelineBtn");
+const aggrDropThresholdRange = document.getElementById("aggrDropThresholdRange");
+const aggrDropThresholdValue = document.getElementById("aggrDropThresholdValue");
+const aggrMergeGapRange = document.getElementById("aggrMergeGapRange");
+const aggrMergeGapValue = document.getElementById("aggrMergeGapValue");
+const aggrMaxSegmentsRange = document.getElementById("aggrMaxSegmentsRange");
+const aggrMaxSegmentsValue = document.getElementById("aggrMaxSegmentsValue");
 const timelineHint = document.getElementById("timelineHint");
 const scriptEditor = document.getElementById("scriptEditor");
 const scriptCounter = document.getElementById("scriptCounter");
@@ -75,6 +92,15 @@ const timelineModel = [
   { label: "Subtitle", segments: [{ id: "sub-1", title: "Sub", left: 36, width: 40, color: "#ffaf31" }] },
   { label: "BGM", segments: [{ id: "bgm-1", title: "BGM", left: 8, width: 58, color: "#ec4a6c" }] },
 ];
+let activeTimelineEngine = "native";
+let twickBridge = null;
+let isApplyingTwickChange = false;
+let activeTimelineRenderJobId = "";
+let timelineRenderTiming = {
+  startedAt: 0,
+  queuedAt: 0,
+  runningAt: 0,
+};
 
 const defaultScript = `[Creative Framework]: Problem-Solution + Sensory Experience
 [Opening Hook] (0-3s): Close-up product reveal with high-contrast lighting.
@@ -112,6 +138,13 @@ const i18n = {
     previewHint: "上传素材并发送指令后可生成时间线。",
     splitSegment: "拆分片段",
     deleteSegment: "删除片段",
+    optimizeTimeline: "一键优化",
+    aggressiveOptimizeTimeline: "激进优化",
+    aggrDropThreshold: "短片段阈值",
+    aggrMergeGap: "合并间隔",
+    aggrMaxSegments: "单轨上限",
+    useTwickTimeline: "启用 Twick 时间轴（MVP）",
+    twickFallback: "未检测到 Twick 适配器，已回退原生时间轴。",
     timelineHintDefault: "请选择要编辑的片段",
     syncing: "同步中...",
     storyboardSynced: "分镜已同步",
@@ -153,9 +186,26 @@ const i18n = {
     msgBackendFallback: "后端不可用：{error}。已回退到本地助手。",
     msgEnableBackendForExport: "请开启 Use backend API 后执行真实导出。",
     msgStartExport: "开始执行视频导出，先提交 Veo 任务...",
+    msgStartTimelineRender: "开始按时间线渲染并导出视频...",
+    cancelTimelineRenderBtn: "取消渲染",
+    msgTimelineRenderProgress: "时间线渲染进度：{progress}%",
+    msgTimelineRenderQueued: "时间线渲染任务已创建，开始排队处理。",
+    msgTimelineRenderCancelled: "已取消上一条时间线渲染任务。",
+    msgTimelineRenderCancelling: "正在取消时间线渲染任务...",
+    msgTimelineRenderTiming: "时间统计：排队 {queue}s / 渲染 {render}s / 总计 {total}s",
+    msgTimelinePerfGood: "性能建议：当前渲染表现良好（片段 {segments}，总耗时 {total}s）。",
+    msgTimelinePerfModerate: "性能建议：可适当减少片段数量（当前 {segments}）或缩短总时长以进一步提速。",
+    msgTimelinePerfHeavy: "性能建议：本次时间线较重（片段 {segments}，总耗时 {total}s），建议合并短片段并关闭不必要轨道音频。",
+    msgTimelineRendered: "时间线渲染完成，已加载导出视频。",
+    msgTimelineOptimized: "已优化时间线：片段 {before} -> {after}（合并 {merged}，移除 {removed}）。",
+    msgTimelineOptimizedAggressive: "已执行激进优化：片段 {before} -> {after}（合并 {merged}，移除 {removed}，压缩 {trimmed}）。",
+    msgTimelineOptimizeNoop: "当前时间线已较优，无需进一步自动优化。",
+    msgTimelineRenderFailed: "时间线渲染失败：{error}。已回退到 Veo 生成流程。",
+    msgTimelineNoSource: "时间线导出未找到可用视频源，请先上传视频素材或先完成一次生成。",
     msgTaskSubmitted: "任务已提交：{name}",
     msgExportPolling: "导出中... 第 {rounds} 次轮询",
     msgPollFailed: "轮询失败：{error}",
+    msgPollTransient: "上游状态查询抖动，已自动退避重试（重试 {retry} 次）。",
     msgExportSubmitFailed: "导出提交失败：{error}",
     msgExportDoneLoaded: "导出完成，视频已加载到预览区。",
     msgExportDoneNoPlayable: "任务完成，但未找到可播放视频链接。",
@@ -222,6 +272,13 @@ const i18n = {
     previewHint: "Upload clips and send command to generate timeline.",
     splitSegment: "Split Segment",
     deleteSegment: "Delete Segment",
+    optimizeTimeline: "Optimize Timeline",
+    aggressiveOptimizeTimeline: "Aggressive Optimize",
+    aggrDropThreshold: "Drop Threshold",
+    aggrMergeGap: "Merge Gap",
+    aggrMaxSegments: "Max Segments/Track",
+    useTwickTimeline: "Use Twick Timeline (MVP)",
+    twickFallback: "Twick adapter not found. Falling back to native timeline.",
     timelineHintDefault: "Select a segment to edit",
     syncing: "Syncing...",
     storyboardSynced: "Storyboard synced",
@@ -263,9 +320,26 @@ const i18n = {
     msgBackendFallback: "Backend unavailable: {error}. Falling back to local assistant.",
     msgEnableBackendForExport: "Enable Use backend API before real export.",
     msgStartExport: "Starting video export and submitting Veo task...",
+    msgStartTimelineRender: "Starting timeline render and export...",
+    cancelTimelineRenderBtn: "Cancel Render",
+    msgTimelineRenderProgress: "Timeline render progress: {progress}%",
+    msgTimelineRenderQueued: "Timeline render job created and queued.",
+    msgTimelineRenderCancelled: "Cancelled previous timeline render job.",
+    msgTimelineRenderCancelling: "Cancelling timeline render job...",
+    msgTimelineRenderTiming: "Timing: queue {queue}s / render {render}s / total {total}s",
+    msgTimelinePerfGood: "Performance tip: render is healthy (segments {segments}, total {total}s).",
+    msgTimelinePerfModerate: "Performance tip: reduce segment count (current {segments}) or shorten total duration for faster export.",
+    msgTimelinePerfHeavy: "Performance tip: heavy timeline detected (segments {segments}, total {total}s). Merge short segments and disable unnecessary audio tracks.",
+    msgTimelineRendered: "Timeline render complete. Exported video loaded.",
+    msgTimelineOptimized: "Timeline optimized: segments {before} -> {after} (merged {merged}, removed {removed}).",
+    msgTimelineOptimizedAggressive: "Aggressive optimization applied: segments {before} -> {after} (merged {merged}, removed {removed}, compressed {trimmed}).",
+    msgTimelineOptimizeNoop: "Timeline is already optimized. No automatic changes were needed.",
+    msgTimelineRenderFailed: "Timeline render failed: {error}. Falling back to Veo generation.",
+    msgTimelineNoSource: "No usable video source for timeline export. Upload a video or generate one first.",
     msgTaskSubmitted: "Task submitted: {name}",
     msgExportPolling: "Exporting... polling round {rounds}",
     msgPollFailed: "Polling failed: {error}",
+    msgPollTransient: "Upstream status jitter detected. Auto backoff retry applied ({retry} retries).",
     msgExportSubmitFailed: "Export submission failed: {error}",
     msgExportDoneLoaded: "Export complete. Video is loaded in preview.",
     msgExportDoneNoPlayable: "Task finished, but no playable video URL was found.",
@@ -727,6 +801,119 @@ function getSegByIds(trackIndex, segId) {
   return track.segments.find((seg) => seg.id === segId) || null;
 }
 
+function toTwickTimelineState() {
+  return {
+    duration: currentDuration,
+    tracks: timelineModel.map((track, trackIndex) => ({
+      id: `track-${trackIndex}`,
+      label: track.label,
+      segments: track.segments.map((seg) => ({
+        id: seg.id,
+        title: seg.title,
+        start: Number(seg.left || 0),
+        length: Number(seg.width || 0),
+        color: seg.color || "#3f78ff",
+      })),
+    })),
+  };
+}
+
+function applyTwickTimelineState(nextState) {
+  if (!nextState || !Array.isArray(nextState.tracks)) return;
+  nextState.tracks.forEach((trackState, trackIndex) => {
+    if (!timelineModel[trackIndex] || !Array.isArray(trackState?.segments)) return;
+    timelineModel[trackIndex].segments = trackState.segments.map((seg, idx) => {
+      const start = Math.max(0, Math.min(100, Number(seg?.start ?? seg?.left ?? 0)));
+      const length = Math.max(4, Math.min(100 - start, Number(seg?.length ?? seg?.width ?? 12)));
+      return {
+        id: String(seg?.id || `${timelineModel[trackIndex].label.toLowerCase()}-${idx + 1}`),
+        title: String(seg?.title || seg?.name || timelineModel[trackIndex].label),
+        left: start,
+        width: length,
+        color: String(seg?.color || timelineModel[trackIndex].segments?.[0]?.color || "#3f78ff"),
+      };
+    });
+  });
+}
+
+function getTwickAdapter() {
+  // Contract for optional runtime adapter:
+  // window.ShopliveTwickAdapter = {
+  //   mount({container, state, onChange, onSelect, onAddSegment, onDeleteSegment, onDuplicateSegment, onRenameSegment}),
+  //   update(state),
+  //   unmount()
+  // }
+  const adapter = window.ShopliveTwickAdapter;
+  if (!adapter || typeof adapter.mount !== "function") return null;
+  return adapter;
+}
+
+function syncTimelineWithEngine() {
+  if (isApplyingTwickChange) return;
+  if (activeTimelineEngine === "twick" && twickBridge && typeof twickBridge.update === "function") {
+    twickBridge.update(toTwickTimelineState());
+  }
+}
+
+function setTimelineEngine(engine) {
+  const useTwick = engine === "twick";
+  activeTimelineEngine = useTwick ? "twick" : "native";
+  timelineTracks.hidden = useTwick;
+  if (twickTimelineHost) twickTimelineHost.hidden = !useTwick;
+
+  if (!useTwick) {
+    if (twickBridge && typeof twickBridge.unmount === "function") twickBridge.unmount();
+    twickBridge = null;
+    renderTimeline();
+    return;
+  }
+
+  const adapter = getTwickAdapter();
+  if (!adapter || !twickTimelineHost) {
+    activeTimelineEngine = "native";
+    if (useTwickToggle) useTwickToggle.checked = false;
+    timelineTracks.hidden = false;
+    if (twickTimelineHost) twickTimelineHost.hidden = true;
+    pushMessage("assistant", t("twickFallback"));
+    renderTimeline();
+    return;
+  }
+
+  if (twickBridge && typeof twickBridge.unmount === "function") twickBridge.unmount();
+  twickBridge = adapter.mount({
+    container: twickTimelineHost,
+    state: toTwickTimelineState(),
+    onChange(nextState) {
+      isApplyingTwickChange = true;
+      try {
+        applyTwickTimelineState(nextState);
+        renderTimeline();
+      } finally {
+        isApplyingTwickChange = false;
+      }
+    },
+    onSelect(payload) {
+      if (!payload) return;
+      const trackIndex = Number(payload.trackIndex);
+      const segId = String(payload.segId || "");
+      if (!Number.isNaN(trackIndex) && segId) setSelectedSegment(trackIndex, segId);
+    },
+    onAddSegment(trackIndex) {
+      addSegmentToTrack(Number(trackIndex));
+    },
+    onDeleteSegment(trackIndex, segId) {
+      deleteSegmentById(Number(trackIndex), String(segId || ""));
+    },
+    onDuplicateSegment(trackIndex, segId) {
+      duplicateSegmentById(Number(trackIndex), String(segId || ""));
+    },
+    onRenameSegment(trackIndex, segId, title) {
+      renameSegmentById(Number(trackIndex), String(segId || ""), String(title || ""));
+    },
+  });
+  syncTimelineWithEngine();
+}
+
 function applySegStyle(element, segment) {
   element.style.left = `${segment.left}%`;
   element.style.width = `${segment.width}%`;
@@ -790,16 +977,184 @@ function splitSelectedSegment() {
   setSelectedSegment(trackIndex, newSeg.id);
 }
 
-function deleteSelectedSegment() {
-  if (!selectedSegment) return;
-  const { trackIndex, segId } = selectedSegment;
+function addSegmentToTrack(trackIndex) {
   const track = timelineModel[trackIndex];
+  if (!track) return;
+  const segs = Array.isArray(track.segments) ? track.segments : [];
+  const fallbackColor = segs[0]?.color || "#3f78ff";
+  const last = segs[segs.length - 1];
+  const start = Math.max(0, Math.min(96, Number(last?.left || 0) + Number(last?.width || 0)));
+  const width = Math.max(4, Math.min(20, 100 - start));
+  const id = `${track.label.toLowerCase()}-${Date.now()}`;
+  segs.push({
+    id,
+    title: `${track.label} ${segs.length + 1}`,
+    left: start,
+    width,
+    color: fallbackColor,
+  });
+  track.segments = segs;
+  renderTimeline();
+  setSelectedSegment(trackIndex, id);
+}
+
+function renameSegmentById(trackIndex, segId, title) {
+  const track = timelineModel[trackIndex];
+  if (!track) return;
+  const seg = track.segments.find((item) => item.id === segId);
+  if (!seg) return;
+  const next = String(title || "").trim();
+  if (!next) return;
+  seg.title = next.slice(0, 48);
+  renderTimeline();
+  if (selectedSegment && selectedSegment.trackIndex === trackIndex && selectedSegment.segId === segId) {
+    setSelectedSegment(trackIndex, segId);
+  }
+}
+
+function duplicateSegmentById(trackIndex, segId) {
+  const track = timelineModel[trackIndex];
+  if (!track) return;
+  const index = track.segments.findIndex((seg) => seg.id === segId);
+  if (index < 0) return;
+  const source = track.segments[index];
+  const newWidth = Math.max(4, Number(source.width || 12));
+  const newLeft = Math.min(100 - newWidth, Math.max(0, Number(source.left || 0) + newWidth + 1));
+  const clone = {
+    id: `${segId}-copy-${Date.now()}`,
+    title: `${source.title || "Segment"} Copy`,
+    left: newLeft,
+    width: newWidth,
+    color: source.color || "#3f78ff",
+  };
+  track.segments.splice(index + 1, 0, clone);
+  renderTimeline();
+  setSelectedSegment(trackIndex, clone.id);
+}
+
+function deleteSegmentById(trackIndex, segId) {
+  const track = timelineModel[trackIndex];
+  if (!track) return;
   const index = track.segments.findIndex((seg) => seg.id === segId);
   if (index < 0 || track.segments.length <= 1) return;
   track.segments.splice(index, 1);
+  if (selectedSegment && selectedSegment.trackIndex === trackIndex && selectedSegment.segId === segId) {
+    selectedSegment = null;
+    timelineHint.textContent = t("timelineHintDefault");
+  }
   renderTimeline();
-  selectedSegment = null;
-  timelineHint.textContent = t("timelineHintDefault");
+}
+
+function deleteSelectedSegment() {
+  if (!selectedSegment) return;
+  const { trackIndex, segId } = selectedSegment;
+  deleteSegmentById(trackIndex, segId);
+}
+
+function optimizeTimelineTracks(mode = "normal") {
+  const aggressive = mode === "aggressive";
+  const aggrConfig = aggressive ? getAggressiveOptimizeConfig() : null;
+  let beforeCount = 0;
+  let afterCount = 0;
+  let mergedCount = 0;
+  let removedCount = 0;
+  let trimmedCount = 0;
+  let changed = false;
+
+  timelineModel.forEach((track) => {
+    const raw = Array.isArray(track.segments) ? track.segments : [];
+    beforeCount += raw.length;
+    const sorted = raw
+      .map((seg, index) => {
+        const left = Math.max(0, Math.min(99.5, Number(seg.left || 0)));
+        const width = Math.max(0.2, Math.min(100 - left, Number(seg.width || 0)));
+        return {
+          id: String(seg.id || `${track.label.toLowerCase()}-${Date.now()}-${index}`),
+          title: String(seg.title || track.label),
+          left,
+          width,
+          color: String(seg.color || raw[0]?.color || "#3f78ff"),
+        };
+      })
+      .sort((a, b) => a.left - b.left);
+
+    const compacted = [];
+    sorted.forEach((seg) => {
+      const segEnd = Math.min(100, seg.left + seg.width);
+      const segWidth = Math.max(0.2, segEnd - seg.left);
+      const dropThreshold = aggressive ? aggrConfig.dropThreshold : 1.0;
+      if (segWidth < dropThreshold) {
+        removedCount += 1;
+        changed = true;
+        return;
+      }
+      const normalized = { ...seg, width: segWidth };
+      const prev = compacted[compacted.length - 1];
+      if (!prev) {
+        compacted.push(normalized);
+        return;
+      }
+      const prevEnd = prev.left + prev.width;
+      const gap = normalized.left - prevEnd;
+      const shouldMerge = aggressive
+        ? gap <= aggrConfig.mergeGap || normalized.width < 6 || prev.width < 6
+        : gap <= 1.2 || normalized.width < 4 || prev.width < 4;
+      if (shouldMerge) {
+        const mergedEnd = Math.max(prevEnd, normalized.left + normalized.width);
+        prev.width = Math.max(0.2, Math.min(100 - prev.left, mergedEnd - prev.left));
+        if ((normalized.title || "").length > (prev.title || "").length) {
+          prev.title = normalized.title;
+        }
+        mergedCount += 1;
+        changed = true;
+        return;
+      }
+      compacted.push(normalized);
+    });
+
+    if (aggressive && compacted.length > aggrConfig.maxSegments) {
+      compacted.sort((a, b) => b.width - a.width);
+      const kept = compacted.slice(0, aggrConfig.maxSegments).sort((a, b) => a.left - b.left);
+      trimmedCount += compacted.length - kept.length;
+      compacted.length = 0;
+      kept.forEach((seg) => compacted.push(seg));
+      changed = true;
+    }
+
+    if (!compacted.length && sorted.length) {
+      const fallback = sorted.reduce((best, cur) => (cur.width > best.width ? cur : best), sorted[0]);
+      compacted.push({ ...fallback, left: Math.max(0, Math.min(96, fallback.left)), width: Math.max(4, fallback.width) });
+      changed = true;
+    }
+
+    afterCount += compacted.length;
+    if (compacted.length !== raw.length) changed = true;
+    track.segments = compacted;
+  });
+
+  if (!changed) {
+    pushMessage("assistant", t("msgTimelineOptimizeNoop"));
+    return;
+  }
+  renderTimeline();
+  if (selectedSegment) {
+    const currentTrack = timelineModel[selectedSegment.trackIndex];
+    const exists = currentTrack?.segments?.some((seg) => seg.id === selectedSegment.segId);
+    if (!exists) selectedSegment = null;
+  }
+  if (!selectedSegment) {
+    timelineHint.textContent = t("timelineHintDefault");
+  }
+  pushMessage(
+    "assistant",
+    t(aggressive ? "msgTimelineOptimizedAggressive" : "msgTimelineOptimized", {
+      before: beforeCount,
+      after: afterCount,
+      merged: mergedCount,
+      removed: removedCount,
+      trimmed: trimmedCount,
+    })
+  );
 }
 
 function renderTimeline() {
@@ -842,6 +1197,7 @@ function renderTimeline() {
     row.appendChild(bar);
     timelineTracks.appendChild(row);
   });
+  syncTimelineWithEngine();
 }
 
 function getDurationSelection() {
@@ -1017,6 +1373,265 @@ async function buildVeoImageInputFromAssets() {
     image_base64: m[2],
     image_asset_name: imageAsset.name || "image",
   };
+}
+
+async function ensureVideoDataUrl(assetUrl) {
+  if (!assetUrl) return "";
+  if (assetUrl.startsWith("data:video/")) return assetUrl;
+  const resp = await fetch(assetUrl);
+  if (!resp.ok) throw new Error(`video blob fetch failed (${resp.status})`);
+  const blob = await resp.blob();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to convert video asset to data URL"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function pickTimelineSourceAsset() {
+  if (previewVideo?.classList.contains("visible")) {
+    const src = String(previewVideo.currentSrc || previewVideo.src || "").trim();
+    if (src && (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:video/"))) {
+      return { url: src, name: "preview-video" };
+    }
+  }
+  const active = assets.find((item) => item.id === activeAssetId && item.type === "video");
+  if (active) return active;
+  return assets.find((item) => item.type === "video") || null;
+}
+
+function buildTimelineRenderPayload(sourceVideoUrl) {
+  return {
+    source_video_url: sourceVideoUrl,
+    proxy: (proxyInput.value || "").trim() || undefined,
+    duration_seconds: Number(currentDuration) > 0 ? Number(currentDuration) : undefined,
+    include_audio: true,
+    tracks: timelineModel.map((track) => ({
+      label: track.label,
+      track_type: /video/i.test(track.label) ? "video" : /voice/i.test(track.label) ? "voice" : /subtitle/i.test(track.label) ? "subtitle" : /bgm/i.test(track.label) ? "bgm" : "other",
+      segments: (track.segments || []).map((seg) => ({
+        id: seg.id,
+        title: seg.title,
+        left: Number(seg.left || 0),
+        width: Number(seg.width || 0),
+      })),
+    })),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function formatDurationSeconds(ms) {
+  return (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
+}
+
+function getTimelinePerfAdvice(totalSeconds, renderSeconds, segments) {
+  const segCount = Math.max(0, Number(segments) || 0);
+  const total = Math.max(0, Number(totalSeconds) || 0);
+  const render = Math.max(0, Number(renderSeconds) || 0);
+  if (segCount >= 18 || total >= 80 || render >= 45) {
+    return t("msgTimelinePerfHeavy", { segments: segCount, total: total.toFixed(1) });
+  }
+  if (segCount >= 10 || total >= 35 || render >= 18) {
+    return t("msgTimelinePerfModerate", { segments: segCount, total: total.toFixed(1) });
+  }
+  return t("msgTimelinePerfGood", { segments: segCount, total: total.toFixed(1) });
+}
+
+function syncAggressiveOptimizeValueBadges() {
+  if (aggrDropThresholdRange && aggrDropThresholdValue) {
+    aggrDropThresholdValue.textContent = Number(aggrDropThresholdRange.value || 1.8).toFixed(1);
+  }
+  if (aggrMergeGapRange && aggrMergeGapValue) {
+    aggrMergeGapValue.textContent = Number(aggrMergeGapRange.value || 2.2).toFixed(1);
+  }
+  if (aggrMaxSegmentsRange && aggrMaxSegmentsValue) {
+    aggrMaxSegmentsValue.textContent = String(Math.round(Number(aggrMaxSegmentsRange.value || 6)));
+  }
+}
+
+function getAggressiveOptimizeConfig() {
+  return {
+    dropThreshold: Math.max(0.8, Math.min(4.0, Number(aggrDropThresholdRange?.value || 1.8))),
+    mergeGap: Math.max(0.8, Math.min(5.0, Number(aggrMergeGapRange?.value || 2.2))),
+    maxSegments: Math.max(3, Math.min(12, Math.round(Number(aggrMaxSegmentsRange?.value || 6)))),
+  };
+}
+
+function setTimelineRenderProgress(progress, reveal = true) {
+  if (!timelineRenderProgress || !timelineRenderProgressFill || !timelineRenderProgressText) return;
+  const safe = Math.max(0, Math.min(100, Math.round(Number(progress) || 0)));
+  timelineRenderProgress.hidden = !reveal;
+  timelineRenderProgressFill.style.width = `${safe}%`;
+  timelineRenderProgressText.textContent = `${safe}%`;
+}
+
+function resetTimelineRenderStats() {
+  if (!timelineRenderStats) return;
+  timelineRenderStats.hidden = true;
+  timelineRenderStats.textContent = "";
+}
+
+function setTimelineRenderUiRunning(running) {
+  if (cancelTimelineRenderBtn) {
+    cancelTimelineRenderBtn.hidden = !running;
+    cancelTimelineRenderBtn.disabled = !running;
+  }
+  if (timelineRenderProgress) timelineRenderProgress.hidden = !running;
+  if (!running) {
+    setTimelineRenderProgress(0, false);
+  }
+}
+
+async function cancelTimelineRenderJobIfAny(quiet = false) {
+  if (!activeTimelineRenderJobId) return;
+  const backendUrl = (backendUrlInput.value || "").trim().replace(/\/+$/, "");
+  if (!backendUrl) {
+    activeTimelineRenderJobId = "";
+    return;
+  }
+  try {
+    await fetchWithTimeout(
+      `${backendUrl}/api/video/timeline/render/cancel`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: activeTimelineRenderJobId }),
+      },
+      12000
+    );
+    if (!quiet) pushMessage("assistant", t("msgTimelineRenderCancelled"));
+  } catch (_) {
+    // Ignore cancel errors; local state cleanup is enough.
+  } finally {
+    activeTimelineRenderJobId = "";
+    setTimelineRenderUiRunning(false);
+  }
+}
+
+async function tryTimelineRenderExport() {
+  if (!useTwickToggle?.checked) return false;
+  const sourceAsset = pickTimelineSourceAsset();
+  if (!sourceAsset) {
+    pushMessage("assistant", t("msgTimelineNoSource"));
+    return false;
+  }
+  const backendUrl = (backendUrlInput.value || "").trim().replace(/\/+$/, "");
+  if (!backendUrl) throw new Error(t("errBackendUrlRequired"));
+  await cancelTimelineRenderJobIfAny(true);
+  timelineRenderTiming = { startedAt: Date.now(), queuedAt: 0, runningAt: 0 };
+  resetTimelineRenderStats();
+  setTimelineRenderUiRunning(true);
+  setTimelineRenderProgress(0);
+  pushMessage("assistant", t("msgStartTimelineRender"));
+  let sourceUrl = String(sourceAsset.url || "").trim();
+  if (!/^https?:\/\//i.test(sourceUrl) && !sourceUrl.startsWith("data:video/")) {
+    sourceUrl = await ensureVideoDataUrl(sourceUrl);
+  }
+  const payload = buildTimelineRenderPayload(sourceUrl);
+  payload.async_job = true;
+  const resp = await fetchWithTimeout(
+    `${backendUrl}/api/video/timeline/render`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    25000
+  );
+  const data = await resp.json();
+  if (!resp.ok || data?.ok === false || !data?.job_id) {
+    throw new Error(data?.error || `timeline render failed (${resp.status})`);
+  }
+  activeTimelineRenderJobId = data.job_id;
+  timelineRenderTiming.queuedAt = Date.now();
+  pushMessage("assistant", t("msgTimelineRenderQueued"));
+  const pollIntervals = [1200, 1800, 2400, 3200, 4200, 5200];
+  let pollRound = 0;
+  let lastProgress = -1;
+  let lastProgressMsgBucket = -1;
+  while (activeTimelineRenderJobId) {
+    const statusResp = await fetchWithTimeout(
+      `${backendUrl}/api/video/timeline/render/status?job_id=${encodeURIComponent(activeTimelineRenderJobId)}`,
+      { method: "GET" },
+      18000
+    );
+    const statusData = await statusResp.json();
+    if (!statusResp.ok || statusData?.ok === false) {
+      throw new Error(statusData?.error || `timeline render status failed (${statusResp.status})`);
+    }
+    const status = String(statusData?.status || "");
+    const progress = Number(statusData?.progress || 0);
+    if (status === "running" && !timelineRenderTiming.runningAt) {
+      timelineRenderTiming.runningAt = Date.now();
+    }
+    if (progress !== lastProgress && progress >= 0) {
+      const progressBucket = Math.floor(progress / 10);
+      if (progressBucket > lastProgressMsgBucket || progress >= 100) {
+        pushMessage("assistant", t("msgTimelineRenderProgress", { progress }));
+        lastProgressMsgBucket = progressBucket;
+      }
+      previewStatus.style.display = "block";
+      previewStatus.textContent = `${Math.max(0, Math.min(100, Math.round(progress)))}%`;
+      setTimelineRenderProgress(progress);
+      lastProgress = progress;
+    }
+    if (status === "done") {
+      const done = statusData?.result || {};
+      if (!done?.video_url) throw new Error("timeline render completed but no video_url");
+      activeTimelineRenderJobId = "";
+      previewImage.classList.remove("visible");
+      previewVideo.src = done.video_url;
+      previewVideo.classList.add("visible");
+      previewStatus.style.display = "none";
+      previewHint.textContent = currentLang === "zh" ? "已加载时间线导出视频。" : "Timeline export loaded.";
+      previewVideo.onloadedmetadata = () => {
+        currentDuration = Math.max(1, Math.floor(previewVideo.duration || currentDuration));
+        updateTimecode(0, currentDuration);
+      };
+      setStep("export", "done");
+      pushMessage("assistant", t("msgTimelineRendered"));
+      scriptSync.textContent = t("exportComplete");
+      const doneAt = Date.now();
+      const queueMs = Math.max(0, (timelineRenderTiming.runningAt || doneAt) - (timelineRenderTiming.queuedAt || timelineRenderTiming.startedAt || doneAt));
+      const renderMs = Math.max(0, doneAt - (timelineRenderTiming.runningAt || timelineRenderTiming.queuedAt || doneAt));
+      const totalMs = Math.max(0, doneAt - (timelineRenderTiming.startedAt || doneAt));
+      const queueSec = formatDurationSeconds(queueMs);
+      const renderSec = formatDurationSeconds(renderMs);
+      const totalSec = formatDurationSeconds(totalMs);
+      const segmentsRendered = Number(done?.segments_rendered || 0);
+      const timingMsg = t("msgTimelineRenderTiming", {
+        queue: queueSec,
+        render: renderSec,
+        total: totalSec,
+      });
+      if (timelineRenderStats) {
+        timelineRenderStats.hidden = false;
+        timelineRenderStats.textContent = timingMsg;
+      }
+      pushMessage("assistant", timingMsg);
+      pushMessage("assistant", getTimelinePerfAdvice(Number(totalSec), Number(renderSec), segmentsRendered));
+      setTimelineRenderUiRunning(false);
+      return true;
+    }
+    if (status === "failed") {
+      activeTimelineRenderJobId = "";
+      throw new Error(statusData?.error || "timeline render failed");
+    }
+    if (status === "cancelled") {
+      activeTimelineRenderJobId = "";
+      setTimelineRenderUiRunning(false);
+      throw new Error(currentLang === "zh" ? "时间线渲染已取消" : "Timeline render cancelled");
+    }
+    const waitMs = pollIntervals[Math.min(pollRound, pollIntervals.length - 1)];
+    pollRound += 1;
+    await sleep(waitMs);
+  }
+  setTimelineRenderUiRunning(false);
+  throw new Error(currentLang === "zh" ? "时间线任务中断" : "Timeline render interrupted");
 }
 
 function applyValidationIssues(issues = []) {
@@ -1243,6 +1858,13 @@ async function sendMessage() {
 }
 
 async function handleExport() {
+  try {
+    if (await tryTimelineRenderExport()) return;
+  } catch (error) {
+    await cancelTimelineRenderJobIfAny(true);
+    setTimelineRenderUiRunning(false);
+    pushMessage("assistant", t("msgTimelineRenderFailed", { error: error.message }));
+  }
   const checked = await ensurePrdRequirements();
   if (!checked.ok) return;
   const precheck = await callBackendWorkflow("pre_export_check", scriptEditor.value);
@@ -1318,10 +1940,20 @@ async function handleExport() {
     let rounds = 0;
     let doneWithoutVideoRounds = 0;
     let policyRetried = false;
+    const transientBackoff = createTransientBackoffByPreset("studioExport");
     pollTimer = setInterval(async () => {
+      if (transientBackoff.active()) return;
       rounds += 1;
       try {
         const data = await pollVeoStatus(ctx);
+        if (data?.transient) {
+          const retryAttempts = Math.max(0, Number(data?.retry_attempts || 0));
+          transientBackoff.apply(retryAttempts);
+          if (transientBackoff.shouldNotify()) {
+            pushMessage("assistant", t("msgPollTransient", { retry: retryAttempts }));
+          }
+          return;
+        }
         const done = Boolean(data?.response?.done);
         const opError =
           data?.response?.error?.message ||
@@ -1340,11 +1972,21 @@ async function handleExport() {
           ctx = await callBackendVeoExport(promptSafe);
           rounds = 0;
           doneWithoutVideoRounds = 0;
+          transientBackoff.reset();
           pushMessage("assistant", t("msgTaskSubmitted", { name: ctx.operationName }));
           pollTimer = setInterval(async () => {
+            if (transientBackoff.active()) return;
             rounds += 1;
             try {
               const data2 = await pollVeoStatus(ctx);
+              if (data2?.transient) {
+                const retryAttempts2 = Math.max(0, Number(data2?.retry_attempts || 0));
+                transientBackoff.apply(retryAttempts2);
+                if (transientBackoff.shouldNotify()) {
+                  pushMessage("assistant", t("msgPollTransient", { retry: retryAttempts2 }));
+                }
+                return;
+              }
               const done2 = Boolean(data2?.response?.done);
               const opError2 =
                 data2?.response?.error?.message ||
@@ -1441,6 +2083,8 @@ function resetTask() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  void cancelTimelineRenderJobIfAny(true);
+  resetTimelineRenderStats();
   assets.forEach((item) => URL.revokeObjectURL(item.url));
   assets.splice(0, assets.length);
   activeAssetId = null;
@@ -1518,9 +2162,29 @@ quickActionButtons.forEach((button) => {
 
 scriptEditor.addEventListener("input", updateCounter);
 exportBtn.addEventListener("click", handleExport);
+if (cancelTimelineRenderBtn) {
+  cancelTimelineRenderBtn.addEventListener("click", async () => {
+    pushMessage("assistant", t("msgTimelineRenderCancelling"));
+    await cancelTimelineRenderJobIfAny(false);
+    resetTimelineRenderStats();
+    setTimelineRenderUiRunning(false);
+  });
+}
 newTaskBtn.addEventListener("click", resetTask);
 splitSegBtn.addEventListener("click", splitSelectedSegment);
 deleteSegBtn.addEventListener("click", deleteSelectedSegment);
+if (optimizeTimelineBtn) optimizeTimelineBtn.addEventListener("click", optimizeTimelineTracks);
+if (aggressiveOptimizeTimelineBtn) {
+  aggressiveOptimizeTimelineBtn.addEventListener("click", () => optimizeTimelineTracks("aggressive"));
+}
+if (aggrDropThresholdRange) aggrDropThresholdRange.addEventListener("input", syncAggressiveOptimizeValueBadges);
+if (aggrMergeGapRange) aggrMergeGapRange.addEventListener("input", syncAggressiveOptimizeValueBadges);
+if (aggrMaxSegmentsRange) aggrMaxSegmentsRange.addEventListener("input", syncAggressiveOptimizeValueBadges);
+if (useTwickToggle) {
+  useTwickToggle.addEventListener("change", () => {
+    setTimelineEngine(useTwickToggle.checked ? "twick" : "native");
+  });
+}
 
 playPauseBtn.addEventListener("click", () => {
   if (!previewVideo.classList.contains("visible")) return;
@@ -1582,12 +2246,15 @@ projectIdInput.value = "gemini-sl-20251120";
 modelInput.value = "azure-gpt-5";
 veoDurationInput.value = "8";
 applyLang(currentLang);
+syncAggressiveOptimizeValueBadges();
 scriptEditor.value = defaultScript;
 updateCounter();
 renderTimeline();
+setTimelineEngine(useTwickToggle?.checked ? "twick" : "native");
 renderAssets();
 renderPointSuggestions(inferPointOptions());
 updateTimecode(0, currentDuration);
 ingestGeneratedImageFromSession();
 resetFlow();
 setPrdGate("bad", t("gateNotReady"));
+setTimelineRenderUiRunning(false);

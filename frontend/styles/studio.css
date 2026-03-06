@@ -227,6 +227,12 @@ textarea {
   cursor: pointer;
 }
 
+.video-export-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .export-btn {
   background: #121623;
   color: #fff;
@@ -464,6 +470,43 @@ textarea {
   font-size: 12px;
 }
 
+.timeline-render-progress {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-render-progress-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: #d9e2f1;
+  overflow: hidden;
+}
+
+#timelineRenderProgressFill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3c71f7, #60a5ff);
+  transition: width 0.25s ease;
+}
+
+#timelineRenderProgressText {
+  font-size: 11px;
+  color: #4f5f85;
+  min-width: 38px;
+  text-align: right;
+}
+
+.timeline-render-stats {
+  margin: 6px 0 0;
+  color: #5f6f93;
+  font-size: 11px;
+}
+
 .timeline-toolbar {
   height: 40px;
   border-top: 1px solid var(--line);
@@ -508,10 +551,166 @@ textarea {
   cursor: pointer;
 }
 
+.twick-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #4f5a75;
+}
+
+.twick-toggle input {
+  margin: 0;
+}
+
 #timelineHint {
   margin-left: auto;
   font-size: 11px;
   color: #6d7892;
+}
+
+.timeline-optimize-config {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f9fbff;
+}
+
+.timeline-optimize-config label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  color: #526186;
+}
+
+.timeline-optimize-config input[type="range"] {
+  width: 100%;
+}
+
+.timeline-optimize-config b {
+  min-width: 30px;
+  text-align: right;
+  color: #31466f;
+}
+
+.twick-timeline-host {
+  margin: 10px;
+  min-height: 120px;
+  border: 1px dashed #cfd8ea;
+  border-radius: 10px;
+  background: #f7f9fe;
+  padding: 10px;
+}
+
+.twick-mvp-root {
+  display: grid;
+  gap: 8px;
+}
+
+.twick-mvp-header {
+  font-size: 12px;
+  color: #445070;
+  font-weight: 600;
+}
+
+.twick-mvp-track {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.twick-mvp-track-label {
+  font-size: 11px;
+  color: #516082;
+  padding-top: 8px;
+}
+
+.twick-mvp-segments {
+  display: grid;
+  gap: 8px;
+}
+
+.twick-mvp-add-btn {
+  justify-self: start;
+  border: 1px solid #ccd6ea;
+  background: #fff;
+  color: #3d4c70;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.twick-mvp-seg {
+  border: 1px solid #d4ddef;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.twick-mvp-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.twick-mvp-seg-title {
+  font-size: 11px;
+  color: #2e3d5d;
+  padding-left: 6px;
+  margin-bottom: 8px;
+  flex: 1;
+}
+
+.twick-mvp-del-btn {
+  border: 1px solid #e0c3c9;
+  background: #fff7f9;
+  color: #a23f58;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.twick-mvp-dup-btn {
+  border: 1px solid #c9d5ee;
+  background: #f4f8ff;
+  color: #365b95;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.twick-mvp-title-input {
+  width: 100%;
+  border: 1px solid #d6dff0;
+  background: #fff;
+  color: #2a3a59;
+  border-radius: 6px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.twick-mvp-row {
+  display: grid;
+  grid-template-columns: 46px 1fr 50px;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #5f6e90;
+}
+
+.twick-mvp-row input[type="range"] {
+  width: 100%;
 }
 
 .timeline-tracks {
@@ -729,6 +928,17 @@ textarea {
 .export-btn.loading {
   opacity: 0.75;
   cursor: progress;
+}
+
+#cancelTimelineRenderBtn {
+  border-color: #e5bcc6;
+  background: #fff6f8;
+  color: #a53c54;
+}
+
+#cancelTimelineRenderBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 @media (max-width: 1380px) {

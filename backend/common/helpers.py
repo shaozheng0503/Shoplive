@@ -1005,6 +1005,63 @@ def build_shoplive_image_prompt_safe_product_only(payload: Dict) -> str:
 # Video concatenation (16s prompt-split workflow)
 # ---------------------------------------------------------------------------
 
+def normalize_timeline_video_segments(
+    tracks: List[Dict[str, Any]],
+    duration_seconds: float,
+    *,
+    min_seconds: float = 0.05,
+    max_segments: int = 80,
+    sort_strategy: str = "track_then_start",
+) -> List[Dict[str, float]]:
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be > 0")
+    normalized: List[Dict[str, float]] = []
+    for track_index, t in enumerate(tracks or []):
+        if not isinstance(t, dict):
+            continue
+        if not bool(t.get("enabled", True)):
+            continue
+        track_type = str(t.get("track_type") or "").strip().lower()
+        label = str(t.get("label") or "").strip().lower()
+        if track_type and track_type != "video":
+            continue
+        if not track_type and label and "video" not in label:
+            continue
+        segments = t.get("segments") or []
+        if not isinstance(segments, list):
+            continue
+        for seg in segments:
+            if not isinstance(seg, dict):
+                continue
+            start_seconds = seg.get("start_seconds")
+            end_seconds = seg.get("end_seconds")
+            if start_seconds is not None or end_seconds is not None:
+                start = float(start_seconds or 0.0)
+                end = float(end_seconds if end_seconds is not None else duration_seconds)
+            else:
+                left = float(seg.get("left", 0.0))
+                width = float(seg.get("width", 0.0))
+                start = duration_seconds * max(0.0, min(100.0, left)) / 100.0
+                end = duration_seconds * max(0.0, min(100.0, left + width)) / 100.0
+            start = max(0.0, min(duration_seconds, start))
+            end = max(0.0, min(duration_seconds, end))
+            if end - start < min_seconds:
+                continue
+            normalized.append({
+                "start": start,
+                "end": end,
+                "track_index": float(track_index),
+                "track_order": float(t.get("order", 0)),
+            })
+    if sort_strategy == "start_then_track":
+        normalized.sort(key=lambda x: (x["start"], x["track_order"], x["track_index"], x["end"]))
+    else:
+        normalized.sort(key=lambda x: (x["track_order"], x["track_index"], x["start"], x["end"]))
+    if len(normalized) > max_segments:
+        raise ValueError(f"Too many timeline segments: {len(normalized)} > {max_segments}")
+    return normalized
+
+
 def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_seconds: int = 120) -> Path:
     if len(video_paths) < 2:
         raise ValueError("concat_videos_ffmpeg requires at least 2 video files")

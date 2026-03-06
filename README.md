@@ -223,6 +223,7 @@ PORT=8010 python3 -m shoplive.backend.run
 ### 视频编辑导出
 
 - `POST /api/video/edit/export`
+- `POST /api/video/timeline/render`（MVP：按时间线片段渲染并导出）
 - 导出访问：`GET /video-edits/<filename>`
 
 ## 接口调用示例
@@ -322,6 +323,21 @@ curl -sS -X POST "http://127.0.0.1:8000/api/video/edit/export" \
   }'
 ```
 
+### 3.1) 按时间线渲染导出（MVP）
+
+```bash
+curl -sS -X POST "http://127.0.0.1:8000/api/video/timeline/render" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_video_url":"data:video/mp4;base64,<省略>",
+    "duration_seconds":8,
+    "include_audio":true,
+    "tracks":[
+      {"label":"Video","track_type":"video","segments":[{"left":0,"width":40},{"left":40,"width":60}]}
+    ]
+  }'
+```
+
 ### 4) 查询工具清单（Agent 发现）
 
 ```bash
@@ -371,7 +387,7 @@ curl "http://127.0.0.1:8000/api/health"
 # 安装 pytest（仅需一次）
 pip install pytest
 
-# 运行全部测试（86 tests，~0.3s，无需任何外部服务）
+# 运行全部测试（97 tests，~0.6s，无需任何外部服务）
 python3 -m pytest backend/tests/ -v
 ```
 
@@ -379,9 +395,10 @@ python3 -m pytest backend/tests/ -v
 
 | 文件 | 测试数 | 覆盖内容 |
 |------|--------|---------|
-| `test_schemas.py` | 39 | 全部 10 个 Pydantic schema 的枚举、边界、必填校验 |
+| `test_schemas.py` | 45 | Pydantic schema 的枚举、边界、必填校验（含 timeline render 请求） |
 | `test_audit.py` | 23 | AuditLogger buffer/stats/trace 过滤/文件持久化/线程安全 |
 | `test_validation.py` | 23 | validate_request 装饰器正常路径 + 13 种错误路径 |
+| `test_helpers_timeline.py` | 6 | 时间线片段归一化、边界过滤、片段数量限制 |
 
 ---
 
