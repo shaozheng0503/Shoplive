@@ -659,6 +659,12 @@ def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    # Prevent browsers from caching JS/CSS so code changes take effect immediately
+    ct = resp.content_type or ""
+    if "javascript" in ct or "css" in ct or request.path.endswith((".js", ".css")):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
     return resp
 
 

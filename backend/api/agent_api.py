@@ -769,13 +769,6 @@ def register_agent_routes(
             top_p = req.top_p
             stream = bool(req.stream)
 
-            if not api_key:
-                return json_error(
-                    "agent api_key 不能为空（可通过 payload.api_key 或 LITELLM_API_KEY 提供）",
-                    recovery_suggestion="Set api_key in the request payload, or configure the "
-                                        "LITELLM_API_KEY environment variable in .env file.",
-                    error_code="MISSING_API_KEY",
-                )
             if not model:
                 return json_error(
                     "agent model 不能为空",

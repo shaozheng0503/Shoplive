@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="/styles/agent.css" />
   </head>
   <body>
+  <script>
+  (function(){
+    var E=function(msg){var d=document.getElementById('__err');if(!d){d=document.createElement('div');d.id='__err';d.style.cssText='position:fixed;top:0;left:0;right:0;background:#c00;color:#fff;z-index:999999;padding:12px 16px;font:13px/1.5 monospace;word-break:break-all;white-space:pre-wrap;';document.body.appendChild(d);}d.textContent+=msg+'\n';};
+    window.addEventListener('error',function(e){E('JS ERROR: '+e.message+'\n  at '+e.filename+':'+e.lineno);});
+    window.addEventListener('unhandledrejection',function(e){E('PROMISE REJECT: '+(e.reason&&e.reason.message?e.reason.message:String(e.reason)));});
+    document.addEventListener('DOMContentLoaded',function(){
+      var btn=document.getElementById('sendBtn');
+      if(btn){btn.addEventListener('click',function(){console.log('[TEST] sendBtn click fired');},true);}
+    });
+  })();
+  </script>
     <main class="agent-page">
       <header class="agent-topbar">
         <div class="brand">
@@ -96,6 +107,6 @@
       </section>
     </main>
 
-    <script type="module" src="/scripts/entry/agent.main.js"></script>
+    <script type="module" src="/scripts/entry/agent.main.js?v=20260309b"></script>
   </body>
 </html>

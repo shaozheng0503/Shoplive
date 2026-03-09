@@ -845,14 +845,9 @@ function scrollToBottom() {
 
 function updateChatTailWindow() {
   if (!chatList) return;
-  const isSplitMode = Boolean(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
+  // Remove any previously collapsed state — chat column is fully scrollable
   const nodes = Array.from(chatList.querySelectorAll(":scope > article.msg"));
   nodes.forEach((el) => el.classList.remove("is-history-collapsed"));
-  if (!isSplitMode || nodes.length <= CHAT_TAIL_LIMIT_WHEN_SPLIT) return;
-  const hideCount = nodes.length - CHAT_TAIL_LIMIT_WHEN_SPLIT;
-  for (let i = 0; i < hideCount; i += 1) {
-    nodes[i].classList.add("is-history-collapsed");
-  }
 }
 
 function focusWorkspaceTop() {
@@ -1657,6 +1652,32 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function setupSurfaceFullscreen(surface) {
+  if (!surface || surface.dataset.fsSetup) return;
+  surface.dataset.fsSetup = "1";
+
+  // Custom fullscreen button (shows on hover)
+  const btn = document.createElement("button");
+  btn.className = "video-fs-btn";
+  btn.type = "button";
+  btn.setAttribute("aria-label", currentLang === "zh" ? "全屏预览（含蒙版/调色效果）" : "Fullscreen preview (with effects)");
+  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const req = surface.requestFullscreen || surface.webkitRequestFullscreen;
+    if (req) req.call(surface).then(() => applyVideoEditsToPreview()).catch(() => {});
+  });
+  surface.appendChild(btn);
+
+  // Re-apply all effects when fullscreen is entered (sizes may change)
+  const onFsChange = () => {
+    const isFs = document.fullscreenElement === surface || document.webkitFullscreenElement === surface;
+    if (isFs) applyVideoEditsToPreview();
+  };
+  surface.addEventListener("fullscreenchange", onFsChange);
+  surface.addEventListener("webkitfullscreenchange", onFsChange);
+}
+
 function setupMaskDrag(surface) {
   if (!surface || surface.dataset.maskDragBound) return;
   surface.dataset.maskDragBound = "1";
@@ -1867,7 +1888,7 @@ function renderVideoEditor() {
   const moduleEditorHtml =
     activeModule === "mask"
       ? `
-        <label>${t("textMaskText")}<input id="maskTextInput" value="${sanitizeInputValue(fx.maskText)}" placeholder="${currentLang === \"zh\" ? \"输入文字蒙版内容…\" : \"Enter overlay text…\"}" /></label>
+        <label>${t("textMaskText")}<input id="maskTextInput" value="${sanitizeInputValue(fx.maskText)}" placeholder="${currentLang === 'zh' ? '输入文字蒙版内容…' : 'Enter overlay text…'}" /></label>
         <p class="editor-note" style="margin:4px 0 8px;">${t("textMaskDragHint")}</p>
         <label>${t("textMaskStyle")}</label>
         <div class="mask-preset-grid">${maskPresetCardsHtml}</div>
@@ -1929,7 +1950,7 @@ function renderVideoEditor() {
           `;
   const maxSec = getVideoDurationSec();
   const videoBlock = state.lastVideoUrl
-    ? `<div class="video-edit-surface"><video controls src="${state.lastVideoUrl}"></video></div>`
+    ? `<div class="video-edit-surface"><video controls controlslist="nofullscreen" src="${state.lastVideoUrl}"></video></div>`
     : `<div class="empty-video">${currentLang === "zh" ? "暂无视频，请先生成一次视频。" : "No video yet. Generate one first."}</div>`;
   videoEditorPanel.innerHTML = `
     <div class="editor-head">
@@ -2440,9 +2461,12 @@ function renderVideoEditor() {
     applyVideoEditsToPreview();
   });
   applyVideoEditsToPreview();
-  // Enable drag-to-reposition on the editor panel's video surface
+  // Enable drag-to-reposition and fullscreen on the editor panel's video surface
   const editorSurface = videoEditorPanel.querySelector(".video-edit-surface");
-  if (editorSurface) setupMaskDrag(editorSurface);
+  if (editorSurface) {
+    setupMaskDrag(editorSurface);
+    setupSurfaceFullscreen(editorSurface);
+  }
 }
 
 function openEditorPanel(type) {
@@ -3147,6 +3171,12 @@ function sanitizePromptForUser(raw = "") {
   let text = String(raw || "").trim();
   if (!text) return "";
   text = text
+    // Strip markdown headings
+    .replace(/^#{1,6}\s+/gm, "")
+    // Strip bold/italic markers
+    .replace(/\*{1,3}([^*]+)\*{1,3}/g, "$1")
+    .replace(/_{1,2}([^_]+)_{1,2}/g, "$1")
+    // Strip framework header labels
     .replace(/(?:^|\n)\s*主框架\s*[：:]\s*[^\n；;]*[；;]?\s*/g, "\n")
     .replace(/(?:^|\n)\s*辅助框架\s*[：:]\s*[^\n；;]*[；;]?\s*/g, "\n")
     .replace(/(?:^|\n)\s*primary\s*framework\s*:\s*[^\n;；]*[;；]?\s*/gi, "\n")
@@ -3421,6 +3451,9 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   video.controls = true;
   video.preload = "metadata";
   video.playsInline = true;
+  // Disable native video fullscreen so the surface-level fullscreen (which
+  // keeps overlays, color filter and BGM visible) is used instead.
+  video.controlsList?.add?.("nofullscreen");
   video.src = finalPlayableUrl;
   let idx = 0;
   let refreshedByOp = false;
@@ -3456,6 +3489,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.");
   });
   surface.appendChild(video);
+  setupSurfaceFullscreen(surface);
 
   const actions = document.createElement("div");
   actions.className = "video-actions";
@@ -3468,20 +3502,33 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   card.appendChild(surface);
   card.appendChild(actions);
   chatList.appendChild(card);
-  // Restore this card's snapshot before opening the editor, so concurrent videos
-  // don't bleed into each other's edit panels.
-  card.querySelector(".openVideoEditorBtn")?.addEventListener("click", () => {
+  // Restore this card's snapshot and open BOTH editor panels (mode-three)
+  // so the full 3-column view is always tied to the clicked video.
+  const openCardEditors = (focusScript = false) => {
     state.lastVideoUrl = cardVideoUrl;
     state.lastPrompt = cardPrompt;
     state.lastStoryboard = cardStoryboard;
-    toggleEditorPanel("video");
-  });
-  card.querySelector(".openScriptEditorBtn")?.addEventListener("click", () => {
-    state.lastVideoUrl = cardVideoUrl;
-    state.lastPrompt = cardPrompt;
-    state.lastStoryboard = cardStoryboard;
-    toggleEditorPanel("script");
-  });
+    state.videoEditorOpen = true;
+    state.scriptEditorOpen = true;
+    applyWorkspaceMode();
+    renderVideoEditor();
+    renderScriptEditor();
+    // Scroll page to top so editor panels are fully visible, then scroll
+    // the chat column to show the specific card that was clicked
+    const page = document.querySelector(".agent-page");
+    if (page) page.scrollIntoView({ block: "start", behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    requestAnimationFrame(() => {
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    if (focusScript) {
+      hydrateWorkflowTexts(true).then(() => {
+        if (state.scriptEditorOpen) renderScriptEditor();
+      });
+    }
+  };
+  card.querySelector(".openVideoEditorBtn")?.addEventListener("click", () => openCardEditors(false));
+  card.querySelector(".openScriptEditorBtn")?.addEventListener("click", () => openCardEditors(true));
   if (taskId && state.taskMap?.[taskId]) {
     updateVideoTask(taskId, { resultCardId: cardId });
   }
@@ -4232,14 +4279,20 @@ async function enhancePromptByAgent() {
             "Must append compliance suffix: clean highlight edges, controlled reflections, clear textures, sharp structure edges, no distorted limbs/structures, no third-party logos/watermarks.",
             "Output only the final prompt text without explanations.",
           ].join("\n");
-    const composedPrompt = [
+    // System message: enhancement instructions (with product constraints)
+    // User message: the raw prompt the user typed — kept separate so LLM
+    // actually focuses on rewriting *that* specific text.
+    const systemContent = [
       templateText || fallbackTemplate,
       `Aspect ratio: ${state.aspectRatio || "16:9"}. Duration: ${state.duration || "8"} seconds.`,
       `Product: ${state.productName || "unknown"}. Business: ${state.mainBusiness || "ecommerce"}. Template: ${state.template || "clean"}.`,
       reviewHint,
-      `User prompt: ${raw}.`,
       "Final output constraint: only one final video prompt text, no markdown, no bullet list, no explanation.",
-    ].join("\n");
+    ].filter(Boolean).join("\n");
+    const enhanceMessages = [
+      { role: "system", content: systemContent },
+      { role: "user", content: raw },
+    ];
     let optimized = "";
     try {
       let streamed = "";
@@ -4248,7 +4301,7 @@ async function enhancePromptByAgent() {
         `${base}/api/agent/chat`,
         {
           model: "bedrock-claude-4-5-haiku",
-          prompt: composedPrompt,
+          messages: enhanceMessages,
           stream: true,
           temperature: 0.4,
           max_tokens: 640,
@@ -4277,20 +4330,18 @@ async function enhancePromptByAgent() {
       try {
         const retryResp = await postJson(
           `${base}/api/agent/chat`,
-          {
-          model: "bedrock-claude-4-5-haiku",
-          messages: [{ role: "user", content: composedPrompt }],
-          },
+          { model: "bedrock-claude-4-5-haiku", messages: enhanceMessages },
           20000
         );
         optimized = String(retryResp?.content || "").trim();
       } catch (_secondErr) {
-        // Both LLM attempts failed — use local template as immediate fallback.
-        optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
+        // Both LLM attempts failed — append framework draft to user's raw input
+        // so at least the user's text is preserved.
+        optimized = sanitizePromptForUser(raw + ". " + buildAutoPromptDraftFromParsed("url"));
       }
     }
     if (!optimized) {
-      optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
+      optimized = sanitizePromptForUser(raw + ". " + buildAutoPromptDraftFromParsed("url"));
     }
     const cleaned = sanitizePromptForUser(optimized);
     chatInput.value = cleaned;
@@ -4750,6 +4801,26 @@ if (taskQueueList) {
   });
 }
 window.addEventListener("resize", () => updateToolbarIndicator());
+
+// If the browser goes fullscreen on a raw <video> inside a .video-edit-surface
+// (e.g. user clicks the native video fullscreen button), redirect to the surface
+// so the text-mask overlay, color filter and BGM remain visible.
+document.addEventListener("fullscreenchange", () => {
+  const fsEl = document.fullscreenElement;
+  if (!fsEl || fsEl.tagName !== "VIDEO") return;
+  const surface = fsEl.closest(".video-edit-surface");
+  if (!surface) return;
+  document.exitFullscreen().then(() => surface.requestFullscreen()).then(() => applyVideoEditsToPreview()).catch(() => {});
+});
+document.addEventListener("webkitfullscreenchange", () => {
+  const fsEl = document.webkitFullscreenElement;
+  if (!fsEl || fsEl.tagName !== "VIDEO") return;
+  const surface = fsEl.closest(".video-edit-surface");
+  if (!surface) return;
+  document.webkitExitFullscreen?.();
+  surface.webkitRequestFullscreen?.();
+  applyVideoEditsToPreview();
+});
 
 applyLang();
 syncSimpleControlsFromState();

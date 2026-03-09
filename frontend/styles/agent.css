@@ -1701,9 +1701,7 @@ body {
   min-height: 0;
 }
 
-.workspace .chat-list .msg.is-history-collapsed {
-  display: none !important;
-}
+/* is-history-collapsed is no longer used — chat column is freely scrollable */
 
 @media (max-width: 980px) {
   .workspace {
@@ -2779,20 +2777,7 @@ body {
   overflow: auto;
 }
 
-/* Keep bubble natural height; only collapse when explicitly marked */
-.workspace.has-editors .chat-list .msg.is-history-collapsed {
-  max-height: 240px;
-  overflow: auto;
-}
-
-.workspace.has-editors .chat-list .msg.is-history-collapsed::-webkit-scrollbar {
-  width: 6px;
-}
-
-.workspace.has-editors .chat-list .msg.is-history-collapsed::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: #b8cbea;
-}
+/* Chat list in split mode: freely scrollable, no message collapsing */
 
 @media (max-width: 980px) {
   .workspace .chat-list {
@@ -2924,4 +2909,62 @@ body {
 #aiGenerateFramesBtn {
   align-self: center;
   white-space: nowrap;
+}
+
+/* ── Custom fullscreen button on video surfaces ─────────────────────────── */
+.video-fs-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 5;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(10, 18, 40, 0.52);
+  color: #ddeeff;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.video-edit-surface:hover .video-fs-btn {
+  opacity: 1;
+}
+.video-fs-btn svg {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
+}
+
+/* ── Fullscreen: surface container becomes the fullscreen element ──────── */
+.video-edit-surface:fullscreen,
+.video-edit-surface:-webkit-full-screen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+/* Video fills height, maintains aspect ratio (may have side letterbox) */
+.video-edit-surface:fullscreen video,
+.video-edit-surface:-webkit-full-screen video {
+  height: 100vh;
+  width: auto;
+  max-width: 100vw;
+  object-fit: contain;
+}
+/* Overlay stays visible and scales font for large screens */
+.video-edit-surface:fullscreen .video-subtitle-overlay,
+.video-edit-surface:-webkit-full-screen .video-subtitle-overlay {
+  z-index: 100;
+  font-size: clamp(18px, 3.5vw, 64px) !important;
+}
+/* Hide the custom fs button when already fullscreen */
+.video-edit-surface:fullscreen .video-fs-btn,
+.video-edit-surface:-webkit-full-screen .video-fs-btn {
+  display: none;
 }
