@@ -168,10 +168,18 @@ const i18n = {
     videoEditHint: "这里是生成后编辑区，只对当前视频做后处理预览，不会改提示词或再次提交生成任务。",
     textMaskTitle: "视频文字蒙版",
     textMaskText: "文案内容",
-    textMaskStyle: "样式预设",
+    textMaskStyle: "样式模板",
+    textMaskFont: "字体",
+    textMaskColor: "颜色",
+    textMaskDragHint: "在视频上拖拽文字可调整位置",
     textMaskElegant: "优雅简洁",
     textMaskBold: "高对比标题",
     textMaskSoft: "柔和叙事",
+    textMaskNeon: "霓虹发光",
+    textMaskLuxury: "奢华金标",
+    textMaskMinimal: "极简下划线",
+    textMaskStamp: "印章描边",
+    textMaskCinematic: "电影字幕",
     positionX: "X 位置",
     positionY: "Y 位置",
     maskWidth: "宽度",
@@ -223,7 +231,8 @@ const i18n = {
     promptLabel: "完整生成视频提示词",
     storyboardLabel: "分镜脚本",
     storyboardRegenerate: "用修改后的脚本重新生成",
-    videoRegenerate: "应用视频编辑（不重新生成）",
+    videoRegenerate: "导出后处理效果",
+    videoDownload: "下载视频",
     videoApplyDone: "视频编辑已导出并应用到预览。",
     videoExporting: "正在导出视频编辑，请稍候...",
     videoExportFail: "视频编辑导出失败，请稍后重试。",
@@ -376,10 +385,18 @@ const i18n = {
     videoEditHint: "Post-generation editor only. Applies local preview edits without changing prompt or submitting new generation jobs.",
     textMaskTitle: "Text mask overlay",
     textMaskText: "Overlay text",
-    textMaskStyle: "Style preset",
+    textMaskStyle: "Style template",
+    textMaskFont: "Font",
+    textMaskColor: "Color",
+    textMaskDragHint: "Drag the text on video to reposition",
     textMaskElegant: "Elegant clean",
     textMaskBold: "High-contrast headline",
     textMaskSoft: "Soft storytelling",
+    textMaskNeon: "Neon glow",
+    textMaskLuxury: "Luxury gold",
+    textMaskMinimal: "Minimal underline",
+    textMaskStamp: "Stamp outline",
+    textMaskCinematic: "Cinematic subtitle",
     positionX: "X position",
     positionY: "Y position",
     maskWidth: "Width",
@@ -431,7 +448,8 @@ const i18n = {
     promptLabel: "Full video generation prompt",
     storyboardLabel: "Storyboard script",
     storyboardRegenerate: "Regenerate with edited script",
-    videoRegenerate: "Apply video edits (no regeneration)",
+    videoRegenerate: "Export post-processing effects",
+    videoDownload: "Download video",
     videoApplyDone: "Video edits exported and applied to preview.",
     videoExporting: "Exporting video edits, please wait...",
     videoExportFail: "Video edit export failed. Please try again.",
@@ -533,6 +551,8 @@ const state = {
   videoEdit: {
     maskText: "ELEGANCE",
     maskStyle: "elegant",
+    maskFont: "sans",
+    maskColor: "#ffffff",
     x: 10,
     y: 0,
     w: 80,
@@ -1637,6 +1657,74 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function setupMaskDrag(surface) {
+  if (!surface || surface.dataset.maskDragBound) return;
+  surface.dataset.maskDragBound = "1";
+  let dragging = false;
+  let startX, startY, startPx, startPy;
+  surface.addEventListener("pointerdown", (ev) => {
+    const overlay = surface.querySelector(".video-subtitle-overlay");
+    if (!overlay) return;
+    const r = overlay.getBoundingClientRect();
+    if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return;
+    ev.preventDefault();
+    dragging = true;
+    surface.setPointerCapture(ev.pointerId);
+    startX = state.videoEdit.x;
+    startY = state.videoEdit.y;
+    startPx = ev.clientX;
+    startPy = ev.clientY;
+    overlay.style.cursor = "grabbing";
+  });
+  surface.addEventListener("pointermove", (ev) => {
+    if (!dragging) return;
+    const sr = surface.getBoundingClientRect();
+    const dx = ((ev.clientX - startPx) / sr.width) * 100;
+    const dy = ((ev.clientY - startPy) / sr.height) * 100;
+    state.videoEdit.x = Math.max(0, Math.min(95, startX + dx));
+    state.videoEdit.y = Math.max(0, Math.min(95, startY + dy));
+    applyVideoEditsToPreview();
+    // Sync sliders + display values in editor panel if open
+    const xr = videoEditorPanel?.querySelector("#maskXRange");
+    const yr = videoEditorPanel?.querySelector("#maskYRange");
+    const xv = videoEditorPanel?.querySelector("#maskXVal");
+    const yv = videoEditorPanel?.querySelector("#maskYVal");
+    const rx = Math.round(state.videoEdit.x);
+    const ry = Math.round(state.videoEdit.y);
+    if (xr) xr.value = String(rx);
+    if (yr) yr.value = String(ry);
+    if (xv) xv.textContent = `${rx}%`;
+    if (yv) yv.textContent = `${ry}%`;
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    const overlay = surface.querySelector(".video-subtitle-overlay");
+    if (overlay) overlay.style.cursor = "grab";
+  };
+  surface.addEventListener("pointerup", endDrag);
+  surface.addEventListener("pointercancel", endDrag);
+}
+
+const MASK_PRESETS = {
+  elegant:    { bg: "transparent",          color: null, shadow: "0 1px 8px rgba(0,0,0,0.6)",  weight: "300", spacing: "0.15em", transform: "uppercase", pad: "0",        radius: "0",   border: "none" },
+  bold:       { bg: "rgba(0,0,0,0.78)",     color: null, shadow: "none",                       weight: "900", spacing: "0.05em", transform: "uppercase", pad: "4px 14px", radius: "4px", border: "none" },
+  soft:       { bg: "rgba(120,160,255,0.18)",color:null,  shadow: "0 1px 4px rgba(0,0,0,0.4)", weight: "400", spacing: "0.08em", transform: "none",      pad: "6px 16px", radius: "20px",border: "1px solid rgba(160,200,255,0.5)" },
+  neon:       { bg: "transparent",          color: "#00f5d4", shadow: "0 0 8px #00f5d4,0 0 22px #00f5d4", weight: "700", spacing: "0.1em",  transform: "uppercase", pad: "0",        radius: "0",   border: "none" },
+  luxury:     { bg: "rgba(10,8,4,0.65)",    color: "#d4af37", shadow: "0 1px 6px rgba(0,0,0,0.8)",        weight: "300", spacing: "0.22em", transform: "uppercase", pad: "6px 18px", radius: "2px", border: "1px solid rgba(212,175,55,0.5)" },
+  minimal:    { bg: "rgba(255,255,255,0.06)",color: null, shadow: "none",                       weight: "200", spacing: "0.28em", transform: "uppercase", pad: "4px 8px",  radius: "0",   border: "none", borderBottom: "1px solid rgba(255,255,255,0.7)" },
+  stamp:      { bg: "transparent",          color: null, shadow: "none",                       weight: "800", spacing: "0.04em", transform: "uppercase", pad: "4px 10px", radius: "2px", border: "2px solid currentColor" },
+  cinematic:  { bg: "rgba(0,0,0,0.82)",     color: "#e5e5e5", shadow: "none",                  weight: "400", spacing: "0.14em", transform: "uppercase", pad: "8px 0",    radius: "0",   border: "none", fullWidth: true },
+};
+const MASK_FONTS = {
+  sans:    '"PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif',
+  serif:   '"Songti SC","SimSun","Times New Roman",serif',
+  kai:     '"KaiTi","STKaiti",serif',
+  impact:  '"Impact","Arial Black",sans-serif',
+  rounded: '"PingFang SC","Hiragino Maru Gothic Pro",sans-serif',
+  mono:    '"SF Mono","Consolas","Courier New",monospace',
+};
+
 function applyVideoEditsToPreview() {
   const fx = state.videoEdit || {};
   const trackState = fx.timeline?.trackState || {};
@@ -1655,8 +1743,34 @@ function applyVideoEditsToPreview() {
     video.volume = bgmVolume;
     video.style.filter = `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`;
 
-    surface.querySelector(".video-subtitle-overlay")?.remove();
     surface.querySelector(".video-bgm-badge")?.remove();
+
+    // Real-time text mask overlay — find-or-create so drag handlers survive re-renders
+    const maskVisible = trackState.mask?.visible !== false;
+    const maskText = String(fx.maskText || "").trim();
+    let overlay = surface.querySelector(".video-subtitle-overlay");
+    if (!maskVisible || !maskText) {
+      overlay?.remove();
+    } else {
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "video-subtitle-overlay";
+        surface.appendChild(overlay);
+      }
+      const ox = Number(fx.x ?? 10);
+      const oy = Number(fx.y ?? 0);
+      const ow = Number(fx.w ?? 80);
+      const oh = Number(fx.h ?? 12);
+      const oop = Number(fx.opacity ?? 90) / 100;
+      const orot = Number(fx.rotation ?? 0);
+      const pr = MASK_PRESETS[fx.maskStyle] || MASK_PRESETS.elegant;
+      const fontStack = MASK_FONTS[fx.maskFont] || MASK_FONTS.sans;
+      const textColor = pr.color || fx.maskColor || "#ffffff";
+      const widthCSS = pr.fullWidth ? "left:0;width:100%;" : `left:${ox}%;width:${ow}%;`;
+      const borderBottomCSS = pr.borderBottom ? `border-bottom:${pr.borderBottom};` : "";
+      overlay.style.cssText = `position:absolute;${widthCSS}top:${oy}%;height:${oh}%;opacity:${oop};transform:rotate(${orot}deg);display:flex;align-items:center;justify-content:center;color:${textColor};font-family:${fontStack};font-size:clamp(11px,2.2vw,32px);font-weight:${pr.weight};letter-spacing:${pr.spacing};text-transform:${pr.transform};text-shadow:${pr.shadow};background:${pr.bg};padding:${pr.pad};border-radius:${pr.radius};border:${pr.border};${borderBottomCSS}pointer-events:auto;cursor:grab;z-index:2;user-select:none;`;
+      overlay.textContent = maskText;
+    }
 
     let bgmAudio = surface.querySelector(".video-bgm-audio");
     if (!bgmAudio) {
@@ -1742,20 +1856,37 @@ function renderVideoEditor() {
         `<button class="module-switch-btn ${activeModule === id ? "is-active" : ""}" data-module="${id}">${trackLabelMap[id]}</button>`,
     )
     .join("");
+  const maskPresetKeys = ["elegant","bold","soft","neon","luxury","minimal","stamp","cinematic"];
+  const maskPresetLabels = { elegant: t("textMaskElegant"), bold: t("textMaskBold"), soft: t("textMaskSoft"), neon: t("textMaskNeon"), luxury: t("textMaskLuxury"), minimal: t("textMaskMinimal"), stamp: t("textMaskStamp"), cinematic: t("textMaskCinematic") };
+  const maskPresetCardsHtml = maskPresetKeys.map((key) => {
+    const pr = MASK_PRESETS[key];
+    const isActive = (fx.maskStyle || "elegant") === key;
+    const previewColor = pr.color || fx.maskColor || "#ffffff";
+    return `<button class="mask-preset-card${isActive ? " is-active" : ""}" data-preset="${key}" style="background:${pr.bg === "transparent" ? "rgba(30,36,60,0.7)" : pr.bg};border:${isActive ? "2px solid #54a8ff" : pr.border === "none" ? "1px solid rgba(255,255,255,0.15)" : pr.border};border-radius:${pr.radius || "6px"};color:${previewColor};font-weight:${pr.weight};letter-spacing:${pr.spacing};text-transform:${pr.transform};text-shadow:${pr.shadow};padding:6px 8px;cursor:pointer;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${maskPresetLabels[key]}">${maskPresetLabels[key]}</button>`;
+  }).join("");
   const moduleEditorHtml =
     activeModule === "mask"
       ? `
         <label>${t("textMaskText")}<input id="maskTextInput" value="${sanitizeInputValue(fx.maskText || "ELEGANCE")}" /></label>
-        <label>${t("textMaskStyle")}<select id="maskStyleSelect">
-          <option value="elegant">${t("textMaskElegant")}</option>
-          <option value="bold">${t("textMaskBold")}</option>
-          <option value="soft">${t("textMaskSoft")}</option>
-        </select></label>
+        <p class="editor-note" style="margin:4px 0 8px;">${t("textMaskDragHint")}</p>
+        <label>${t("textMaskStyle")}</label>
+        <div class="mask-preset-grid">${maskPresetCardsHtml}</div>
+        <div class="mask-font-color-row">
+          <label style="flex:1;">${t("textMaskFont")}<select id="maskFontSelect">
+            <option value="sans">${currentLang === "zh" ? "黑体（默认）" : "Gothic (default)"}</option>
+            <option value="serif">${currentLang === "zh" ? "宋体" : "Serif / Ming"}</option>
+            <option value="kai">${currentLang === "zh" ? "楷体" : "Kai / Script"}</option>
+            <option value="impact">${currentLang === "zh" ? "超宽黑 Impact" : "Impact Bold"}</option>
+            <option value="rounded">${currentLang === "zh" ? "圆体" : "Rounded"}</option>
+            <option value="mono">${currentLang === "zh" ? "等宽" : "Monospace"}</option>
+          </select></label>
+          <label>${t("textMaskColor")}<input id="maskColorInput" type="color" value="${fx.maskColor || "#ffffff"}" style="width:44px;height:28px;padding:2px;cursor:pointer;" /></label>
+        </div>
         <div class="range-grid">
-          <label>${t("positionX")} <span id="maskXVal">${Number(fx.x || 0)}%</span><input id="maskXRange" type="range" min="0" max="100" value="${Number(fx.x || 0)}" /></label>
-          <label>${t("positionY")} <span id="maskYVal">${Number(fx.y || 0)}%</span><input id="maskYRange" type="range" min="0" max="100" value="${Number(fx.y || 0)}" /></label>
-          <label>${t("maskWidth")} <span id="maskWVal">${Number(fx.w || 80)}%</span><input id="maskWRange" type="range" min="20" max="100" value="${Number(fx.w || 80)}" /></label>
-          <label>${t("maskHeight")} <span id="maskHVal">${Number(fx.h || 12)}%</span><input id="maskHRange" type="range" min="6" max="60" value="${Number(fx.h || 12)}" /></label>
+          <label>${t("positionX")} <span id="maskXVal">${Number(fx.x || 0)}%</span><input id="maskXRange" type="range" min="0" max="95" value="${Number(fx.x || 0)}" /></label>
+          <label>${t("positionY")} <span id="maskYVal">${Number(fx.y || 0)}%</span><input id="maskYRange" type="range" min="0" max="95" value="${Number(fx.y || 0)}" /></label>
+          <label>${t("maskWidth")} <span id="maskWVal">${Number(fx.w || 80)}%</span><input id="maskWRange" type="range" min="10" max="100" value="${Number(fx.w || 80)}" /></label>
+          <label>${t("maskHeight")} <span id="maskHVal">${Number(fx.h || 12)}%</span><input id="maskHRange" type="range" min="4" max="60" value="${Number(fx.h || 12)}" /></label>
           <label>${t("maskOpacity")} <span id="maskOVal">${Number(fx.opacity || 90)}%</span><input id="maskORange" type="range" min="0" max="100" value="${Number(fx.opacity || 90)}" /></label>
           <label>${t("maskRotation")} <span id="maskRVal">${Number(fx.rotation || 0)}deg</span><input id="maskRRange" type="range" min="-30" max="30" value="${Number(fx.rotation || 0)}" /></label>
         </div>
@@ -1835,6 +1966,7 @@ function renderVideoEditor() {
       </section>
     </div>
     <div class="editor-actions">
+      <button id="downloadVideoBtn" class="editor-btn-primary">${t("videoDownload")}</button>
       <button id="regenFromVideoEditorBtn">${t("videoRegenerate")}</button>
       <button id="resetVideoEditorBtn">${currentLang === "zh" ? "重置后处理" : "Reset post-edits"}</button>
     </div>
@@ -1869,6 +2001,63 @@ function renderVideoEditor() {
   bindRange("#satRange", "#satVal");
   bindRange("#vibRange", "#vibVal");
   bindRange("#bgmVolRange", "#bgmVolVal", "%");
+
+  // Set initial values for new selects
+  const maskFontSelect = videoEditorPanel.querySelector("#maskFontSelect");
+  if (maskFontSelect) maskFontSelect.value = String(fx.maskFont || "sans");
+
+  // Live-preview: write slider/select values back to state.videoEdit immediately
+  const liveNum = (sel, key) => {
+    videoEditorPanel.querySelector(sel)?.addEventListener("input", (e) => {
+      state.videoEdit[key] = Number(e.target.value);
+      applyVideoEditsToPreview();
+    });
+  };
+  const liveStr = (sel, key, evtName = "change") => {
+    videoEditorPanel.querySelector(sel)?.addEventListener(evtName, (e) => {
+      state.videoEdit[key] = e.target.value;
+      applyVideoEditsToPreview();
+    });
+  };
+  // Mask preset cards
+  videoEditorPanel.querySelectorAll(".mask-preset-card").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.videoEdit.maskStyle = btn.getAttribute("data-preset") || "elegant";
+      renderVideoEditor();  // re-render to update active card highlight
+    });
+  });
+  // Mask text + font + color
+  videoEditorPanel.querySelector("#maskTextInput")?.addEventListener("input", (e) => {
+    state.videoEdit.maskText = e.target.value;
+    applyVideoEditsToPreview();
+  });
+  liveStr("#maskFontSelect", "maskFont");
+  videoEditorPanel.querySelector("#maskColorInput")?.addEventListener("input", (e) => {
+    state.videoEdit.maskColor = e.target.value;
+    applyVideoEditsToPreview();
+  });
+  liveNum("#maskXRange", "x");
+  liveNum("#maskYRange", "y");
+  liveNum("#maskWRange", "w");
+  liveNum("#maskHRange", "h");
+  liveNum("#maskORange", "opacity");
+  liveNum("#maskRRange", "rotation");
+  // Color
+  liveNum("#tempRange", "temp");
+  liveNum("#tintRange", "tint");
+  liveNum("#satRange", "sat");
+  liveNum("#vibRange", "vibrance");
+  // Motion
+  liveStr("#videoEditSpeed", "speed");
+  // BGM
+  liveNum("#bgmVolRange", "bgmVolume");
+  videoEditorPanel.querySelector("#bgmExtractChk")?.addEventListener("change", (e) => {
+    state.videoEdit.bgmExtract = e.target.checked;
+    applyVideoEditsToPreview();
+  });
+  liveStr("#bgmMoodSelect", "bgmMood");
+  liveStr("#bgmReplaceModeSelect", "bgmReplaceMode");
+
   if (activeTrackState.locked) {
     videoEditorPanel.querySelectorAll(".module-body input, .module-body select, .module-body button, #addKeyframeBtn, #removeKeyframeBtn").forEach((el) => {
       el.disabled = true;
@@ -2131,6 +2320,26 @@ function renderVideoEditor() {
     state.videoEditorOpen = false;
     applyWorkspaceMode();
   });
+  videoEditorPanel.querySelector("#downloadVideoBtn")?.addEventListener("click", async () => {
+    const url = state.lastVideoUrl;
+    if (!url) return;
+    try {
+      // Fetch as blob so the browser triggers a real download instead of navigation
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `shoplive-video-${Date.now()}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    } catch (_e) {
+      // Fallback: open in new tab
+      window.open(url, "_blank", "noopener");
+    }
+  });
   videoEditorPanel.querySelector("#regenFromVideoEditorBtn")?.addEventListener("click", async () => {
     const pickValue = (selector, fallback) => {
       const el = videoEditorPanel.querySelector(selector);
@@ -2142,7 +2351,9 @@ function renderVideoEditor() {
     };
     state.videoEdit = {
       maskText: String(pickValue("#maskTextInput", fx.maskText || "")).trim(),
-      maskStyle: pickValue("#maskStyleSelect", fx.maskStyle || "elegant"),
+      maskStyle: state.videoEdit.maskStyle || "elegant",
+      maskFont: pickValue("#maskFontSelect", fx.maskFont || "sans"),
+      maskColor: String(videoEditorPanel.querySelector("#maskColorInput")?.value || fx.maskColor || "#ffffff"),
       x: Number(pickValue("#maskXRange", fx.x ?? 0)),
       y: Number(pickValue("#maskYRange", fx.y ?? 0)),
       w: Number(pickValue("#maskWRange", fx.w ?? 80)),
@@ -2202,6 +2413,9 @@ function renderVideoEditor() {
     state.videoEdit = {
       ...state.videoEdit,
       maskText: "",
+      maskStyle: "elegant",
+      maskFont: "sans",
+      maskColor: "#ffffff",
       x: 50,
       y: 88,
       w: 78,
@@ -2226,6 +2440,9 @@ function renderVideoEditor() {
     applyVideoEditsToPreview();
   });
   applyVideoEditsToPreview();
+  // Enable drag-to-reposition on the editor panel's video surface
+  const editorSurface = videoEditorPanel.querySelector(".video-edit-surface");
+  if (editorSurface) setupMaskDrag(editorSurface);
 }
 
 function openEditorPanel(type) {
@@ -3186,6 +3403,10 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const finalPlayableUrl = sourceCandidates[0] || "";
   state.lastVideoUrl = finalPlayableUrl;
   state.canUseEditors = true;
+  // Snapshot this card's context so concurrent videos don't overwrite each other
+  const cardVideoUrl = finalPlayableUrl;
+  const cardPrompt = state.lastPrompt;
+  const cardStoryboard = state.lastStoryboard;
   const card = document.createElement("article");
   card.className = "msg system video-msg";
   const cardId = `task-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3207,7 +3428,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     if (idx + 1 < sourceCandidates.length) {
       idx += 1;
       const nextUrl = sourceCandidates[idx];
-      state.lastVideoUrl = nextUrl;
       video.src = nextUrl;
       const p = video.play();
       if (p && typeof p.catch === "function") p.catch(() => {});
@@ -3217,7 +3437,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       refreshedByOp = true;
       const refreshedUrl = await refreshPlayableUrlByOperation(operationName);
       if (refreshedUrl) {
-        state.lastVideoUrl = refreshedUrl;
         video.src = refreshedUrl;
         const p = video.play();
         if (p && typeof p.catch === "function") p.catch(() => {});
@@ -3241,16 +3460,28 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const actions = document.createElement("div");
   actions.className = "video-actions";
   actions.innerHTML = `
-    <button id="openVideoEditorBtn">${t("editVideo")}</button>
-    <button id="openScriptEditorBtn">${t("editScript")}</button>
+    <button class="openVideoEditorBtn">${t("editVideo")}</button>
+    <button class="openScriptEditorBtn">${t("editScript")}</button>
   `;
 
   card.appendChild(title);
   card.appendChild(surface);
   card.appendChild(actions);
   chatList.appendChild(card);
-  card.querySelector("#openVideoEditorBtn")?.addEventListener("click", () => toggleEditorPanel("video"));
-  card.querySelector("#openScriptEditorBtn")?.addEventListener("click", () => toggleEditorPanel("script"));
+  // Restore this card's snapshot before opening the editor, so concurrent videos
+  // don't bleed into each other's edit panels.
+  card.querySelector(".openVideoEditorBtn")?.addEventListener("click", () => {
+    state.lastVideoUrl = cardVideoUrl;
+    state.lastPrompt = cardPrompt;
+    state.lastStoryboard = cardStoryboard;
+    toggleEditorPanel("video");
+  });
+  card.querySelector(".openScriptEditorBtn")?.addEventListener("click", () => {
+    state.lastVideoUrl = cardVideoUrl;
+    state.lastPrompt = cardPrompt;
+    state.lastStoryboard = cardStoryboard;
+    toggleEditorPanel("script");
+  });
   if (taskId && state.taskMap?.[taskId]) {
     updateVideoTask(taskId, { resultCardId: cardId });
   }

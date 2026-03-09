@@ -1530,6 +1530,7 @@ body {
 .editor-actions {
   margin-top: 10px;
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
 }
 
@@ -1542,6 +1543,66 @@ body {
   padding: 7px 12px;
   cursor: pointer;
   font-size: 13px;
+}
+
+.editor-actions .editor-btn-primary,
+.workspace .editor-actions .editor-btn-primary {
+  background: linear-gradient(135deg, #1a9e5c, #34d27b) !important;
+  border-color: rgba(52, 210, 123, 0.5) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+.workspace .editor-actions .editor-btn-primary:hover {
+  background: linear-gradient(135deg, #1db368, #3de089) !important;
+}
+
+/* Mask preset grid */
+.mask-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.mask-preset-card {
+  padding: 6px 4px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+.mask-preset-card:hover {
+  transform: scale(1.04);
+  box-shadow: 0 0 8px rgba(84,168,255,0.4);
+}
+.mask-preset-card.is-active {
+  box-shadow: 0 0 0 2px #54a8ff;
+}
+
+/* Font + color row */
+.mask-font-color-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.mask-font-color-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+/* Drag cursor on overlay */
+.video-edit-surface .video-subtitle-overlay {
+  cursor: grab;
+  touch-action: none;
+}
+.video-edit-surface .video-subtitle-overlay:active {
+  cursor: grabbing;
 }
 
 .video-preview-wrap video {
@@ -2353,6 +2414,7 @@ body {
   position: relative;
   width: 100%;
   display: block;
+  overflow: hidden;
 }
 
 .video-edit-surface video {
