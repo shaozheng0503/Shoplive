@@ -549,7 +549,7 @@ const state = {
   skipImageConfirmed: false,
   entryFocusMode: false,
   videoEdit: {
-    maskText: "ELEGANCE",
+    maskText: "",
     maskStyle: "elegant",
     maskFont: "sans",
     maskColor: "#ffffff",
@@ -1867,7 +1867,7 @@ function renderVideoEditor() {
   const moduleEditorHtml =
     activeModule === "mask"
       ? `
-        <label>${t("textMaskText")}<input id="maskTextInput" value="${sanitizeInputValue(fx.maskText || "ELEGANCE")}" /></label>
+        <label>${t("textMaskText")}<input id="maskTextInput" value="${sanitizeInputValue(fx.maskText)}" placeholder="${currentLang === \"zh\" ? \"输入文字蒙版内容…\" : \"Enter overlay text…\"}" /></label>
         <p class="editor-note" style="margin:4px 0 8px;">${t("textMaskDragHint")}</p>
         <label>${t("textMaskStyle")}</label>
         <div class="mask-preset-grid">${maskPresetCardsHtml}</div>
