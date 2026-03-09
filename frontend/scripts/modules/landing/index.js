@@ -121,6 +121,7 @@ function gotoAgent(extra = {}) {
   if (extra.product_url) params.set("product_url", String(extra.product_url));
   if (extra.aspect_ratio) params.set("aspect_ratio", String(extra.aspect_ratio));
   if (extra.duration) params.set("duration", String(extra.duration));
+  if (extra.enhance) params.set("enhance", "1");
   window.location.href = `/pages/agent.html?${params.toString()}`;
 }
 
@@ -335,6 +336,7 @@ enhancePromptBtn?.addEventListener("click", () => {
     from: "landing-prompt",
     aspect_ratio: aspectRatioSelect?.value || "16:9",
     duration: durationSelect?.value || "8",
+    enhance: true,
   });
 });
 

@@ -4276,7 +4276,7 @@ function consumeLandingParams() {
   if (aspect && ["16:9", "9:16", "1:1"].includes(aspect)) {
     state.aspectRatio = aspect;
   }
-  if (duration && ["4", "6", "8"].includes(duration)) {
+  if (duration && ["4", "6", "8", "16"].includes(duration)) {
     state.duration = duration;
   }
   if (draft && !chatInput.value.trim()) {
@@ -4284,6 +4284,22 @@ function consumeLandingParams() {
   }
   syncSimpleControlsFromState();
   applyWorkspaceMode();
+
+  if (from && (aspect || duration || draft)) {
+    const durLabel = state.duration ? `${state.duration}s` : "";
+    const ratioLabel = state.aspectRatio || "";
+    const parts = [durLabel, ratioLabel].filter(Boolean);
+    state._landingHint = parts.length
+      ? (currentLang === "zh"
+          ? `已应用首页设置：${parts.join(" · ")}${draft ? "，提示词已预填。" : "。"}`
+          : `Landing settings applied: ${parts.join(" · ")}${draft ? ". Prompt pre-filled." : "."}`)
+      : "";
+  }
+
+  const shouldEnhance = queryParams.get("enhance") === "1";
+  if (shouldEnhance && draft) {
+    setTimeout(() => enhancePromptByAgent(), 800);
+  }
 
   if (from === "landing-upload") {
     setTimeout(() => imageInput?.click(), 280);
@@ -4508,7 +4524,6 @@ applyLang();
 syncSimpleControlsFromState();
 applyWorkspaceMode();
 consumeLandingParams();
-if (!state.entryFocusMode) {
-  pushMsg("system", t("welcome"));
-}
+pushMsg("system", t("welcome"));
+if (state._landingHint) pushMsg("system", state._landingHint);
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
