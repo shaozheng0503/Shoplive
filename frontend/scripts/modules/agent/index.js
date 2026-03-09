@@ -1,10 +1,12 @@
 import { createTransientBackoffByPreset } from "../../shared/polling.js";
 
 const chatList = document.getElementById("chatList");
-const taskQueuePanel = document.getElementById("taskQueuePanel");
-const taskQueueTitle = document.getElementById("taskQueueTitle");
-const taskQueueList = document.getElementById("taskQueueList");
-const taskQueueClearBtn = document.getElementById("taskQueueClearBtn");
+const taskQueuePanel       = document.getElementById("taskQueuePanel");
+const taskQueueTitle       = document.getElementById("taskQueueTitle");
+const taskQueueList        = document.getElementById("taskQueueList");
+const taskQueueClearBtn    = document.getElementById("taskQueueClearBtn");
+const taskQueueCollapseBtn = document.getElementById("taskQueueCollapseBtn");
+const taskQueueToggleRow   = document.getElementById("taskQueueToggleRow");
 const chatInput = document.getElementById("chatInput");
 const sendBtn = document.getElementById("sendBtn");
 const uploadBtn = document.getElementById("uploadBtn");
@@ -12,6 +14,8 @@ const imageInput = document.getElementById("imageInput");
 const langToggleBtn = document.getElementById("langToggleBtn");
 const aspectRatioSelect = document.getElementById("aspectRatioSelect");
 const durationSelect = document.getElementById("durationSelect");
+const veoModelSelect = document.getElementById("veoModelSelect");
+const durationHint   = document.getElementById("durationHint");
 const enhancePromptBtn = document.getElementById("enhancePromptBtn");
 const uploadHint = document.getElementById("uploadHint");
 const productUrlInput = document.getElementById("productUrlInput");
@@ -37,6 +41,7 @@ const i18n = {
     uploadHint: "上传商品图后可自动解析关键信息，并用于提示词优化。",
     ratioLabel: "比例",
     durationLabel: "视频时长",
+    modelLabel: "模型",
     welcome:
       "Hi — 我是 Shoplive 的 AI 助手 😊 现在你可以直接填写提示词并一键生成；上传参考图后我会自动识别商品信息并辅助优化提示词。",
     uploaded: "已收到 {count} 张商品图，我先帮你识别商品和风格。",
@@ -89,6 +94,8 @@ const i18n = {
     taskFailed: "失败",
     taskView: "查看",
     taskClearDone: "清理已完成",
+    taskCancel: "取消",
+    taskCancelled: "已取消",
     enhanceWorking: "正在进行提示词增强，请稍候...",
     enhanceDone: "提示词增强完成，已更新输入框。",
     enhanceFail: "提示词增强失败，已保留原文。",
@@ -253,6 +260,7 @@ const i18n = {
     uploadHint: "Upload reference images to auto-parse product info for prompt optimization.",
     ratioLabel: "Aspect Ratio",
     durationLabel: "Duration",
+    modelLabel: "Model",
     welcome:
       "Hi — I’m Shoplive’s AI assistant 😊 You can now generate directly with one prompt. Upload reference images and I’ll auto-parse product signals to improve prompt quality.",
     uploaded: "Received {count} product image(s). I’ll now infer product and style.",
@@ -306,6 +314,8 @@ const i18n = {
     taskFailed: "Failed",
     taskView: "View",
     taskClearDone: "Clear done",
+    taskCancel: "Cancel",
+    taskCancelled: "Cancelled",
     enhanceWorking: "Enhancing prompt, please wait...",
     enhanceDone: "Prompt enhancement completed and applied.",
     enhanceFail: "Prompt enhancement failed. Original prompt kept.",
@@ -522,8 +532,9 @@ const state = {
   reviewNegativePoints: [],
   productImageUrls: [],
   template: "clean",
-  duration: "8",
+  duration: "16",
   aspectRatio: "16:9",
+  veoModel: "grok-imagine-1.0-video",
   needModel: true,
   summaryShown: false,
   regionBatchIdx: 0,
@@ -614,19 +625,37 @@ function renderTaskQueue() {
   taskQueueList.innerHTML = items
     .slice(0, 8)
     .map((item) => {
-      const elapsed = formatElapsedSec(Date.now() - (item.startedAt || item.createdAt || Date.now()));
-      const stateText =
-        item.status === "done" ? t("taskDone")
-          : item.status === "failed" ? t("taskFailed")
-            : item.status === "queued" ? t("taskQueued")
-              : t("taskRunning");
-      const safeStage = sanitizeInputValue(String(item.stage || "").slice(0, 80));
+      const isDone    = item.status === "done";
+      const isFailed  = item.status === "failed";
+      const isQueued  = item.status === "queued";
+      const isFinished = isDone || isFailed;
+
+      // 已完成/失败：显示冻结的最终耗时；进行中/排队：不单独显示秒数（stage 里已有）
+      const finalSec = isFinished
+        ? formatElapsedSec((item.finishedAt || Date.now()) - (item.startedAt || item.createdAt || Date.now()))
+        : null;
+
+      const stateText = isDone ? t("taskDone")
+        : isFailed  ? t("taskFailed")
+          : isQueued  ? t("taskQueued")
+            : t("taskRunning");
+
+      // 进行中：只显示 stage（里面已有总计时）；完成/失败：显示冻结时长，不重复显示 stage
+      const safeStage = isFinished
+        ? ""
+        : sanitizeInputValue(String(item.stage || "").slice(0, 80));
+
       const safeTitle = sanitizeInputValue(item.title || "Task");
-      const canView = Boolean(item.resultCardId);
-      const btn = canView
-        ? `<button class="task-view-btn" type="button" data-task-action="view" data-task-id="${item.id}">${t("taskView")}</button>`
-        : "";
-      return `<div class="task-item ${item.status || "running"}"><strong>${safeTitle}</strong><small>${stateText} · ${elapsed}s${safeStage ? ` · ${safeStage}` : ""}${btn}</small></div>`;
+      const canView   = Boolean(item.resultCardId);
+      const canCancel = !isFinished && item.status !== "cancelled";
+      const viewBtn   = canView   ? `<button class="task-view-btn"   type="button" data-task-action="view"   data-task-id="${item.id}">${t("taskView")}</button>`   : "";
+      const cancelBtn = canCancel ? `<button class="task-cancel-btn" type="button" data-task-action="cancel" data-task-id="${item.id}">${t("taskCancel")}</button>` : "";
+
+      const timeStr  = finalSec !== null ? ` · ${finalSec}s` : "";
+      const stageStr = safeStage ? ` · ${safeStage}` : "";
+
+      const statusCls = item.status === "cancelled" ? "failed" : (item.status || "running");
+      return `<div class="task-item ${statusCls}"><strong>${safeTitle}</strong><small>${stateText}${timeStr}${stageStr}${viewBtn}${cancelBtn}</small></div>`;
     })
     .join("");
 }
@@ -641,9 +670,31 @@ function createVideoTask(durationLabel = "8s") {
     stage: "",
     createdAt: Date.now(),
     startedAt: Date.now(),
+    cancelRequested: false,
+    _releaseSlot: null,
+    _abortCtrl: null,
   };
   renderTaskQueue();
   return id;
+}
+
+function cancelVideoTask(taskId) {
+  const task = state.taskMap?.[taskId];
+  if (!task) return;
+  if (task.status === "done" || task.status === "failed" || task.status === "cancelled") return;
+  // Signal cancel to generation loop
+  state.taskMap[taskId].cancelRequested = true;
+  // Abort any in-flight fetch
+  try { task._abortCtrl?.abort(); } catch (_e) {}
+  // Release concurrency slot immediately
+  try { task._releaseSlot?.(); } catch (_e) {}
+  state.taskMap[taskId] = {
+    ...state.taskMap[taskId],
+    status: "cancelled",
+    stage: currentLang === "zh" ? "已取消" : "Cancelled",
+    finishedAt: Date.now(),
+  };
+  renderTaskQueue();
 }
 
 function updateVideoTask(id, patch = {}) {
@@ -658,6 +709,7 @@ function finishVideoTask(id, ok = true, stage = "") {
     ...state.taskMap[id],
     status: ok ? "done" : "failed",
     stage: stage || state.taskMap[id].stage || "",
+    finishedAt: Date.now(),
   };
   renderTaskQueue();
 }
@@ -805,8 +857,10 @@ function applyLang() {
   if (productUrlInput) productUrlInput.placeholder = t("parseLinkPh");
   const ratioLabel = document.querySelector('label[for="aspectRatioSelect"] span');
   const durationLabel = document.querySelector('label[for="durationSelect"] span');
+  const modelLabel = document.querySelector('label[for="veoModelSelect"] span');
   if (ratioLabel) ratioLabel.textContent = t("ratioLabel");
   if (durationLabel) durationLabel.textContent = t("durationLabel");
+  if (modelLabel) modelLabel.textContent = t("modelLabel");
   if (langToggleBtn) langToggleBtn.textContent = currentLang === "zh" ? "EN" : "中文";
   if (taskQueueClearBtn) taskQueueClearBtn.textContent = t("taskClearDone");
   const back = document.querySelector(".back-link");
@@ -826,16 +880,221 @@ function applyLang() {
   renderVideoEditor();
   renderScriptEditor();
   renderTaskQueue();
+  updateDurationHint();
+}
+
+const VEO_MODEL_OPTIONS = [
+  { value: "veo-3.1-fast-generate-001", labelZh: "Veo 3.1 Fast",    labelEn: "Veo 3.1 Fast",    provider: "veo" },
+  { value: "veo-3.1-generate-preview",  labelZh: "Veo 3.1 Preview", labelEn: "Veo 3.1 Preview", provider: "veo" },
+  { value: "veo-2.0-generate-001",      labelZh: "Veo 2.0",         labelEn: "Veo 2.0",         provider: "veo" },
+  { value: "grok-imagine-1.0-video",    labelZh: "Grok Video ⚡",   labelEn: "Grok Video ⚡",   provider: "tabcode" },
+];
+
+function getVeoModel() {
+  return state.veoModel || "grok-imagine-1.0-video";
+}
+
+function getModelProvider() {
+  const opt = VEO_MODEL_OPTIONS.find((m) => m.value === getVeoModel());
+  return opt?.provider || "veo";
+}
+
+// Duration option definitions per provider
+const DURATION_OPTIONS = {
+  tabcode: [
+    { value: "6",  labelZh: "6秒（1段）",   labelEn: "6s (1 clip)" },
+    { value: "12", labelZh: "12秒（2段）",  labelEn: "12s (2 clips)" },
+    { value: "18", labelZh: "18秒（3段）",  labelEn: "18s (3 clips)", defaultSel: true },
+  ],
+  veo: [
+    { value: "8",  labelZh: "8秒",          labelEn: "8s" },
+    { value: "16", labelZh: "16秒（2段拼接）", labelEn: "16s (2-seg)", defaultSel: true },
+  ],
+};
+
+function updateDurationOptions() {
+  if (!durationSelect) return;
+  const provider = getModelProvider();
+  const opts = DURATION_OPTIONS[provider] || DURATION_OPTIONS.veo;
+  const zh = currentLang === "zh";
+  const prev = state.duration;
+  // Rebuild options
+  durationSelect.innerHTML = opts
+    .map((o) => `<option value="${o.value}">${zh ? o.labelZh : o.labelEn}</option>`)
+    .join("");
+  // Keep previous value if valid, else use default
+  const valid = opts.find((o) => o.value === prev);
+  const defOpt = opts.find((o) => o.defaultSel) || opts[opts.length - 1];
+  durationSelect.value = valid ? prev : defOpt.value;
+  state.duration = durationSelect.value;
+  updateDurationHint();
+}
+
+function updateDurationHint() {
+  if (!durationHint) return;
+  const provider = getModelProvider();
+  const dur = Number(state.duration) || 8;
+  const zh  = currentLang === "zh";
+
+  durationHint.className = "duration-hint";
+
+  if (provider === "tabcode") {
+    const clips = dur <= 6 ? 1 : dur <= 12 ? 2 : 3;
+    const hint = clips === 1
+      ? (zh ? `ℹ️ 生成 1 段，实际约 6s。` : `ℹ️ 1 clip generated, ~6s actual.`)
+      : clips === 2
+        ? (zh ? `ℹ️ 分 2 段串行生成并拼接，实际约 12s。` : `ℹ️ 2 clips generated & concat'd, ~12s actual.`)
+        : (zh ? `ℹ️ 分 3 段串行生成并拼接，实际约 18s。` : `ℹ️ 3 clips generated & concat'd, ~18s actual.`);
+    durationHint.textContent = hint;
+    durationHint.classList.add("hint-warning");
+  } else {
+    const hint = dur === 16
+      ? (zh ? `✅ Veo 精确生成 16s（两段 8s 帧衔接拼接）。` : `✅ Veo exact 16s (two 8s segments, frame-bridged).`)
+      : (zh ? `✅ Veo 精确生成 ${dur}s。` : `✅ Veo exact ${dur}s.`);
+    durationHint.textContent = hint;
+    durationHint.classList.add("hint-ok");
+  }
+}
+
+// Build a Grok-friendly prompt, injecting actual duration & aspect ratio.
+// Grok Video has no duration_seconds param — duration must be in the text.
+function buildGrokVideoPrompt(basePrompt, targetDuration = 8) {
+  const dur    = Number(targetDuration) || 8;
+  const ratio  = state.aspectRatio || "16:9";
+  const durStr = dur >= 16
+    ? `${dur}-second continuous ecommerce product video (two seamlessly connected scenes, each ~${Math.round(dur / 2)} seconds)`
+    : `${dur}-second ecommerce product video`;
+  // Strip any existing duration mention, then prepend our clean directive
+  let core = String(basePrompt || "").replace(/\b\d+[\s-]*second(s)?\b/gi, "").trim();
+  return `Create a ${durStr}, aspect ratio ${ratio}. ${core}`.replace(/\s{2,}/g, " ").trim();
+}
+
+async function _runOneGrokGeneration(base, prompt, model, taskId, labelZh, labelEn) {
+  const zh = currentLang === "zh";
+  let videoUrl = "";
+  let posterUrl = "";
+  await postSse(
+    `${base}/api/tabcode/video/generate`,
+    { prompt, model },
+    (eventName, payload) => {
+      if (eventName !== "message" && eventName !== "data") return;
+      const type = payload?.type;
+      if (type === "progress") {
+        const pct = Math.max(0, Math.min(100, Number(payload?.percent || 0)));
+        updateVideoTask(taskId, {
+          status: "running",
+          stage: zh ? `${labelZh} ${pct}%` : `${labelEn} ${pct}%`,
+        });
+      } else if (type === "done") {
+        videoUrl  = String(payload?.video_url  || "").trim();
+        posterUrl = String(payload?.poster_url || "").trim();
+      } else if (type === "error") {
+        throw new Error(String(payload?.message || "Grok video generation failed"));
+      }
+    },
+    180000
+  );
+  if (!videoUrl) throw new Error(zh ? "Grok Video 未返回可播放地址" : "Grok Video: no playable URL returned");
+  return { videoUrl, posterUrl };
+}
+
+// Concat helper: accepts http URL or data: URL for each input
+async function _grokConcat(base, urlA, urlB) {
+  const body = { project_id: "gemini-sl-20251120" };
+  const isHttp = (u) => /^https?:\/\//i.test(u);
+  const isData = (u) => u.startsWith("data:");
+  if (isHttp(urlA))       body.video_http_url_a = urlA;
+  else if (isData(urlA))  body.video_data_url_a = urlA;
+  if (isHttp(urlB))       body.video_http_url_b = urlB;
+  else if (isData(urlB))  body.video_data_url_b = urlB;
+  if (!body.video_http_url_a && !body.video_data_url_a) return "";
+  try {
+    const resp = await postJson(`${base}/api/veo/concat-segments`, body, 120000);
+    return String(resp?.video_data_url || "").trim();
+  } catch (_e) {
+    return "";
+  }
+}
+
+async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
+  const zh    = currentLang === "zh";
+  const base  = getApiBase();
+  const model = getVeoModel();
+  const dur   = Number(targetDuration) || 6;
+  // Map selected duration to clip count: 6→1, 12→2, 18→3
+  const clips = dur <= 6 ? 1 : dur <= 12 ? 2 : 3;
+
+  const startLabel = clips === 1
+    ? (zh ? `⏳ Grok Video 生成中（约6s），请稍候…` : `⏳ Grok Video generating (~6s), please wait…`)
+    : (zh ? `⏳ Grok Video：分${clips}段生成（每段约6s），请稍候…` : `⏳ Grok Video: ${clips} clips (~6s each), please wait…`);
+  const pollBubble = pushMsg("system", startLabel, { typewriter: false });
+
+  updateVideoTask(taskId, { status: "running", stage: zh ? "Grok 生成中" : "Grok generating" });
+
+  // Narration hints per part
+  const partHints = [
+    "product introduction, hero shot, first impression and opening scene.",
+    "core selling-point showcase, usage demonstration, close-up texture details. Maintain identical product identity and style as Part 1.",
+    "lifestyle context, emotional appeal, confident closing CTA. Maintain identical product identity and style as previous parts.",
+  ];
+
+  try {
+    const core = prompt.replace(/\d+[\s-]*second[s]?\s*continuous[^.]*\./i, "").trim();
+    const results = [];
+    for (let i = 0; i < clips; i++) {
+      if (state.taskMap?.[taskId]?.cancelRequested) throw new Error("CANCELLED");
+      const n = i + 1;
+      const labelZh = clips > 1 ? `Grok 第${n}/${clips}段` : "Grok 生成中";
+      const labelEn = clips > 1 ? `Grok clip ${n}/${clips}` : "Grok generating";
+      pollBubble.textContent = clips > 1
+        ? (zh ? `⏳ Grok Video 第${n}/${clips}段生成中（0%）…` : `⏳ Grok Video clip ${n}/${clips} generating (0%)…`)
+        : (zh ? `⏳ Grok Video 生成中（0%）…` : `⏳ Grok Video generating (0%)…`);
+      updateVideoTask(taskId, { status: "running", stage: zh ? `${labelZh} 0%` : `${labelEn} 0%` });
+      const clipPrompt = clips > 1
+        ? buildGrokVideoPrompt(core, 6) + ` Part ${n} of ${clips}: ${partHints[i] || ""}`
+        : buildGrokVideoPrompt(core, 6);
+      const res = await _runOneGrokGeneration(base, clipPrompt, model, taskId, labelZh, labelEn);
+      results.push(res.videoUrl);
+    }
+
+    // Chain concat if multiple clips
+    let finalUrl = results[0];
+    for (let i = 1; i < results.length; i++) {
+      pollBubble.textContent = zh
+        ? `⏳ 第${i}+${i + 1}段拼接中…`
+        : `⏳ Concat clip ${i} + ${i + 1}…`;
+      updateVideoTask(taskId, { status: "running", stage: zh ? `拼接 ${i}+${i + 1}` : `Concat ${i}+${i + 1}` });
+      const merged = await _grokConcat(base, finalUrl, results[i]);
+      if (merged) finalUrl = merged;
+      else break; // keep what we have so far
+    }
+
+    const approxSec = clips * 6;
+    if (pollBubble.parentNode) pollBubble.remove();
+    pushMsg("system", clips === 1
+      ? (zh ? `Grok Video 生成完成（约6s）。` : `Grok Video complete (~6s).`)
+      : (zh ? `Grok Video ${clips}段拼接完成（约${approxSec}s）。` : `Grok Video ${clips}-clip concat done (~${approxSec}s).`));
+    updateVideoTask(taskId, { status: "done", stage: zh ? "完成" : "Done" });
+    renderGeneratedVideoCard(finalUrl, "", "", taskId);
+  } catch (e) {
+    if (pollBubble.parentNode) pollBubble.remove();
+    if (String(e?.message || "") === "CANCELLED" || state.taskMap?.[taskId]?.cancelRequested) return;
+    pushMsg("system", String(e?.message || "") || t("genFail"));
+    updateVideoTask(taskId, { status: "failed", stage: zh ? "失败" : "Failed" });
+    throw e;
+  }
 }
 
 function syncSimpleControlsFromState() {
   if (aspectRatioSelect) aspectRatioSelect.value = state.aspectRatio || "16:9";
   if (durationSelect) durationSelect.value = String(state.duration || "8");
+  if (veoModelSelect) veoModelSelect.value = getVeoModel();
 }
 
 function syncStateFromSimpleControls() {
   if (aspectRatioSelect?.value) state.aspectRatio = aspectRatioSelect.value;
   if (durationSelect?.value) state.duration = String(durationSelect.value);
+  if (veoModelSelect?.value) state.veoModel = veoModelSelect.value;
 }
 
 function scrollToBottom() {
@@ -3381,7 +3640,7 @@ async function refreshPlayableUrlByOperation(operationName) {
       `${getApiBase()}/api/veo/status`,
       {
         project_id: "gemini-sl-20251120",
-        model: "veo-3.1-fast-generate-001",
+        model: getVeoModel(),
         operation_name: op,
       },
       25000
@@ -3701,6 +3960,10 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     let nextSoftTimeoutAt = SOFT_TIMEOUT_MS;
     let lastContinueNoticeAt = 0;
     while (true) {
+      // 取消检查
+      if (state.taskMap?.[taskId]?.cancelRequested) {
+        throw new Error("CANCELLED");
+      }
       const elapsed = Math.floor((Date.now() - start) / 1000);
       const totalElapsed = Math.floor((Date.now() - workflowStartedAt) / 1000);
       statusBubble.textContent = zh
@@ -3711,7 +3974,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       await new Promise((r) => setTimeout(r, waitMs));
       if (elapsed < 30) continue;
       try {
-        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: "veo-3.1-fast-generate-001", operation_name: op }, 15000);
+        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: getVeoModel(), operation_name: op }, 15000);
         if (st?.transient) {
           const retryAttempts = Math.max(0, Number(st?.retry_attempts || 0));
           const waitMs = transientBackoff.apply(retryAttempts);
@@ -3849,7 +4112,14 @@ async function generateVideo(promptOverride = "") {
     slotReleased = true;
     releaseVideoJobSlot();
   };
-  const taskId = createVideoTask(`${state.duration || "8"}s`);
+  const _m = VEO_MODEL_OPTIONS.find((m) => m.value === getVeoModel());
+  const _mLabel = currentLang === "zh" ? (_m?.labelZh || getVeoModel()) : (_m?.labelEn || getVeoModel());
+  const taskId = createVideoTask(`${state.duration || "8"}s · ${_mLabel}`);
+  // Register release & abort handle so cancelVideoTask() can use them
+  if (state.taskMap[taskId]) {
+    state.taskMap[taskId]._releaseSlot = releaseSlotOnce;
+    state.taskMap[taskId]._abortCtrl   = new AbortController();
+  }
   try {
     if (!promptOverride) {
       await hydrateWorkflowTexts(false);
@@ -3867,7 +4137,7 @@ async function generateVideo(promptOverride = "") {
     const safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
     const startBody = {
       project_id: "gemini-sl-20251120",
-      model: "veo-3.1-fast-generate-001",
+      model: getVeoModel(),
       prompt: safePrompt,
       sample_count: 1,
       veo_mode: useFrameMode ? "frame" : useImageMode ? "image" : "text",
@@ -3891,6 +4161,15 @@ async function generateVideo(promptOverride = "") {
     } else if (fallbackImageUrl) {
       startBody.image_url = fallbackImageUrl;
     }
+    if (getModelProvider() === "tabcode") {
+      const targetDuration = Number(state.duration) || 6;
+      const grokPrompt = buildGrokVideoPrompt(safePrompt, 6); // each clip always 6s
+      await generateTabcodeVideo(grokPrompt, taskId, targetDuration);
+      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
+      releaseSlotOnce();
+      return;
+    }
+
     if (isChainDuration(state.duration)) {
       await generate16sWithProgress(base, startBody, finalPrompt, Date.now(), taskId);
       finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
@@ -3919,6 +4198,12 @@ async function generateVideo(promptOverride = "") {
 
     const doPoll = async () => {
       if (pollStopped) return;
+      // 用户取消
+      if (state.taskMap?.[taskId]?.cancelRequested) {
+        pollStopped = true;
+        if (pollBubble.parentNode) pollBubble.remove();
+        return;
+      }
       const elapsedMs = Date.now() - pollStartedAt;
       const elapsedSec = Math.floor(elapsedMs / 1000);
       pollBubble.textContent = zh
@@ -3952,7 +4237,7 @@ async function generateVideo(promptOverride = "") {
           `${base}/api/veo/status`,
           {
             project_id: "gemini-sl-20251120",
-            model: "veo-3.1-fast-generate-001",
+            model: getVeoModel(),
             operation_name: operationName,
           },
           20000
@@ -4005,10 +4290,13 @@ async function generateVideo(promptOverride = "") {
     scheduleNext(2000);
   } catch (e) {
     const detailRaw = String(e?.message || "").trim();
+    if (detailRaw === "CANCELLED" || state.taskMap?.[taskId]?.cancelRequested) {
+      // 用户主动取消：task 已被 cancelVideoTask 标记，只需释放 slot
+      releaseSlotOnce();
+      return;
+    }
     const detail = /aborted|abort/i.test(detailRaw)
-      ? currentLang === "zh"
-        ? "请求超时，请重试"
-        : "request timeout, please retry"
+      ? currentLang === "zh" ? "请求超时，请重试" : "request timeout, please retry"
       : detailRaw;
     pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"));
     finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
@@ -4552,7 +4840,12 @@ function consumeLandingParams() {
   const draft = (queryParams.get("draft") || "").trim();
 
   if (["landing-prompt", "landing-product-link", "landing-upload", "landing-ref"].includes(from)) {
-    state.entryFocusMode = true;
+    // 只有没有携带具体配置参数（aspect/duration/draft）时才进入大居中入口模式；
+    // 带了首页设置的跳转直接用正常对话布局，避免 entry-focus 把 chatList 隐藏。
+    const hasSettings = Boolean(aspect || duration || draft || productUrl);
+    if (!hasSettings) {
+      state.entryFocusMode = true;
+    }
   }
 
   if (aspect && ["16:9", "9:16", "1:1"].includes(aspect)) {
@@ -4771,6 +5064,7 @@ if (aiGenerateFramesBtn) {
 if (durationSelect) {
   durationSelect.addEventListener("change", () => {
     state.duration = String(durationSelect.value || "8");
+    updateDurationHint();
   });
 }
 chatInput.addEventListener("keydown", (e) => {
@@ -4788,16 +5082,42 @@ if (langToggleBtn) {
 if (toggleScriptTab) toggleScriptTab.addEventListener("click", () => toggleEditorPanel("script"));
 if (toggleVideoTab) toggleVideoTab.addEventListener("click", () => toggleEditorPanel("video"));
 if (taskQueueClearBtn) {
-  taskQueueClearBtn.addEventListener("click", () => {
+  taskQueueClearBtn.addEventListener("click", (e) => {
+    e.stopPropagation(); // 防止冒泡到 head 触发收起
     clearCompletedTasks();
+  });
+}
+if (taskQueueToggleRow) {
+  taskQueueToggleRow.addEventListener("click", (e) => {
+    // 点"清理已完成"按钮不触发收起
+    if (e.target instanceof Element && e.target.closest("#taskQueueClearBtn")) return;
+    const isCollapsed = taskQueuePanel?.classList.toggle("is-collapsed");
+    if (taskQueueCollapseBtn) {
+      taskQueueCollapseBtn.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+      taskQueueCollapseBtn.setAttribute("aria-label",
+        isCollapsed
+          ? (currentLang === "zh" ? "展开任务列表" : "Expand task list")
+          : (currentLang === "zh" ? "收起任务列表" : "Collapse task list"));
+    }
   });
 }
 if (taskQueueList) {
   taskQueueList.addEventListener("click", (e) => {
-    const btn = e.target instanceof Element ? e.target.closest("[data-task-action='view']") : null;
+    const btn = e.target instanceof Element ? e.target.closest("[data-task-action]") : null;
     if (!btn) return;
+    const action = btn.getAttribute("data-task-action");
     const taskId = String(btn.getAttribute("data-task-id") || "");
-    scrollToTaskResult(taskId);
+    if (action === "view")   scrollToTaskResult(taskId);
+    if (action === "cancel") cancelVideoTask(taskId);
+  });
+}
+if (veoModelSelect) {
+  veoModelSelect.addEventListener("change", () => {
+    state.veoModel = veoModelSelect.value || "grok-imagine-1.0-video";
+    const opt = VEO_MODEL_OPTIONS.find((m) => m.value === state.veoModel);
+    const label = currentLang === "zh" ? (opt?.labelZh || state.veoModel) : (opt?.labelEn || state.veoModel);
+    pushMsg("system", currentLang === "zh" ? `生成模型已切换为：${label}` : `Video model switched to: ${label}`);
+    updateDurationOptions();
   });
 }
 window.addEventListener("resize", () => updateToolbarIndicator());
@@ -4824,6 +5144,7 @@ document.addEventListener("webkitfullscreenchange", () => {
 
 applyLang();
 syncSimpleControlsFromState();
+updateDurationOptions();
 applyWorkspaceMode();
 consumeLandingParams();
 pushMsg("system", t("welcome"));

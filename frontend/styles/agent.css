@@ -875,6 +875,50 @@ body {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.task-queue-head-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.task-queue-collapse-btn {
+  border: none;
+  background: transparent;
+  color: #5a78a4;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+}
+
+.task-queue-panel.is-collapsed .task-queue-collapse-btn {
+  transform: rotate(-90deg);
+}
+
+.task-queue-list {
+  display: grid;
+  gap: 6px;
+  overflow: hidden;
+  transition: max-height 0.22s ease, opacity 0.2s ease;
+  max-height: 500px;
+  opacity: 1;
+}
+
+.task-queue-panel.is-collapsed .task-queue-list {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.task-queue-panel.is-collapsed .task-queue-head {
+  margin-bottom: 0;
 }
 
 .task-queue-clear-btn {
@@ -891,11 +935,6 @@ body {
 .task-queue-clear-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.task-queue-list {
-  display: grid;
-  gap: 6px;
 }
 
 .task-item {
@@ -921,6 +960,22 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.task-cancel-btn {
+  border: 1px solid #f0c8cd;
+  border-radius: 8px;
+  background: #fff3f5;
+  color: #b53040;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.task-cancel-btn:hover {
+  background: #fde8ea;
+  border-color: #e89099;
 }
 
 .task-view-btn {
@@ -2504,8 +2559,8 @@ body {
 .composer.composer-compact #chatInput {
   width: 100%;
   min-height: 110px;
-  max-height: 180px;
-  resize: none;
+  max-height: 48vh;
+  resize: vertical;
   overflow: auto;
   padding: 12px;
   border-radius: 12px;
@@ -2756,6 +2811,14 @@ body {
   align-items: stretch;
 }
 
+/* 显式声明行高：工具栏行 auto，内容行 1fr
+   这样 height:100% 在 grid item 上才能正确解析 */
+.workspace.has-editors.mode-two-video,
+.workspace.has-editors.mode-two-script,
+.workspace.has-editors.mode-three {
+  grid-template-rows: auto 1fr;
+}
+
 .workspace.mode-two-video .chat-shell,
 .workspace.mode-two-video .editor-panel,
 .workspace.mode-two-script .chat-shell,
@@ -2773,8 +2836,10 @@ body {
 
 .workspace.has-editors .chat-list {
   min-height: 0;
+  flex: 1;
   max-height: 100%;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Chat list in split mode: freely scrollable, no message collapsing */
@@ -2823,6 +2888,29 @@ body {
 .workspace .composer.composer-compact button { padding-inline: var(--ag-sp-3); }
 .composer.composer-compact { padding: var(--ag-sp-3); }
 .composer.composer-compact .compact-config-row { gap: var(--ag-sp-2); }
+
+/* Duration hint below the config row */
+.duration-hint {
+  margin: 0;
+  padding: 5px 2px 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #5a78a4;
+  min-height: 1em;
+  transition: color 0.2s ease;
+}
+
+.duration-hint.hint-warning {
+  color: #9a6200;
+}
+
+.duration-hint.hint-ok {
+  color: #2d7a4f;
+}
+
+.duration-hint:empty {
+  display: none;
+}
 
 /* First & Last Frame Upload Panel */
 .frame-upload-panel {

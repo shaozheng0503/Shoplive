@@ -44,8 +44,11 @@
         <section class="chat-shell">
           <div id="chatList" class="chat-list"></div>
           <section id="taskQueuePanel" class="task-queue-panel" hidden>
-            <div class="task-queue-head">
-              <div id="taskQueueTitle" class="task-queue-title">并发任务</div>
+            <div class="task-queue-head" id="taskQueueToggleRow">
+              <div class="task-queue-head-left">
+                <button id="taskQueueCollapseBtn" class="task-queue-collapse-btn" type="button" aria-expanded="true" aria-label="收起任务列表">▾</button>
+                <div id="taskQueueTitle" class="task-queue-title">并发任务</div>
+              </div>
               <button id="taskQueueClearBtn" class="task-queue-clear-btn" type="button">清理已完成</button>
             </div>
             <div id="taskQueueList" class="task-queue-list"></div>
@@ -91,16 +94,21 @@
               </label>
               <label class="compact-chip" for="durationSelect">
                 <span>视频时长</span>
-                <select id="durationSelect">
-                  <option value="4">4秒</option>
-                  <option value="6">6秒</option>
-                  <option value="8" selected>8秒</option>
-                  <option value="16">16秒</option>
+                <select id="durationSelect"></select>
+              </label>
+              <label class="compact-chip" for="veoModelSelect">
+                <span>模型</span>
+                <select id="veoModelSelect">
+                  <option value="veo-3.1-fast-generate-001">Veo 3.1 Fast</option>
+                  <option value="veo-3.1-generate-preview">Veo 3.1 Preview</option>
+                  <option value="veo-2.0-generate-001">Veo 2.0</option>
+                  <option value="grok-imagine-1.0-video" selected>Grok Video</option>
                 </select>
               </label>
               <button id="sendBtn">生成视频</button>
               <button id="enhancePromptBtn" class="ghost">提示词增强</button>
             </div>
+            <p id="durationHint" class="duration-hint"></p>
             <input id="imageInput" type="file" accept="image/png,image/jpeg" multiple hidden />
           </div>
         </section>

@@ -1323,19 +1323,40 @@ def register_veo_routes(
         except Exception as e:
             return json_error(f"Veo 播放地址生成失败: {e}", 500)
 
+    def _download_http_video_to_file(url: str, output_path: Path, *, timeout: int = 60) -> None:
+        """Download a plain http(s) video URL to a local file."""
+        import requests as _requests
+        resp = _requests.get(url, timeout=timeout, stream=True)
+        if not resp.ok:
+            raise ValueError(f"HTTP 视频下载失败 status={resp.status_code}: {url}")
+        ct = resp.headers.get("content-type", "").lower()
+        if ct and not any(x in ct for x in ("video", "octet-stream")):
+            raise ValueError(f"HTTP 视频下载类型不符 content-type={ct}: {url}")
+        with output_path.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 20):
+                if chunk:
+                    f.write(chunk)
+        size = output_path.stat().st_size if output_path.exists() else 0
+        if size < 1024:
+            raise ValueError(f"HTTP 视频下载后体积过小 ({size} bytes): {url}")
+
     @app.post("/api/veo/concat-segments")
     def api_veo_concat_segments():
-        """Concatenate two video segments from GCS or inline data URLs."""
+        """Concatenate two video segments from GCS, inline data URLs, or plain HTTP URLs."""
         _t0 = time.monotonic()
         payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, _ = parse_common_payload(payload)
-            gcs_uri_a = (payload.get("gcs_uri_a") or "").strip()
-            gcs_uri_b = (payload.get("gcs_uri_b") or "").strip()
+            gcs_uri_a  = (payload.get("gcs_uri_a")        or "").strip()
+            gcs_uri_b  = (payload.get("gcs_uri_b")        or "").strip()
             data_url_a = (payload.get("video_data_url_a") or "").strip()
             data_url_b = (payload.get("video_data_url_b") or "").strip()
-            if (not gcs_uri_a and not data_url_a) or (not gcs_uri_b and not data_url_b):
-                return json_error("Each segment requires gcs_uri_x or video_data_url_x")
+            http_url_a = (payload.get("video_http_url_a") or "").strip()
+            http_url_b = (payload.get("video_http_url_b") or "").strip()
+            has_a = bool(gcs_uri_a or data_url_a or http_url_a)
+            has_b = bool(gcs_uri_b or data_url_b or http_url_b)
+            if not has_a or not has_b:
+                return json_error("Each segment requires gcs_uri_x, video_data_url_x, or video_http_url_x")
             if not concat_videos_ffmpeg or not download_gcs_blob_to_file:
                 return json_error("concat helpers not configured", 500)
 
@@ -1346,10 +1367,14 @@ def register_veo_routes(
                 seg_b_path = tmp_dir / "seg_b.mp4"
                 if gcs_uri_a:
                     download_gcs_blob_to_file(gcs_uri_a, seg_a_path, key_file, project_id)
+                elif http_url_a:
+                    _download_http_video_to_file(http_url_a, seg_a_path)
                 else:
                     _write_video_data_url_to_file(data_url_a, seg_a_path)
                 if gcs_uri_b:
                     download_gcs_blob_to_file(gcs_uri_b, seg_b_path, key_file, project_id)
+                elif http_url_b:
+                    _download_http_video_to_file(http_url_b, seg_b_path)
                 else:
                     _write_video_data_url_to_file(data_url_b, seg_b_path)
                 output_path = tmp_dir / "concat_16s.mp4"
