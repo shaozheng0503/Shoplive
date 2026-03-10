@@ -4890,6 +4890,29 @@ function consumeLandingParams() {
       }
     } catch (_e) {}
   }
+  if (from === "landing-ai-image") {
+    try {
+      const primaryUrl = String(sessionStorage.getItem("shoplive.landingRefImage") || "").trim();
+      let allUrls = [];
+      try { allUrls = JSON.parse(sessionStorage.getItem("shoplive.landingAiImages") || "[]"); } catch (_e) {}
+      if (!Array.isArray(allUrls) || !allUrls.length) allUrls = primaryUrl ? [primaryUrl] : [];
+      if (allUrls.length && !state.images.length) {
+        state.images = allUrls.map((url, i) => ({
+          dataUrl: url,
+          name: `ai-product-${i + 1}.png`,
+          source: "landing-ai-image",
+        }));
+        pushImageMsg(state.images);
+        const zh = currentLang === "zh";
+        pushMsg("system",
+          zh
+            ? `✅ 已导入 ${state.images.length} 张 AI 商品图作为参考图，可直接开始生成视频。`
+            : `✅ ${state.images.length} AI product image(s) imported as reference. Ready to generate video.`,
+          { typewriter: false }
+        );
+      }
+    } catch (_e) {}
+  }
   if (productUrl) {
     composerCompact?.classList.add("show-link-row");
     if (toggleProductUrlBtn) toggleProductUrlBtn.textContent = t("toggleLinkHide");

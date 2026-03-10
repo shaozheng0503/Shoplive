@@ -91,6 +91,7 @@ const i18n = {
 };
 
 const REF_IMAGE_STORAGE_KEY = "shoplive.landingRefImage";
+const AI_IMAGES_STORAGE_KEY = "shoplive.landingAiImages";
 let currentLang = localStorage.getItem("shoplive.lang") || "zh";
 let idx = 0;
 let selectedRefDataUrl = sessionStorage.getItem(REF_IMAGE_STORAGE_KEY) || "";
@@ -122,6 +123,22 @@ function gotoAgent(extra = {}) {
   if (extra.aspect_ratio) params.set("aspect_ratio", String(extra.aspect_ratio));
   if (extra.duration) params.set("duration", String(extra.duration));
   if (extra.enhance) params.set("enhance", "1");
+  window.location.href = `/pages/agent.html?${params.toString()}`;
+}
+
+function gotoAgentWithAiImage(singleDataUrl, allDataUrls = []) {
+  // Store the selected image as primary ref
+  sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, singleDataUrl);
+  // Store all AI images so agent can show them as a gallery
+  try {
+    sessionStorage.setItem(AI_IMAGES_STORAGE_KEY, JSON.stringify(allDataUrls.slice(0, 8)));
+  } catch (_e) {}
+  const draft = promptInput ? promptInput.value.trim() : "";
+  const params = new URLSearchParams();
+  params.set("from", "landing-ai-image");
+  if (draft) params.set("draft", draft);
+  params.set("aspect_ratio", aspectRatioSelect?.value || "16:9");
+  params.set("duration", durationSelect?.value || "8");
   window.location.href = `/pages/agent.html?${params.toString()}`;
 }
 
@@ -167,7 +184,7 @@ function updateRefTriggerPreview() {
   }
 }
 
-function renderRefGrid(container, items = []) {
+function renderRefGrid(container, items = [], { showVideoBtn = false } = {}) {
   if (!container) return;
   if (!items.length) {
     container.innerHTML = `
@@ -180,22 +197,67 @@ function renderRefGrid(container, items = []) {
   }
   container.innerHTML = "";
   items.forEach((src, index) => {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = `ref-thumb${src === selectedRefDataUrl ? " is-selected" : ""}`;
-    item.innerHTML = `<img src="${src}" alt="ref-${index + 1}" />`;
-    item.addEventListener("click", () => {
+    const card = document.createElement("div");
+    card.className = `ref-card${src === selectedRefDataUrl ? " is-selected" : ""}`;
+
+    // Image button (select as reference)
+    const imgBtn = document.createElement("button");
+    imgBtn.type = "button";
+    imgBtn.className = "ref-card-img-btn";
+    imgBtn.innerHTML = `<img src="${src}" alt="ref-${index + 1}" />`;
+    if (src === selectedRefDataUrl) {
+      imgBtn.innerHTML += `<span class="ref-card-check">✓</span>`;
+    }
+    imgBtn.addEventListener("click", () => {
       selectedRefDataUrl = src;
       sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, src);
       if (refPreview) refPreview.src = src;
-      renderRefGrid(container, items);
-      if (container === refUploadGrid) renderRefGrid(refAiResultGrid, aiAssets);
+      renderRefGrid(container, items, { showVideoBtn });
+      if (container === refUploadGrid) renderRefGrid(refAiResultGrid, aiAssets, { showVideoBtn: true });
       if (container === refAiResultGrid) renderRefGrid(refUploadGrid, uploadAssets);
       updateRefTriggerPreview();
-      // Auto-close after selection
-      setTimeout(closeRefModal, 180);
+      if (!showVideoBtn) setTimeout(closeRefModal, 180);
     });
-    container.appendChild(item);
+    card.appendChild(imgBtn);
+
+    // Action bar (only for AI generated images)
+    if (showVideoBtn) {
+      const actions = document.createElement("div");
+      actions.className = "ref-card-actions";
+
+      // "Use as reference" button
+      const useRefBtn = document.createElement("button");
+      useRefBtn.type = "button";
+      useRefBtn.className = "ref-card-use-ref";
+      useRefBtn.title = currentLang === "zh" ? "设为参考图" : "Set as reference";
+      useRefBtn.textContent = currentLang === "zh" ? "参考图" : "Use ref";
+      useRefBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedRefDataUrl = src;
+        sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, src);
+        if (refPreview) refPreview.src = src;
+        renderRefGrid(container, items, { showVideoBtn: true });
+        updateRefTriggerPreview();
+        setTimeout(closeRefModal, 180);
+      });
+
+      // "Generate video with this image →" button
+      const videoBtn = document.createElement("button");
+      videoBtn.type = "button";
+      videoBtn.className = "ref-card-video-btn";
+      videoBtn.title = currentLang === "zh" ? "用此图生成视频" : "Generate video";
+      videoBtn.innerHTML = currentLang === "zh" ? "生成视频 →" : "Make video →";
+      videoBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        gotoAgentWithAiImage(src, items);
+      });
+
+      actions.appendChild(useRefBtn);
+      actions.appendChild(videoBtn);
+      card.appendChild(actions);
+    }
+
+    container.appendChild(card);
   });
 }
 
@@ -403,7 +465,7 @@ refAiGenerateBtn?.addEventListener("click", async () => {
       sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, selectedRefDataUrl);
       if (refPreview) refPreview.src = selectedRefDataUrl;
     }
-    renderRefGrid(refAiResultGrid, aiAssets);
+    renderRefGrid(refAiResultGrid, aiAssets, { showVideoBtn: true });
   } catch (err) {
     finishAiProgress(refAiResultGrid, false);
     await new Promise((r) => setTimeout(r, 400));
@@ -428,7 +490,7 @@ enhancePromptBtn?.addEventListener("click", () => {
 
 if (selectedRefDataUrl && refPreview) refPreview.src = selectedRefDataUrl;
 renderRefGrid(refUploadGrid, uploadAssets);
-renderRefGrid(refAiResultGrid, aiAssets);
+renderRefGrid(refAiResultGrid, aiAssets, { showVideoBtn: true });
 setActiveRefTab("upload");
 applyLanguage(currentLang);
 updateRefTriggerPreview();

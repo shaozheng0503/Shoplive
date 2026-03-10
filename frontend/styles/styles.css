@@ -1172,6 +1172,114 @@ input:focus-visible {
   text-align: center;
 }
 
+/* ── Ref Card (upload + AI panels) ──────────────────────── */
+.ref-card {
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.ref-card:hover {
+  border-color: rgba(121, 168, 255, 0.45);
+}
+
+.ref-card.is-selected {
+  border-color: #79a8ff;
+  box-shadow: 0 0 0 3px rgba(121, 168, 255, 0.25);
+}
+
+.ref-card-img-btn {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 120px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ref-card-img-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s;
+}
+
+.ref-card:hover .ref-card-img-btn img {
+  transform: scale(1.03);
+}
+
+.ref-card-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #79a8ff;
+  color: #0b0e14;
+  font-size: 12px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 20px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* Action bar at bottom of AI-generated cards */
+.ref-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.ref-card-use-ref,
+.ref-card-video-btn {
+  padding: 7px 4px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  cursor: pointer;
+  border: none;
+  transition: background 0.15s, color 0.15s;
+  text-align: center;
+}
+
+.ref-card-use-ref {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(200, 220, 255, 0.8);
+}
+
+.ref-card-use-ref:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #d7eaff;
+}
+
+.ref-card-video-btn {
+  background: rgba(94, 133, 216, 0.18);
+  color: #a8c8ff;
+}
+
+.ref-card-video-btn:hover {
+  background: rgba(94, 133, 216, 0.35);
+  color: #c8dcff;
+}
+
 .ai-generate-box {
   display: grid;
   grid-template-columns: 1fr auto;
