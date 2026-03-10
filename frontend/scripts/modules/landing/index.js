@@ -148,6 +148,25 @@ function setActiveRefTab(tab) {
   refAiPanel?.classList.toggle("is-active", !isUpload);
 }
 
+function updateRefTriggerPreview() {
+  const icon = openRefPanelBtn?.querySelector(".ref-icon");
+  const label = openRefPanelBtn?.querySelector("[data-i18n]");
+  if (!openRefPanelBtn) return;
+  if (selectedRefDataUrl) {
+    openRefPanelBtn.style.backgroundImage = `url("${selectedRefDataUrl}")`;
+    openRefPanelBtn.style.backgroundSize = "cover";
+    openRefPanelBtn.style.backgroundPosition = "center";
+    openRefPanelBtn.classList.add("has-ref");
+    if (icon) icon.style.display = "none";
+    if (label) label.style.display = "none";
+  } else {
+    openRefPanelBtn.style.backgroundImage = "";
+    openRefPanelBtn.classList.remove("has-ref");
+    if (icon) icon.style.display = "";
+    if (label) label.style.display = "";
+  }
+}
+
 function renderRefGrid(container, items = []) {
   if (!container) return;
   if (!items.length) {
@@ -172,6 +191,9 @@ function renderRefGrid(container, items = []) {
       renderRefGrid(container, items);
       if (container === refUploadGrid) renderRefGrid(refAiResultGrid, aiAssets);
       if (container === refAiResultGrid) renderRefGrid(refUploadGrid, uploadAssets);
+      updateRefTriggerPreview();
+      // Auto-close after selection
+      setTimeout(closeRefModal, 180);
     });
     container.appendChild(item);
   });
@@ -292,20 +314,33 @@ window.addEventListener("keydown", (e) => {
 
 refTabUpload?.addEventListener("click", () => setActiveRefTab("upload"));
 refTabAi?.addEventListener("click", () => setActiveRefTab("ai"));
-refUploadBtn?.addEventListener("click", () => refFileInput?.click());
-refMosaicBtn?.addEventListener("click", () => refFileInput?.click());
+refUploadBtn?.addEventListener("click", () => {
+  setActiveRefTab("upload");
+  refFileInput?.click();
+});
+refMosaicBtn?.addEventListener("click", () => {
+  setActiveRefTab("upload");
+  refFileInput?.click();
+});
 
 refFileInput?.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []).slice(0, 8);
   if (!files.length) return;
   const results = await Promise.all(files.map((f) => readFileAsDataUrl(f).catch(() => "")));
-  uploadAssets = results.filter(Boolean);
-  if (!selectedRefDataUrl && uploadAssets.length) {
+  const newAssets = results.filter(Boolean);
+  if (!newAssets.length) return;
+  // Merge with existing assets, deduplicate by data-url prefix
+  uploadAssets = [...uploadAssets, ...newAssets].slice(0, 16);
+  // Auto-select first uploaded image if none selected yet
+  if (!selectedRefDataUrl) {
     selectedRefDataUrl = uploadAssets[0];
     sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, selectedRefDataUrl);
     if (refPreview) refPreview.src = selectedRefDataUrl;
   }
+  setActiveRefTab("upload");
   renderRefGrid(refUploadGrid, uploadAssets);
+  // Reset input so same file can be re-selected
+  e.target.value = "";
 });
 
 refAiGenerateBtn?.addEventListener("click", async () => {
@@ -345,3 +380,4 @@ renderRefGrid(refUploadGrid, uploadAssets);
 renderRefGrid(refAiResultGrid, aiAssets);
 setActiveRefTab("upload");
 applyLanguage(currentLang);
+updateRefTriggerPreview();

@@ -581,6 +581,18 @@ input:focus-visible {
   line-height: 1;
   cursor: pointer;
   box-shadow: var(--elev-1);
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ref-trigger.has-ref {
+  border-color: #79a8ff;
+  box-shadow: 0 0 0 2px rgba(121, 168, 255, 0.25), var(--elev-1);
+  color: transparent;
+  min-width: 56px;
+  padding: 0;
+  width: 56px;
 }
 
 .ref-icon {
@@ -1117,22 +1129,47 @@ input:focus-visible {
 
 .ref-thumb {
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 2px solid rgba(255, 255, 255, 0.12);
   overflow: hidden;
   height: 120px;
   position: relative;
   cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.ref-thumb:hover {
+  border-color: rgba(121, 168, 255, 0.5);
 }
 
 .ref-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 
 .ref-thumb.is-selected {
   border-color: #79a8ff;
-  box-shadow: 0 0 0 2px rgba(121, 168, 255, 0.35) inset;
+  box-shadow: 0 0 0 3px rgba(121, 168, 255, 0.3);
+}
+
+.ref-thumb.is-selected::after {
+  content: "✓";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #79a8ff;
+  color: #0b0e14;
+  font-size: 12px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 20px;
+  text-align: center;
 }
 
 .ai-generate-box {
