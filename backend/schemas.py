@@ -264,9 +264,12 @@ class VeoStartRequest(CommonPayload):
         le=4,
         description="Number of video samples to generate (1-4).",
     )
-    duration_seconds: Optional[Literal[4, 6, 8]] = Field(
+    duration_seconds: Optional[int] = Field(
         default=None,
-        description="Video duration per segment. Only 4, 6, or 8 seconds are supported.",
+        ge=4,
+        le=15,
+        description="Video duration in seconds. Veo supports 4 or 8s; Grok (Aurora) supports 4–15s. "
+                    "For single-shot generation without stitching, use 10–15 with a Grok-compatible model.",
     )
     aspect_ratio: Optional[str] = Field(
         default=None,

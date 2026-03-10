@@ -902,9 +902,9 @@ function getModelProvider() {
 // Duration option definitions per provider
 const DURATION_OPTIONS = {
   tabcode: [
-    { value: "6",  labelZh: "6秒（1段）",   labelEn: "6s (1 clip)" },
-    { value: "12", labelZh: "12秒（2段）",  labelEn: "12s (2 clips)" },
-    { value: "18", labelZh: "18秒（3段）",  labelEn: "18s (3 clips)", defaultSel: true },
+    { value: "6",  labelZh: "6秒（单次）",        labelEn: "6s (single)" },
+    { value: "12", labelZh: "12秒（2段拼接）",     labelEn: "12s (2 clips)" },
+    { value: "18", labelZh: "18秒（3段拼接）",     labelEn: "18s (3 clips)", defaultSel: true },
   ],
   veo: [
     { value: "8",  labelZh: "8秒",          labelEn: "8s" },
@@ -939,6 +939,7 @@ function updateDurationHint() {
   durationHint.className = "duration-hint";
 
   if (provider === "tabcode") {
+    // Grok single-shot max is ~6s; all longer durations require multi-clip stitching
     const clips = dur <= 6 ? 1 : dur <= 12 ? 2 : 3;
     const hint = clips === 1
       ? (zh ? `ℹ️ 生成 1 段，实际约 6s。` : `ℹ️ 1 clip generated, ~6s actual.`)
@@ -1021,6 +1022,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
   const base  = getApiBase();
   const model = getVeoModel();
   const dur   = Number(targetDuration) || 6;
+  // Grok single-shot max is ~6s; all longer durations require multi-clip stitching
   // Map selected duration to clip count: 6→1, 12→2, 18→3
   const clips = dur <= 6 ? 1 : dur <= 12 ? 2 : 3;
 
@@ -1031,7 +1033,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
 
   updateVideoTask(taskId, { status: "running", stage: zh ? "Grok 生成中" : "Grok generating" });
 
-  // Narration hints per part
+  // Narration hints per part (used for multi-clip only)
   const partHints = [
     "product introduction, hero shot, first impression and opening scene.",
     "core selling-point showcase, usage demonstration, close-up texture details. Maintain identical product identity and style as Part 1.",
@@ -4163,7 +4165,7 @@ async function generateVideo(promptOverride = "") {
     }
     if (getModelProvider() === "tabcode") {
       const targetDuration = Number(state.duration) || 6;
-      const grokPrompt = buildGrokVideoPrompt(safePrompt, 6); // each clip always 6s
+      const grokPrompt = buildGrokVideoPrompt(safePrompt, 6);
       await generateTabcodeVideo(grokPrompt, taskId, targetDuration);
       finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
       releaseSlotOnce();

@@ -35,6 +35,7 @@ def register_veo_routes(
     extract_inline_videos: Callable[[object], list],
     sign_gcs_url: Callable[[str, str], str],
     split_prompt_for_16s: Callable[..., Dict[str, str]] = None,
+    split_prompt_for_12s: Callable[..., Dict[str, str]] = None,
     concat_videos_ffmpeg: Callable[..., Path] = None,
     download_gcs_blob_to_file: Callable[..., Path] = None,
     call_litellm_chat: Callable[..., Tuple[int, Dict]] = None,
@@ -1702,3 +1703,207 @@ def register_veo_routes(
                 duration_ms=_dur_ms,
             )
             return json_error(f"16s 视频生成失败: {e}", 500)
+
+    @app.post("/api/veo/generate-12s")
+    def api_veo_generate_12s():
+        """Generate a 12s video by splitting prompt into two 6s segments,
+        generating both in parallel, then concatenating with ffmpeg.
+
+        Designed for models like Grok that support 6s per generation.
+        Uses the same anti-repetition prompt-split logic as generate-16s.
+        """
+        _t0 = time.monotonic()
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, model = parse_common_payload(payload)
+            prompt = (payload.get("prompt") or "").strip()
+            if not model:
+                model = "veo-3.1-generate-preview"
+            if not prompt:
+                return json_error("prompt 不能为空", error_code="MISSING_PROMPT")
+
+            import os
+            api_base = (
+                payload.get("api_base")
+                or os.getenv("LITELLM_API_BASE")
+                or "https://litellm.shoplazza.site"
+            ).strip().rstrip("/")
+            api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
+            llm_model = (payload.get("llm_model") or "bedrock-claude-4-5-haiku").strip()
+
+            if not split_prompt_for_12s or not concat_videos_ffmpeg or not download_gcs_blob_to_file:
+                return json_error("12s generation helpers not configured", 500)
+
+            parts = split_prompt_for_12s(
+                prompt,
+                api_base=api_base,
+                api_key=api_key,
+                model=llm_model,
+                proxy=proxy,
+            )
+            prompt_a = parts["part1"]
+            prompt_b = parts["part2"]
+
+            token = get_access_token(key_file, proxy)
+
+            aspect_ratio = (payload.get("aspect_ratio") or "16:9").strip()
+            storage_uri = (payload.get("storage_uri") or "").strip() or None
+            image_b64 = (payload.get("image_base64") or "").strip()
+            image_mime_type = (payload.get("image_mime_type") or "image/png").strip()
+            image_url = (payload.get("image_url") or "").strip()
+            veo_mode = (payload.get("veo_mode") or "text").strip()
+            if image_b64 and image_b64.startswith("data:image/"):
+                image_b64, image_mime_type = parse_data_url(image_b64)
+
+            def _build_instance_12s(seg_prompt):
+                inst = {"prompt": seg_prompt}
+                if veo_mode == "image":
+                    nonlocal image_b64, image_mime_type
+                    if not image_b64 and image_url:
+                        image_b64_local, image_mime_local = fetch_image_as_base64(image_url, proxy)
+                        inst["image"] = {"bytesBase64Encoded": image_b64_local, "mimeType": image_mime_local}
+                    elif image_b64:
+                        inst["image"] = {"bytesBase64Encoded": image_b64, "mimeType": image_mime_type}
+                return inst
+
+            base_params = {"sampleCount": 1, "durationSeconds": 6, "aspectRatio": aspect_ratio}
+            if storage_uri:
+                base_params["storageUri"] = storage_uri
+
+            def _submit_and_poll_12s(seg_prompt, seg_label):
+                instance = _build_instance_12s(seg_prompt)
+                body = {"instances": [instance], "parameters": dict(base_params)}
+                status_code, ok, submit_data = _call_predict_long_running(
+                    project_id=project_id,
+                    model=model,
+                    token=token,
+                    proxy=proxy,
+                    body=body,
+                )
+                if not ok:
+                    raise RuntimeError(f"Segment {seg_label} submit failed (status={status_code})")
+                operation_name = submit_data.get("name")
+                if not operation_name:
+                    raise RuntimeError(f"Segment {seg_label} operation_name missing")
+                video_uri, _ = _poll_video_ready(
+                    project_id=project_id,
+                    model=model,
+                    token=token,
+                    proxy=proxy,
+                    operation_name=operation_name,
+                    poll_interval_seconds=6,
+                    max_wait_seconds=720,
+                )
+                try:
+                    signed_url = sign_gcs_url(video_uri, key_file)
+                except Exception:
+                    signed_url = ""
+                return {
+                    "label": seg_label,
+                    "gcs_uri": video_uri,
+                    "signed_url": signed_url,
+                    "operation_name": operation_name,
+                }
+
+            segments = []
+            errors = []
+            from shoplive.backend.async_executor import get_executor
+            _pool = get_executor()
+            futures = {
+                _pool.submit(_submit_and_poll_12s, prompt_a, "A"): "A",
+                _pool.submit(_submit_and_poll_12s, prompt_b, "B"): "B",
+            }
+            for future in as_completed(futures, timeout=1500):
+                label = futures[future]
+                try:
+                    seg = future.result()
+                    segments.append(seg)
+                except Exception as e:
+                    errors.append({"label": label, "error": str(e)})
+
+            if errors:
+                failed_labels = ", ".join(e["label"] for e in errors)
+                _dur_ms = int((time.monotonic() - _t0) * 1000)
+                audit_log.record(
+                    tool="generate_video_12s",
+                    action="veo_12s",
+                    input_summary={"prompt_length": len(prompt), "model": model},
+                    output_summary={"errors": errors, "segments_ok": len(segments)},
+                    status="error",
+                    error_code="VEO_12S_SEGMENT_FAILED",
+                    duration_ms=_dur_ms,
+                )
+                return jsonify({
+                    "ok": False,
+                    "status_code": 502,
+                    "error": f"Segment(s) {failed_labels} failed",
+                    "errors": errors,
+                    "segments": segments,
+                    "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
+                }), 502
+
+            segments.sort(key=lambda s: s["label"])
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="veo12s_"))
+            try:
+                local_files = []
+                for seg in segments:
+                    local_path = tmp_dir / f"seg_{seg['label']}.mp4"
+                    download_gcs_blob_to_file(
+                        seg["gcs_uri"], local_path, key_file, project_id
+                    )
+                    local_files.append(local_path)
+
+                output_path = tmp_dir / "concat_12s.mp4"
+                concat_videos_ffmpeg(local_files, output_path)
+
+                final_data = output_path.read_bytes()
+            finally:
+                import shutil
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video_12s",
+                action="veo_12s",
+                input_summary={"prompt_length": len(prompt), "model": model},
+                output_summary={
+                    "segment_count": len(segments),
+                    "concat_size_bytes": len(final_data),
+                },
+                status="success",
+                duration_ms=_dur_ms,
+            )
+
+            import base64 as b64mod
+            video_b64 = b64mod.b64encode(final_data).decode("utf-8")
+            data_url = f"data:video/mp4;base64,{video_b64}"
+
+            return jsonify({
+                "ok": True,
+                "status_code": 200,
+                "model": model,
+                "mode": "prompt_split_12s",
+                "final_duration_seconds": 12,
+                "segments": [
+                    {"label": s["label"], "gcs_uri": s["gcs_uri"], "signed_url": s["signed_url"]}
+                    for s in segments
+                ],
+                "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
+                "video_data_url": data_url,
+            })
+        except ValueError as e:
+            return json_error(str(e))
+        except Exception as e:
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video_12s",
+                action="veo_12s",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={},
+                status="error",
+                error_code="VEO_12S_FAILED",
+                error_message=str(e)[:200],
+                duration_ms=_dur_ms,
+            )
+            return json_error(f"12s 视频生成失败: {e}", 500)

@@ -1123,34 +1123,74 @@ def download_gcs_blob_to_file(
     return output_path
 
 
-PROMPT_SPLIT_SYSTEM = (
-    "You are an ecommerce video prompt architect. "
-    "Given a single video generation prompt, split it into exactly TWO 8-second segments "
-    "that together form a cohesive 16-second product video.\n\n"
-    "Rules:\n"
-    "- Part 1 (8s): Product introduction, first impression, core selling-point showcase.\n"
-    "- Part 2 (8s): Usage experience, emotional appeal, lifestyle context, CTA close.\n"
-    "- Both parts MUST keep identical: product identity, visual style, lighting style, "
-    "camera language, color palette, aspect ratio.\n"
-    "- NO repeated content between parts. Part 2 must narratively follow Part 1.\n"
-    "- Each part must be a complete, self-contained video prompt (not a fragment).\n"
-    "- Each part must include the compliance suffix from the original prompt if present.\n"
-    "- Output ONLY valid JSON, no markdown, no explanation.\n\n"
-    'Output schema: {"part1": "...", "part2": "..."}'
-)
+def _build_prompt_split_system(segment_duration: int, total_duration: int) -> str:
+    """Build a prompt-split system message for any N-second video split into 2 equal segments."""
+    half = total_duration // 2
+    assert half == segment_duration, "segment_duration must equal total_duration // 2"
+    return (
+        f"You are an ecommerce video prompt architect. "
+        f"Given a single video generation prompt, split it into exactly TWO {segment_duration}-second segments "
+        f"that together form a cohesive {total_duration}-second product video.\n\n"
+        "STRICT ANTI-REPETITION RULES (most important):\n"
+        "- Part 1 and Part 2 MUST cover DIFFERENT narrative moments. "
+        "  They must NOT show the same action, the same product angle, or the same scene.\n"
+        f"- Part 1 ({segment_duration}s): Product introduction, first impression, hero shot, "
+        "  core selling-point showcase — camera moves TOWARD the product.\n"
+        f"- Part 2 ({segment_duration}s): A DISTINCTLY DIFFERENT scene — usage demonstration, "
+        "  lifestyle context, emotional payoff, or CTA close. "
+        "  The product must appear in a new environment, angle, or activity. "
+        "  DO NOT repeat the same shot or description from Part 1.\n\n"
+        "CONSISTENCY RULES (visual continuity across segments):\n"
+        "- Both parts MUST keep identical: product identity, brand color, visual style, "
+        "  lighting style, camera language, color palette, aspect ratio.\n"
+        "- The transition from Part 1 to Part 2 must feel like a continuous story, not a jump cut.\n\n"
+        "FORMAT RULES:\n"
+        "- Each part must be a COMPLETE, self-contained video prompt (not a fragment or sentence).\n"
+        "- Each part must include the compliance suffix from the original prompt if present.\n"
+        "- Output ONLY valid JSON, no markdown, no explanation.\n\n"
+        'Output schema: {"part1": "...", "part2": "..."}'
+    )
 
 
-def split_prompt_for_16s(
+# Pre-built system prompts for common durations (lazy-initialized on first use)
+def _get_prompt_split_system_16s() -> str:
+    return _build_prompt_split_system(segment_duration=8, total_duration=16)
+
+
+def _get_prompt_split_system_12s() -> str:
+    return _build_prompt_split_system(segment_duration=6, total_duration=12)
+
+
+# Keep legacy constant for backward compatibility
+PROMPT_SPLIT_SYSTEM = _get_prompt_split_system_16s()
+
+
+def split_prompt_for_ns(
     original_prompt: str,
     *,
     api_base: str,
     api_key: str,
     model: str = "gpt-4o-mini",
     proxy: str = "",
+    segment_duration: int = 8,
+    total_duration: int = 16,
 ) -> Dict[str, str]:
+    """Split a video prompt into two non-overlapping segments for multi-segment generation.
+
+    Args:
+        segment_duration: Duration of each segment in seconds (e.g., 8 for 16s, 6 for 12s).
+        total_duration: Total target duration in seconds (must be 2 * segment_duration).
+    """
+    system_prompt = _build_prompt_split_system(segment_duration=segment_duration, total_duration=total_duration)
     messages = [
-        {"role": "system", "content": PROMPT_SPLIT_SYSTEM},
-        {"role": "user", "content": original_prompt},
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Original prompt to split (target total: {total_duration}s, "
+                f"each segment: {segment_duration}s):\n\n{original_prompt}"
+            ),
+        },
     ]
     status_code, data_wrap = call_litellm_chat(
         api_base=api_base,
@@ -1158,8 +1198,8 @@ def split_prompt_for_16s(
         model=model,
         messages=messages,
         proxy=proxy,
-        temperature=0.3,
-        max_tokens=1200,
+        temperature=0.25,
+        max_tokens=1600,
     )
     if not data_wrap.get("ok"):
         raise RuntimeError(f"Prompt split LLM call failed (status={status_code})")
@@ -1173,3 +1213,43 @@ def split_prompt_for_16s(
             f"Raw: {content[:300]}"
         )
     return {"part1": part1, "part2": part2}
+
+
+def split_prompt_for_16s(
+    original_prompt: str,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    proxy: str = "",
+) -> Dict[str, str]:
+    """Split a prompt into two 8s segments forming a 16s video. Legacy wrapper."""
+    return split_prompt_for_ns(
+        original_prompt,
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        proxy=proxy,
+        segment_duration=8,
+        total_duration=16,
+    )
+
+
+def split_prompt_for_12s(
+    original_prompt: str,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    proxy: str = "",
+) -> Dict[str, str]:
+    """Split a prompt into two 6s segments forming a 12s video (e.g. for Grok)."""
+    return split_prompt_for_ns(
+        original_prompt,
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        proxy=proxy,
+        segment_duration=6,
+        total_duration=12,
+    )
