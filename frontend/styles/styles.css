@@ -1192,6 +1192,81 @@ input:focus-visible {
   color: rgba(223, 236, 255, 0.55);
 }
 
+/* ── AI Loading State ─────────────────────────────── */
+.ai-loading-wrap {
+  width: 100%;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 24px 16px;
+}
+
+.ai-loading-cards {
+  display: flex;
+  gap: 14px;
+}
+
+.ai-skeleton-card {
+  width: 118px;
+  height: 118px;
+  border-radius: 12px;
+  background: linear-gradient(
+    135deg,
+    rgba(94, 133, 216, 0.12) 0%,
+    rgba(121, 168, 255, 0.06) 50%,
+    rgba(94, 133, 216, 0.12) 100%
+  );
+  background-size: 200% 200%;
+  animation: skeletonShimmer 1.8s ease-in-out infinite;
+  border: 1px solid rgba(121, 168, 255, 0.15);
+}
+
+.ai-skeleton-card:nth-child(2) {
+  animation-delay: 0.4s;
+}
+
+@keyframes skeletonShimmer {
+  0%   { background-position: 200% 0; opacity: 0.7; }
+  50%  { background-position: 0   0; opacity: 1;   }
+  100% { background-position: 200% 0; opacity: 0.7; }
+}
+
+.ai-progress-bar-wrap {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-progress-bar-track {
+  flex: 1;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.ai-progress-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3a6fca, #79a8ff);
+  transition: width 0.4s ease-out;
+}
+
+.ai-progress-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(200, 220, 255, 0.75);
+  min-width: 34px;
+  text-align: right;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (min-width: 1440px) {
   .hero-shell {
     padding: 0 96px 56px;

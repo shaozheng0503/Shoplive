@@ -343,23 +343,74 @@ refFileInput?.addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
+let _aiProgressTimer = null;
+
+function showAiProgress(container) {
+  if (!container) return;
+  if (_aiProgressTimer) clearInterval(_aiProgressTimer);
+  let pct = 0;
+  container.innerHTML = `
+    <div class="ai-loading-wrap">
+      <div class="ai-loading-cards">
+        <div class="ai-skeleton-card"></div>
+        <div class="ai-skeleton-card"></div>
+      </div>
+      <div class="ai-progress-bar-wrap">
+        <div class="ai-progress-bar-track">
+          <div class="ai-progress-bar-fill" id="aiProgressFill" style="width:0%"></div>
+        </div>
+        <span class="ai-progress-label" id="aiProgressLabel">0%</span>
+      </div>
+    </div>
+  `;
+  const fill = container.querySelector("#aiProgressFill");
+  const label = container.querySelector("#aiProgressLabel");
+  // Ease progress toward 90% over ~18s (image gen typically 8-20s)
+  _aiProgressTimer = setInterval(() => {
+    const gap = 90 - pct;
+    pct += Math.max(0.4, gap * 0.045);
+    pct = Math.min(pct, 90);
+    if (fill) fill.style.width = `${pct.toFixed(1)}%`;
+    if (label) label.textContent = `${Math.round(pct)}%`;
+  }, 400);
+}
+
+function finishAiProgress(container, success = true) {
+  if (_aiProgressTimer) { clearInterval(_aiProgressTimer); _aiProgressTimer = null; }
+  const fill = container?.querySelector("#aiProgressFill");
+  const label = container?.querySelector("#aiProgressLabel");
+  if (fill) fill.style.width = "100%";
+  if (fill) fill.style.background = success
+    ? "linear-gradient(90deg, #5e85d8, #79a8ff)"
+    : "linear-gradient(90deg, #c0392b, #e74c3c)";
+  if (label) label.textContent = success ? "100%" : "failed";
+}
+
 refAiGenerateBtn?.addEventListener("click", async () => {
   const promptText = String(refAiPromptInput?.value || promptInput?.value || "").trim();
   if (!promptText) return;
   const oldText = refAiGenerateBtn.textContent;
   refAiGenerateBtn.disabled = true;
   refAiGenerateBtn.textContent = i18n[currentLang].refGenerating;
+  setActiveRefTab("ai");
+  showAiProgress(refAiResultGrid);
   try {
     aiAssets = await callLandingImageGenerate(promptText);
+    finishAiProgress(refAiResultGrid, true);
+    await new Promise((r) => setTimeout(r, 300));
     if (!selectedRefDataUrl && aiAssets.length) {
       selectedRefDataUrl = aiAssets[0];
       sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, selectedRefDataUrl);
       if (refPreview) refPreview.src = selectedRefDataUrl;
     }
     renderRefGrid(refAiResultGrid, aiAssets);
-    setActiveRefTab("ai");
   } catch (err) {
-    refAiResultGrid.innerHTML = `<span class="ref-empty">${i18n[currentLang].refGenerateFail}: ${String(err?.message || "")}</span>`;
+    finishAiProgress(refAiResultGrid, false);
+    await new Promise((r) => setTimeout(r, 400));
+    refAiResultGrid.innerHTML = `
+      <div class="ref-empty-state">
+        <span class="ref-empty">⚠️ ${i18n[currentLang].refGenerateFail}: ${String(err?.message || "")}</span>
+      </div>`;
   } finally {
     refAiGenerateBtn.disabled = false;
     refAiGenerateBtn.textContent = oldText || i18n[currentLang].refAiGenerateBtn;
