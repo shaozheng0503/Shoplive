@@ -1017,32 +1017,64 @@ async function _grokConcat(base, urlA, urlB) {
   }
 }
 
+/**
+ * Build a shared LLM system prompt for splitting any video prompt into N segments.
+ * Enforces: (1) visual anchor lock-in, (2) narrative scene diversity, (3) seamless continuity.
+ */
+function _buildSplitSystemPrompt(clips, segDuration) {
+  const totalSec = clips * segDuration;
+  const sceneLines = [
+    `- Segment 1 (${segDuration}s): PRODUCT HERO OPENING — camera pushes in from wide to medium, revealing the product's form and silhouette. Focus on the most striking visual feature. Set the mood and color palette for the whole video.`,
+    `- Segment 2 (${segDuration}s): USAGE / SELLING-POINT DETAIL — a DIFFERENT camera angle and environment from Segment 1. Show the product being used, demonstrate a key feature up-close, or show a lifestyle context that creates emotional connection.`,
+    `- Segment 3 (${segDuration}s): EMOTIONAL PAYOFF & CTA — final scene with confident energy. Product in a fresh setting, wider or dynamic shot. Ends with a memorable visual that reinforces purchase intent.`,
+  ].slice(0, clips).join("\n");
+
+  return (
+    `You are a professional ecommerce video director and prompt architect.\n`
+    + `Your task: split ONE product video prompt into exactly ${clips} distinct ${segDuration}-second segment prompts `
+    + `that together form a seamless ${totalSec}-second product video.\n\n`
+
+    + `═══ STEP 1: EXTRACT VISUAL ANCHORS (do this internally before writing segments) ═══\n`
+    + `Before splitting, identify and lock these elements from the original prompt:\n`
+    + `  • PRODUCT: exact product name, color, material, key visual features\n`
+    + `  • STYLE: cinematic tone, visual style (clean/editorial/lifestyle/etc.)\n`
+    + `  • LIGHTING: lighting setup (soft natural / studio / golden hour / etc.)\n`
+    + `  • COLOR PALETTE: dominant colors and mood\n`
+    + `  • CAMERA LANGUAGE: lens style, movement type (push-in/handheld/static/etc.)\n`
+    + `These anchors MUST appear consistently in ALL segments. Never contradict them.\n\n`
+
+    + `═══ STEP 2: ASSIGN NARRATIVE ROLES (strictly follow this) ═══\n`
+    + sceneLines + `\n\n`
+
+    + `═══ STEP 3: WRITE EACH SEGMENT PROMPT ═══\n`
+    + `For each segment:\n`
+    + `  • BEGIN with the locked visual anchors (product + style + lighting + palette)\n`
+    + `  • THEN add the segment-specific narrative action and camera movement\n`
+    + `  • Use timestamp shot control: [00:00-00:0${Math.round(segDuration/4)}] ... [00:0${Math.round(segDuration/4)}-00:0${Math.round(segDuration/2)}] ... etc.\n`
+    + `  • Each segment must be COMPLETE and SELF-CONTAINED (readable without the others)\n`
+    + `  • The END of Segment N should visually "hand off" to Segment N+1 naturally\n\n`
+
+    + `═══ HARD RULES ═══\n`
+    + `  ✗ NEVER repeat the same shot composition, camera angle, or action across segments\n`
+    + `  ✗ NEVER use quotation marks (renders as on-screen text in Veo/Grok)\n`
+    + `  ✗ NEVER include text overlays, subtitles, or captions\n`
+    + `  ✗ NEVER change the product appearance, color, or brand identity between segments\n`
+    + `  ✓ Each segment must feel like it belongs to the SAME video shoot\n`
+    + `  ✓ Include the compliance suffix from the original prompt if present\n`
+    + `  ✓ Write in English only\n\n`
+
+    + `Output ONLY valid JSON: ${JSON.stringify(
+        Object.fromEntries(Array.from({length: clips}, (_, i) => [`part${i+1}`, `...`]))
+      )}`
+  );
+}
+
 async function _splitPromptForGrok(base, originalPrompt, clips) {
   /**
    * Use LLM to split a single prompt into N distinct scene prompts for Grok.
    * Falls back to structured hardcoded variants if LLM fails.
    */
-  const totalSec = clips * 6;
-  const systemMsg =
-    `You are an ecommerce video prompt architect.\n`
-    + `Given a single video generation prompt, split it into exactly ${clips} ${Math.round(totalSec / clips)}-second segments `
-    + `that together form a cohesive ${totalSec}-second product video.\n\n`
-    + `STRICT ANTI-REPETITION RULES (highest priority):\n`
-    + `- Each segment MUST cover a DIFFERENT narrative moment and scene.\n`
-    + `- Segment 1: Product introduction, hero shot, first impression — camera moves toward product.\n`
-    + (clips >= 2
-      ? `- Segment 2: Usage demonstration or selling-point close-up — DIFFERENT angle/environment from Segment 1.\n`
-      : "")
-    + (clips >= 3
-      ? `- Segment 3: Lifestyle context, emotional payoff, confident CTA close.\n`
-      : "")
-    + `\nCONSISTENCY RULES:\n`
-    + `- All segments MUST keep identical: product identity, visual style, lighting, color palette.\n`
-    + `- Transitions must feel like a continuous story.\n\n`
-    + `FORMAT RULES:\n`
-    + `- Each segment prompt must be complete and self-contained.\n`
-    + `- Write in English only.\n`
-    + `- Output ONLY valid JSON with keys "part1"${clips >= 2 ? ', "part2"' : ""}${clips >= 3 ? ', "part3"' : ""}.`;
+  const segDuration = 6;
 
   try {
     const resp = await postJson(
@@ -1050,11 +1082,17 @@ async function _splitPromptForGrok(base, originalPrompt, clips) {
       {
         model: "bedrock-claude-4-5-haiku",
         messages: [
-          { role: "system", content: systemMsg },
-          { role: "user", content: `Original prompt (target total: ${totalSec}s, each segment: ${Math.round(totalSec / clips)}s):\n\n${originalPrompt}` },
+          { role: "system", content: _buildSplitSystemPrompt(clips, segDuration) },
+          {
+            role: "user",
+            content:
+              `Split this into ${clips} segments of ${segDuration}s each (total ${clips * segDuration}s).\n`
+              + `Preserve ALL visual anchors faithfully. Make each segment narratively distinct.\n\n`
+              + `Original prompt:\n${originalPrompt}`,
+          },
         ],
         temperature: 0.25,
-        max_tokens: 1600,
+        max_tokens: 1800,
       },
       25000
     );
@@ -1072,14 +1110,26 @@ async function _splitPromptForGrok(base, originalPrompt, clips) {
     if (parts.every(Boolean)) return parts;
   } catch (_) {}
 
-  // Smart fallback: generate structurally distinct prompts without LLM
-  const sceneInstructions = [
-    "Product hero introduction. Camera slowly pushes in, revealing the product's full form. Close-up on key selling feature with sharp focus.",
-    "Usage and lifestyle scene. A person naturally uses or interacts with the product in a real-life setting. Emotional connection moment.",
-    "Closing and CTA. Dynamic product reveal from a fresh angle. Confident final shot with product prominently featured.",
+  // Smart fallback: structural scene templates anchored to original prompt
+  const sceneActions = [
+    `[00:00-00:02] Camera slowly pushes in from wide shot, revealing the product's full form and silhouette against the background. `
+    + `[00:02-00:04] Medium close-up highlighting the product's primary visual feature with sharp focus. `
+    + `[00:04-00:06] Detail shot — texture, material, or key design element. `
+    + `[00:06-00:08] Pull back slightly to hero framing — product centered, environment visible.`,
+
+    `[00:00-00:02] Product in a lifestyle context — a hand or person naturally interacting with it in its intended use environment. `
+    + `[00:02-00:04] Close-up of the product during use — showing a secondary feature or benefit. `
+    + `[00:04-00:06] Reaction or experience moment — emotional satisfaction of using the product. `
+    + `[00:06-00:08] Wide lifestyle shot — product and user together, confident and aspirational.`,
+
+    `[00:00-00:02] Dynamic angle change — product approached from an unexpected fresh perspective. `
+    + `[00:02-00:04] Slow pan across the product's profile, showcasing its full design. `
+    + `[00:04-00:06] Final feature close-up — the detail that makes this product worth buying. `
+    + `[00:06-00:08] Confident closing hero shot — product alone, perfect lighting, camera holds still.`,
   ];
+
   return Array.from({ length: clips }, (_, i) =>
-    `${originalPrompt} — Scene ${i + 1}/${clips}: ${sceneInstructions[i] || sceneInstructions[sceneInstructions.length - 1]}`
+    `${originalPrompt} — SEGMENT ${i + 1}/${clips}: ${sceneActions[i] || sceneActions[sceneActions.length - 1]}`
   );
 }
 
@@ -3966,40 +4016,18 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
         messages: [
           {
             role: "system",
-            content:
-              "You are an ecommerce video prompt architect for Google Veo 3.1.\n"
-              + "Given a single video generation prompt, split it into exactly TWO 8-second segments "
-              + "that together form a cohesive 16-second product video.\n\n"
-              + "STRICT ANTI-REPETITION RULES (highest priority):\n"
-              + "- Part 1 and Part 2 MUST cover DIFFERENT narrative moments. "
-              + "They must NOT show the same action, the same product angle, or the same scene.\n"
-              + "- Part 1 (8s): Product introduction, first impression, hero shot, "
-              + "core selling-point showcase — camera moves TOWARD the product.\n"
-              + "- Part 2 (8s): A DISTINCTLY DIFFERENT scene — usage demonstration, "
-              + "lifestyle context, emotional payoff, or CTA close. "
-              + "The product must appear in a new environment, angle, or activity. "
-              + "DO NOT repeat the same shot or description from Part 1.\n\n"
-              + "CONSISTENCY RULES:\n"
-              + "- Both parts MUST keep identical: product identity, brand color, visual style, "
-              + "lighting style, camera language, color palette, aspect ratio.\n"
-              + "- The transition from Part 1 to Part 2 must feel like a continuous story.\n\n"
-              + "Each segment MUST use timestamp prompting for precise 2-second shot control:\n"
-              + "[00:00-00:02] first shot description.\n"
-              + "[00:02-00:04] second shot description.\n"
-              + "[00:04-00:06] third shot description.\n"
-              + "[00:06-00:08] fourth shot description.\n\n"
-              + "FORMAT RULES:\n"
-              + "- NEVER use quotation marks (Veo renders them as on-screen text).\n"
-              + "- NEVER include text overlay, subtitles, captions, or on-screen characters.\n"
-              + "- Each part must be complete and self-contained (not a fragment).\n"
-              + "- Include the compliance suffix if present in original prompt.\n"
-              + "- Write in English only.\n\n"
-              + 'Output ONLY valid JSON: {"part1": "...", "part2": "..."}'
+            content: _buildSplitSystemPrompt(2, 8),
           },
-          { role: "user", content: `Original prompt (target total: 16s, each segment: 8s):\n\n${finalPrompt}` },
+          {
+            role: "user",
+            content:
+              `Split this into 2 segments of 8s each (total 16s).\n`
+              + `Preserve ALL visual anchors faithfully. Make each segment narratively distinct.\n\n`
+              + `Original prompt:\n${finalPrompt}`,
+          },
         ],
         temperature: 0.25,
-        max_tokens: 1600,
+        max_tokens: 1800,
       },
       30000
     );
@@ -4013,24 +4041,24 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     promptB = sanitizePromptForVeo(String(parsed?.part2 || "").trim()) || "";
   } catch (_e) {}
 
-  // Smart fallback: generate structurally different prompts even without LLM
+  // Smart fallback: structural scene templates anchored to original prompt
   if (!promptA || !promptB) {
-    const base16Prompt = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+    const basePrompt = sanitizePromptForVeo(finalPrompt) || finalPrompt;
     promptA = promptA || (
-      base16Prompt
-      + " [Part 1/2 — Product Introduction] "
-      + "[00:00-00:02] Cinematic hero shot, camera slowly pushing in toward the product, revealing its full form and silhouette."
-      + " [00:02-00:04] Close-up detail shot highlighting the key selling-point feature with sharp focus and studio lighting."
-      + " [00:04-00:06] Medium shot showing product in its natural environment context."
-      + " [00:06-00:08] Elegant rotation or slide revealing the product from a new angle."
+      basePrompt
+      + " SEGMENT 1/2 — PRODUCT HERO OPENING: "
+      + "[00:00-00:02] Camera pushes in from wide, product silhouette emerging against background. "
+      + "[00:02-00:04] Medium close-up on the product's primary feature with sharp focus and studio lighting. "
+      + "[00:04-00:06] Detail shot — texture and key design element highlighted. "
+      + "[00:06-00:08] Hero framing — product centered, mood and color palette fully established."
     );
     promptB = promptB || (
-      base16Prompt
-      + " [Part 2/2 — Usage & CTA] "
-      + "[00:00-00:02] Lifestyle scene showing a person naturally interacting with or using the product in daily life."
-      + " [00:02-00:04] Reaction shot or experience moment — emotional connection with the product."
-      + " [00:04-00:06] Dynamic usage demonstration highlighting a secondary feature or benefit."
-      + " [00:06-00:08] Confident closing shot — product prominently featured, camera pulls back for final reveal."
+      basePrompt
+      + " SEGMENT 2/2 — USAGE & CLOSING: "
+      + "[00:00-00:02] Lifestyle context — product in its intended use environment, different angle from Segment 1. "
+      + "[00:02-00:04] Close-up of product during natural use, secondary feature visible. "
+      + "[00:04-00:06] Emotional moment — satisfaction and connection with the product. "
+      + "[00:06-00:08] Confident closing hero shot — product alone, perfect lighting, camera holds still for final reveal."
     );
   }
 

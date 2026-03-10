@@ -1216,28 +1216,51 @@ def _build_prompt_split_system(segment_duration: int, total_duration: int) -> st
     """Build a prompt-split system message for any N-second video split into 2 equal segments."""
     half = total_duration // 2
     assert half == segment_duration, "segment_duration must equal total_duration // 2"
+    shot_interval = max(1, segment_duration // 4)
+    timestamps = " ".join(
+        f"[00:0{i*shot_interval:02d}-00:0{(i+1)*shot_interval:02d}] shot {i+1} description."
+        for i in range(4)
+    )
     return (
-        f"You are an ecommerce video prompt architect. "
-        f"Given a single video generation prompt, split it into exactly TWO {segment_duration}-second segments "
-        f"that together form a cohesive {total_duration}-second product video.\n\n"
-        "STRICT ANTI-REPETITION RULES (most important):\n"
-        "- Part 1 and Part 2 MUST cover DIFFERENT narrative moments. "
-        "  They must NOT show the same action, the same product angle, or the same scene.\n"
-        f"- Part 1 ({segment_duration}s): Product introduction, first impression, hero shot, "
-        "  core selling-point showcase — camera moves TOWARD the product.\n"
-        f"- Part 2 ({segment_duration}s): A DISTINCTLY DIFFERENT scene — usage demonstration, "
-        "  lifestyle context, emotional payoff, or CTA close. "
-        "  The product must appear in a new environment, angle, or activity. "
-        "  DO NOT repeat the same shot or description from Part 1.\n\n"
-        "CONSISTENCY RULES (visual continuity across segments):\n"
-        "- Both parts MUST keep identical: product identity, brand color, visual style, "
-        "  lighting style, camera language, color palette, aspect ratio.\n"
-        "- The transition from Part 1 to Part 2 must feel like a continuous story, not a jump cut.\n\n"
-        "FORMAT RULES:\n"
-        "- Each part must be a COMPLETE, self-contained video prompt (not a fragment or sentence).\n"
-        "- Each part must include the compliance suffix from the original prompt if present.\n"
-        "- Output ONLY valid JSON, no markdown, no explanation.\n\n"
-        'Output schema: {"part1": "...", "part2": "..."}'
+        f"You are a professional ecommerce video director and prompt architect.\n"
+        f"Your task: split ONE product video prompt into exactly TWO {segment_duration}-second segment prompts "
+        f"that together form a seamless {total_duration}-second product video.\n\n"
+
+        "═══ STEP 1: EXTRACT VISUAL ANCHORS (do this internally before writing segments) ═══\n"
+        "Before splitting, identify and lock these elements from the original prompt:\n"
+        "  • PRODUCT: exact product name, color, material, key visual features\n"
+        "  • STYLE: cinematic tone, visual style (clean/editorial/lifestyle/etc.)\n"
+        "  • LIGHTING: lighting setup (soft natural / studio / golden hour / etc.)\n"
+        "  • COLOR PALETTE: dominant colors and mood\n"
+        "  • CAMERA LANGUAGE: lens style, movement type (push-in/handheld/static/etc.)\n"
+        "These anchors MUST appear consistently in BOTH segments. Never contradict them.\n\n"
+
+        "═══ STEP 2: ASSIGN NARRATIVE ROLES (strictly follow this) ═══\n"
+        f"- Part 1 ({segment_duration}s): PRODUCT HERO OPENING — camera pushes in from wide to medium, "
+        "revealing the product's form and silhouette. Focus on the most striking visual feature. "
+        "Set the mood and color palette for the whole video.\n"
+        f"- Part 2 ({segment_duration}s): USAGE / EMOTIONAL PAYOFF — a DIFFERENT camera angle and "
+        "environment from Part 1. Show the product being used, demonstrate a key feature up-close, "
+        "or show a lifestyle context with emotional connection. Ends with a confident closing shot.\n\n"
+
+        "═══ STEP 3: WRITE EACH SEGMENT PROMPT ═══\n"
+        "For each segment:\n"
+        "  • BEGIN with the locked visual anchors (product + style + lighting + palette)\n"
+        "  • THEN add the segment-specific narrative action and camera movement\n"
+        f"  • Use timestamp shot control: {timestamps}\n"
+        "  • Each segment must be COMPLETE and SELF-CONTAINED (readable without the other)\n"
+        "  • The END of Part 1 should visually hand off to Part 2 naturally\n\n"
+
+        "═══ HARD RULES ═══\n"
+        "  ✗ NEVER repeat the same shot composition, camera angle, or action across segments\n"
+        "  ✗ NEVER use quotation marks (renders as on-screen text in Veo/Grok)\n"
+        "  ✗ NEVER include text overlays, subtitles, or captions\n"
+        "  ✗ NEVER change the product appearance, color, or brand identity between segments\n"
+        "  ✓ Each segment must feel like it belongs to the SAME video shoot\n"
+        "  ✓ Include the compliance suffix from the original prompt if present\n"
+        "  ✓ Write in English only\n\n"
+
+        'Output ONLY valid JSON: {"part1": "...", "part2": "..."}'
     )
 
 
@@ -1276,8 +1299,9 @@ def split_prompt_for_ns(
         {
             "role": "user",
             "content": (
-                f"Original prompt to split (target total: {total_duration}s, "
-                f"each segment: {segment_duration}s):\n\n{original_prompt}"
+                f"Split this into 2 segments of {segment_duration}s each (total {total_duration}s).\n"
+                f"Preserve ALL visual anchors faithfully. Make each segment narratively distinct.\n\n"
+                f"Original prompt:\n{original_prompt}"
             ),
         },
     ]
