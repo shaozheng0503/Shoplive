@@ -1164,28 +1164,43 @@ def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_sec
         if not p.exists():
             raise FileNotFoundError(f"Video segment not found: {p}")
 
-    # Probe audio streams for all segments
+    # Probe audio streams for all segments.
+    # Returns None on probe failure (FileNotFoundError / timeout / non-zero rc) to distinguish
+    # from "no audio track" (empty string), enabling conservative fallback behaviour.
     def _probe_audio(path: Path):
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "a",
-                "-show_entries", "stream=codec_name,sample_rate,channels",
-                "-of", "csv=p=0",
-                str(path),
-            ],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        return (result.stdout or "").strip()
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=codec_name,sample_rate,channels",
+                    "-of", "csv=p=0",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return None  # probe failed — treat conservatively
+            return (result.stdout or "").strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return None  # ffprobe unavailable or timed out
 
     audio_infos = [_probe_audio(p) for p in video_paths]
-    has_any_audio = any(bool(a) for a in audio_infos)
-    # Use stream copy only when all segments have audio with identical params
-    all_same_audio = (
-        has_any_audio
-        and all(bool(a) for a in audio_infos)
-        and len(set(audio_infos)) == 1
-    )
+    probe_failed = any(a is None for a in audio_infos)
+
+    if probe_failed:
+        # Conservative: assume mixed audio, re-encode to safe common params
+        has_any_audio = True
+        all_same_audio = False
+    else:
+        has_any_audio = any(bool(a) for a in audio_infos)
+        # Use stream copy only when all segments have audio with identical params
+        all_same_audio = (
+            has_any_audio
+            and all(bool(a) for a in audio_infos)
+            and len(set(audio_infos)) == 1
+        )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         for vp in video_paths:
@@ -1255,12 +1270,8 @@ def download_gcs_blob_to_file(
     if not m:
         raise ValueError(f"Invalid GCS URI: {gcs_uri}")
     bucket_name, blob_name = m.group(1), m.group(2)
-    from google.cloud import storage as gcs_storage
-    from google.oauth2 import service_account as gcs_sa
-    creds = gcs_sa.Credentials.from_service_account_file(
-        key_file, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
-    client = gcs_storage.Client(project=project_id, credentials=creds)
+    # Reuse the lru_cache'd client to avoid re-reading the key file on every download
+    client = _get_gcs_client(key_file)
     blob = client.bucket(bucket_name).blob(blob_name)
     blob.download_to_filename(str(output_path))
     return output_path

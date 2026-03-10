@@ -213,8 +213,9 @@ def register_veo_routes(
         # conserve API quota (saves 3-5 wasted calls per video).
         if initial_wait_seconds > 0:
             time.sleep(min(initial_wait_seconds, max_wait_seconds))
+        current_interval = float(poll_interval_seconds)
         while time.time() - started <= max_wait_seconds:
-            _, _, op_data = _call_fetch_predict_operation(
+            resp_code, _, op_data = _call_fetch_predict_operation(
                 project_id=project_id,
                 model=model,
                 token=token,
@@ -232,7 +233,12 @@ def register_veo_routes(
                 return video_uris[0], op_data
             if op_data.get("done") and op_error:
                 raise RuntimeError(op_error)
-            time.sleep(max(1, poll_interval_seconds))
+            # Exponential backoff on transient errors (429 / 5xx)
+            if resp_code in (429, 500, 502, 503, 504):
+                current_interval = min(current_interval * 1.5, 60.0)
+            else:
+                current_interval = float(poll_interval_seconds)
+            time.sleep(max(1, current_interval))
         raise TimeoutError(f"Veo operation 超时（>{max_wait_seconds}s）: {operation_name}")
 
     @app.post("/api/veo/start")

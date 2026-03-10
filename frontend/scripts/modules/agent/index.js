@@ -1008,12 +1008,13 @@ async function _grokConcat(base, urlA, urlB) {
   else if (isData(urlA))  body.video_data_url_a = urlA;
   if (isHttp(urlB))       body.video_http_url_b = urlB;
   else if (isData(urlB))  body.video_data_url_b = urlB;
-  if (!body.video_http_url_a && !body.video_data_url_a) return "";
+  if (!body.video_http_url_a && !body.video_data_url_a) return { ok: false, error: "no valid URL_A", url: "" };
   try {
     const resp = await postJson(`${base}/api/veo/concat-segments`, body, 120000);
-    return String(resp?.video_data_url || "").trim();
-  } catch (_e) {
-    return "";
+    const url = String(resp?.video_url || resp?.video_data_url || "").trim();
+    return url ? { ok: true, url } : { ok: false, error: "empty response", url: "" };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || "concat failed"), url: "" };
   }
 }
 
@@ -1178,23 +1179,37 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
       results.push(res.videoUrl);
     }
 
-    // Chain concat if multiple clips
+    // Chain concat if multiple clips — show explicit error if any step fails
     let finalUrl = results[0];
+    let concatFailed = false;
     for (let i = 1; i < results.length; i++) {
       pollBubble.textContent = zh
         ? `⏳ 第${i}+${i + 1}段拼接中…`
         : `⏳ Concat clip ${i} + ${i + 1}…`;
       updateVideoTask(taskId, { status: "running", stage: zh ? `拼接 ${i}+${i + 1}` : `Concat ${i}+${i + 1}` });
       const merged = await _grokConcat(base, finalUrl, results[i]);
-      if (merged) finalUrl = merged;
-      else break;
+      if (merged.ok && merged.url) {
+        finalUrl = merged.url;
+      } else {
+        concatFailed = true;
+        pushMsg("system", zh
+          ? `⚠️ 第${i}+${i + 1}段拼接失败（${merged.error}），已保留前 ${i * 6}s 视频。`
+          : `⚠️ Concat clip ${i}+${i + 1} failed (${merged.error}), keeping first ${i * 6}s.`);
+        break;
+      }
     }
 
     const approxSec = clips * 6;
     if (pollBubble.parentNode) pollBubble.remove();
-    pushMsg("system", clips === 1
-      ? (zh ? `Grok Video 生成完成（约6s）。` : `Grok Video complete (~6s).`)
-      : (zh ? `Grok Video ${clips}段拼接完成（约${approxSec}s）。` : `Grok Video ${clips}-clip concat done (~${approxSec}s).`));
+    if (clips === 1) {
+      pushMsg("system", zh ? `Grok Video 生成完成（约6s）。` : `Grok Video complete (~6s).`);
+    } else if (concatFailed) {
+      // partial success already messaged inline above
+    } else {
+      pushMsg("system", zh
+        ? `Grok Video ${clips}段拼接完成（约${approxSec}s）。`
+        : `Grok Video ${clips}-clip concat done (~${approxSec}s).`);
+    }
     updateVideoTask(taskId, { status: "done", stage: zh ? "完成" : "Done" });
     renderGeneratedVideoCard(finalUrl, "", "", taskId);
   } catch (e) {
@@ -3387,7 +3402,12 @@ function showSummaryCard() {
       return;
     }
     state.primarySubmitLocked = true;
-    await generateVideo();
+    try {
+      await generateVideo();
+    } finally {
+      state.primarySubmitLocked = false;
+      btn.disabled = false;
+    }
     btn.textContent = currentLang === "zh" ? "已提交" : "Submitted";
   });
 }
@@ -3490,7 +3510,11 @@ function showQuickGenerateButton() {
       return;
     }
     state.primarySubmitLocked = true;
-    await generateVideo();
+    try {
+      await generateVideo();
+    } finally {
+      state.primarySubmitLocked = false;
+    }
   });
 }
 
