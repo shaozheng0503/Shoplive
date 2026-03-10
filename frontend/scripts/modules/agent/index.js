@@ -4887,19 +4887,27 @@ function consumeLandingParams() {
       if (dataUrl && !state.images.length) {
         state.images = [{ dataUrl, name: "landing-reference.png", source: "landing-ref" }];
         pushImageMsg(state.images);
-        setTimeout(() => {
+        setTimeout(async () => {
           const stopProgress = startInsightProgress();
-          analyzeImageInsight(state.images)
-            .then((result) => {
-              const insight = result?.insight || {};
-              if (insight.product_name || insight.main_business || (insight.selling_points || []).length) {
-                applyInsightToState(insight);
-              } else {
-                applyInsightToState(buildFallbackInsightFromName("landing-reference"));
-              }
-            })
-            .catch(() => applyInsightToState(buildFallbackInsightFromName("landing-reference")))
-            .finally(() => stopProgress?.());
+          let usedFallback = false;
+          try {
+            const result = await analyzeImageInsight(state.images);
+            const insight = result?.insight || {};
+            const hasInsight = Boolean(insight.product_name || insight.main_business || (insight.selling_points || []).length);
+            if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
+          } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
+          stopProgress();
+          chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
+          state.lastPrompt = chatInput.value.trim();
+          state.lastStoryboard = buildStoryboardText();
+          try { await hydrateWorkflowTexts(true); } catch (_) {}
+          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
+          syncSimpleControlsFromState();
+          pushMsg("system", t("parseDone", {
+            product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+            business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+            style: state.template || "clean",
+          }));
         }, 600);
       }
     } catch (_e) {}
@@ -4917,19 +4925,27 @@ function consumeLandingParams() {
           source: "landing-ai-image",
         }));
         pushImageMsg(state.images);
-        setTimeout(() => {
+        setTimeout(async () => {
           const stopProgress = startInsightProgress();
-          analyzeImageInsight(state.images)
-            .then((result) => {
-              const insight = result?.insight || {};
-              if (insight.product_name || insight.main_business || (insight.selling_points || []).length) {
-                applyInsightToState(insight);
-              } else {
-                applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product"));
-              }
-            })
-            .catch(() => applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")))
-            .finally(() => stopProgress?.());
+          let usedFallback = false;
+          try {
+            const result = await analyzeImageInsight(state.images);
+            const insight = result?.insight || {};
+            const hasInsight = Boolean(insight.product_name || insight.main_business || (insight.selling_points || []).length);
+            if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")); }
+          } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")); }
+          stopProgress();
+          chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
+          state.lastPrompt = chatInput.value.trim();
+          state.lastStoryboard = buildStoryboardText();
+          try { await hydrateWorkflowTexts(true); } catch (_) {}
+          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
+          syncSimpleControlsFromState();
+          pushMsg("system", t("parseDone", {
+            product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+            business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+            style: state.template || "clean",
+          }));
         }, 600);
       }
     } catch (_e) {}
