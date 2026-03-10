@@ -1151,12 +1151,41 @@ def normalize_timeline_video_segments(
     return normalized
 
 
-def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_seconds: int = 120) -> Path:
+def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_seconds: int = 180) -> Path:
+    """Concatenate video files using ffmpeg.
+
+    Uses stream-copy when audio streams are compatible (same codec/sample-rate/channels);
+    falls back to re-encoding audio to AAC 44100Hz stereo when streams differ or when
+    some segments have no audio track.
+    """
     if len(video_paths) < 2:
         raise ValueError("concat_videos_ffmpeg requires at least 2 video files")
     for p in video_paths:
         if not p.exists():
             raise FileNotFoundError(f"Video segment not found: {p}")
+
+    # Probe audio streams for all segments
+    def _probe_audio(path: Path):
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=codec_name,sample_rate,channels",
+                "-of", "csv=p=0",
+                str(path),
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        return (result.stdout or "").strip()
+
+    audio_infos = [_probe_audio(p) for p in video_paths]
+    has_any_audio = any(bool(a) for a in audio_infos)
+    # Use stream copy only when all segments have audio with identical params
+    all_same_audio = (
+        has_any_audio
+        and all(bool(a) for a in audio_infos)
+        and len(set(audio_infos)) == 1
+    )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         for vp in video_paths:
@@ -1164,16 +1193,41 @@ def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_sec
         list_file = Path(f.name)
 
     try:
-        proc = subprocess.run(
-            [
+        if all_same_audio:
+            # All segments have identical audio: safe to stream-copy everything
+            cmd = [
                 "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
+                "-f", "concat", "-safe", "0",
                 "-i", str(list_file),
                 "-c", "copy",
                 "-movflags", "+faststart",
                 str(output_path),
-            ],
+            ]
+        elif has_any_audio:
+            # Mixed audio (some segments missing audio or different params):
+            # re-encode audio to AAC 44100Hz stereo, copy video stream
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(list_file),
+                "-c:v", "copy",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(output_path),
+            ]
+        else:
+            # No audio in any segment: copy video only
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(list_file),
+                "-c:v", "copy", "-an",
+                "-movflags", "+faststart",
+                str(output_path),
+            ]
+
+        proc = subprocess.run(
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout_seconds,

@@ -4206,16 +4206,28 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     ) {
       concatBody.video_data_url_a = resA.url;
       concatBody.video_data_url_b = resB.url;
+    } else if (resA.url && resB.url) {
+      concatBody.video_http_url_a = resA.url;
+      concatBody.video_http_url_b = resB.url;
     }
-    if (concatBody.gcs_uri_a || concatBody.video_data_url_a) {
-      const concatResp = await postJson(`${base}/api/veo/concat-segments`, concatBody, 120000);
-      concatUrl = String(concatResp?.video_data_url || "").trim();
+    if (concatBody.gcs_uri_a || concatBody.video_data_url_a || concatBody.video_http_url_a) {
+      try {
+        const concatResp = await postJson(`${base}/api/veo/concat-segments`, concatBody, 120000);
+        concatUrl = String(concatResp?.video_url || concatResp?.video_data_url || "").trim();
+        if (!concatUrl) {
+          pushMsg("system", zh
+            ? "⚠️ 拼接接口返回为空，已降级展示第一段视频。"
+            : "⚠️ Concat returned empty, showing segment 1 only.");
+        }
+      } catch (concatErr) {
+        pushMsg("system", zh
+          ? `⚠️ 视频拼接失败（${String(concatErr?.message || "unknown")}），已降级展示第一段视频。`
+          : `⚠️ Concat failed (${String(concatErr?.message || "unknown")}), showing segment 1 only.`);
+      }
     }
-  } catch (_e) {}
+  } catch (_outerErr) {}
 
   if (statusBubble.parentNode) statusBubble.remove();
-
-  const playable = concatUrl || resA.url || resB.url || "";
   if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
 
   pushMsg("system", zh

@@ -213,6 +213,7 @@ register_veo_routes(
     concat_videos_ffmpeg=concat_videos_ffmpeg,
     download_gcs_blob_to_file=download_gcs_blob_to_file,
     call_litellm_chat=call_litellm_chat,
+    video_export_dir=VIDEO_EDIT_EXPORT_DIR,
 )
 register_media_routes(
     app,
