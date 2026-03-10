@@ -1002,8 +1002,97 @@ def build_shoplive_image_prompt_safe_product_only(payload: Dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Video concatenation (16s prompt-split workflow)
+# LLM-driven image prompt builder (PRODUCT_EXPANSION Content template)
 # ---------------------------------------------------------------------------
+
+_IMAGE_PROMPT_LLM_SYSTEM = """
+You are a professional AI image generation prompt engineer specialised in ecommerce product photography.
+
+Given product context, you must output a single, self-contained Imagen/Stable Diffusion prompt that follows the rules below.
+
+STEP 1 — SCENE SELECTION (pick exactly one):
+- Template A (With Model / Apparel): use when main_category is clothing, dress, top, pants, skirt, coat, jacket, swimwear, underwear, or any wearable garment.
+- Template B (Product Only): use for accessories, bags, footwear, socks, eyewear, jewelry, belts, hats, small appliances, phones, watches, etc.
+- Template C (Contact Lens): use only when product is contact lenses / circle lenses / 美瞳.
+
+STEP 2 — TARGET RACE: infer from selling_region.
+  Japan/Korea/China/Taiwan/HK/SG → East Asian
+  Saudi/UAE/Qatar/Kuwait/Middle East → Arab
+  US/Canada/UK/Europe → Caucasian
+  Thailand/Vietnam/Indonesia/Malaysia/Philippines → Southeast Asian
+  Africa → African
+  Otherwise → ethnicity appropriate for the target market
+
+STEP 3 — BUILD PROMPT using the matching template below. Replace only [BRACKETED] parts.
+
+--- Template A (With Model) ---
+A [TARGET_RACE] [GENDER] model suitable for [TARGET_AUDIENCE]. Realistic body proportions, natural relaxed pose. The model is wearing [DESCRIBE OUTFIT: type, color, fit — do NOT describe microscopic stitching details]. Full-body shot, head to toe fully visible, no cropping. Seamless off-white studio background. Standard ecommerce still-life lighting. 50mm focal length vertical full-body composition. Head at 5% from top, feet at 5% from bottom. No logos, no watermarks, no text. 2K resolution, sharp and clear.
+
+--- Template B (Product Only) ---
+Single complete saleable unit of [PRODUCT_TYPE], [PROFESSIONAL_ARRANGEMENT_NOTE: e.g. facing forward / upright / flat lay depending on category]. Centered in frame, product occupies ≤50% of image. Seamless pure white studio background. Standard product still-life lighting. 50mm focal length, vertical composition, balanced negative space. No human body parts, no model, no hands. No logos, no watermarks, no text. Generic unbranded appearance. 2K resolution, sharp and clear.
+Category-specific rules: shoes→symmetric front parallel placement; bags→straight front upright natural shape; socks→flat lay only; watches→centered dial, natural strap drape; phone/tablet→two identical devices side by side (left=back view, right=front with screen on, slight overlap, NO foldable form).
+
+--- Template C (Contact Lens) ---
+Close-up macro shot of right eye only. Full right eyebrow and lower eyelid visible. Sharp focus on iris texture and contact lens surface. Natural realistic skin and lashes matching target market aesthetics. Seamless soft studio background. Standard macro lighting, soft even illumination. Professional 100mm macro lens. Centered on right eye. 2K resolution, sharp and clear.
+
+STRICT OUTPUT RULES:
+- Output ONLY the final image prompt text. No JSON, no explanation, no title, no markdown.
+- The prompt must be in English regardless of input language.
+- Do NOT include brand names, model numbers, or specific logos in the prompt.
+- The generated image must match the exact product category. Do not hallucinate unrelated categories.
+""".strip()
+
+
+def build_image_prompt_via_llm(
+    payload: Dict,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str = "bedrock-claude-4-5-haiku",
+    proxy: str = "",
+) -> str:
+    """Use an LLM to generate a high-quality image generation prompt following the
+    PRODUCT_EXPANSION_SYSTEM_PROMPT Content template logic."""
+    product_name    = (payload.get("product_name") or "").strip() or "generic product"
+    main_category   = (payload.get("main_category") or "").strip() or "ecommerce product"
+    target_audience = (payload.get("target_audience") or "").strip() or "general online shoppers"
+    brand_philosophy = (payload.get("brand_philosophy") or "").strip() or "clean and premium"
+    selling_region  = (payload.get("selling_region") or "").strip() or "global market"
+    selling_points  = (payload.get("selling_points") or "").strip() or "clear product benefits"
+    other_info      = (payload.get("other_info") or "").strip() or ""
+
+    user_message = (
+        f"Product context:\n"
+        f"- product_name: {product_name}\n"
+        f"- main_category: {main_category}\n"
+        f"- target_audience: {target_audience}\n"
+        f"- brand_philosophy: {brand_philosophy}\n"
+        f"- selling_region: {selling_region}\n"
+        f"- selling_points: {selling_points}\n"
+        f"- other_info: {other_info}\n\n"
+        "Generate the image prompt now."
+    )
+    messages = [
+        {"role": "system", "content": _IMAGE_PROMPT_LLM_SYSTEM},
+        {"role": "user",   "content": user_message},
+    ]
+    status_code, data_wrap = call_litellm_chat(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        proxy=proxy,
+        temperature=0.4,
+        max_tokens=800,
+    )
+    if not data_wrap.get("ok"):
+        raise RuntimeError(f"Image prompt LLM call failed (status={status_code})")
+    content = extract_chat_content(data_wrap.get("response", {})).strip()
+    if not content:
+        raise ValueError("LLM returned empty image prompt")
+    return content
+
+
 
 def normalize_timeline_video_segments(
     tracks: List[Dict[str, Any]],

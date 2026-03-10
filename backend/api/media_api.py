@@ -16,6 +16,7 @@ def register_media_routes(
     build_shoplive_image_prompt_compact: Callable[[Dict], str],
     build_shoplive_image_prompt_safe_product_only: Callable[[Dict], str],
     judge_generated_image_category: Callable[[Dict, Dict], Dict[str, Any]],
+    build_image_prompt_via_llm: Callable[..., str] = None,
 ):
     @app.post("/api/gemini")
     def api_gemini():
@@ -155,12 +156,31 @@ def register_media_routes(
                 return st, dt, judge, mismatch
 
             prompt_primary = build_shoplive_image_prompt_compact(payload)
+
+            # Optionally use LLM-driven prompt if configured and api_key present
+            import os as _os
+            _llm_api_base = (payload.get("api_base") or _os.getenv("LITELLM_API_BASE") or "").strip().rstrip("/")
+            _llm_api_key  = (payload.get("api_key")  or _os.getenv("LITELLM_API_KEY")  or "").strip()
+            _llm_model    = (payload.get("llm_model") or "bedrock-claude-4-5-haiku").strip()
+            _use_llm_prompt = bool(build_image_prompt_via_llm and _llm_api_key)
+            if _use_llm_prompt:
+                try:
+                    prompt_primary = build_image_prompt_via_llm(
+                        payload,
+                        api_base=_llm_api_base,
+                        api_key=_llm_api_key,
+                        model=_llm_model,
+                        proxy=payload.get("proxy", ""),
+                    )
+                except Exception:
+                    pass  # fall through to compact prompt on LLM failure
+
             st1, dt1, judge1, mismatch1 = attempt_generate(
                 prompt_primary, "strict_compact_primary", int(payload.get("sample_count", 2))
             )
             if st1 < 400 and dt1.get("images") and not mismatch1:
                 dt1["prompt_used"] = prompt_primary
-                dt1["prompt_strategy"] = "strict_compact_primary"
+                dt1["prompt_strategy"] = "llm_primary" if _use_llm_prompt else "strict_compact_primary"
                 dt1["category_check"] = judge1
                 dt1["attempts"] = attempts
                 return jsonify(dt1), st1

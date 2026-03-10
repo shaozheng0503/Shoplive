@@ -54,6 +54,7 @@ from shoplive.backend.common.helpers import (
     build_shoplive_image_prompt,
     build_shoplive_image_prompt_compact,
     build_shoplive_image_prompt_safe_product_only,
+    build_image_prompt_via_llm,
     split_prompt_for_16s,
     split_prompt_for_12s,
     concat_videos_ffmpeg,
@@ -223,6 +224,7 @@ register_media_routes(
     run_google_image_generate=run_google_image_generate,
     build_shoplive_image_prompt_compact=build_shoplive_image_prompt_compact,
     build_shoplive_image_prompt_safe_product_only=build_shoplive_image_prompt_safe_product_only,
+    build_image_prompt_via_llm=build_image_prompt_via_llm,
     judge_generated_image_category=judge_generated_image_category,
 )
 register_video_edit_routes(
