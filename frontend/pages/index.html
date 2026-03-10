@@ -174,14 +174,56 @@
               <div id="refUploadGrid" class="ref-grid"></div>
             </div>
             <div id="refAiPanel" class="ref-panel">
-              <div class="ai-generate-box">
-                <textarea
-                  id="refAiPromptInput"
-                  rows="3"
-                  data-i18n-placeholder="refAiPromptPh"
-                  placeholder="输入商品与风格，生成参考图"
-                ></textarea>
-                <button id="refAiGenerateBtn" class="secondary-btn" type="button" data-i18n="refAiGenerateBtn">AI 生成</button>
+              <div class="ai-form-box">
+                <p class="ai-form-hint" data-i18n="aiFormHint">填写 1–3 项 · AI 自动优化提示词并生成图片</p>
+                <div class="ai-form-fields">
+                  <div class="ai-form-field">
+                    <label class="ai-form-label" for="aiFieldRegion" data-i18n="aiFieldRegionLabel">模特地区</label>
+                    <div class="ai-form-input-wrap">
+                      <input id="aiFieldRegion" type="text" class="ai-form-input"
+                        data-i18n-placeholder="aiFieldRegionPh"
+                        placeholder="如：日本、欧美、东南亚…" />
+                      <div class="ai-form-chips" data-field="region">
+                        <button type="button" class="ai-chip" data-value="欧美">欧美</button>
+                        <button type="button" class="ai-chip" data-value="日本">日本</button>
+                        <button type="button" class="ai-chip" data-value="东南亚">东南亚</button>
+                        <button type="button" class="ai-chip" data-value="中东">中东</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="ai-form-field">
+                    <label class="ai-form-label" for="aiFieldCategory" data-i18n="aiFieldCategoryLabel">主营品类</label>
+                    <div class="ai-form-input-wrap">
+                      <input id="aiFieldCategory" type="text" class="ai-form-input"
+                        data-i18n-placeholder="aiFieldCategoryPh"
+                        placeholder="如：连衣裙、运动鞋、手提包…" />
+                      <div class="ai-form-chips" data-field="category">
+                        <button type="button" class="ai-chip" data-value="连衣裙">连衣裙</button>
+                        <button type="button" class="ai-chip" data-value="运动鞋">运动鞋</button>
+                        <button type="button" class="ai-chip" data-value="手提包">手提包</button>
+                        <button type="button" class="ai-chip" data-value="T恤">T恤</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="ai-form-field">
+                    <label class="ai-form-label" for="aiFieldStyle" data-i18n="aiFieldStyleLabel">风格</label>
+                    <div class="ai-form-input-wrap">
+                      <input id="aiFieldStyle" type="text" class="ai-form-input"
+                        data-i18n-placeholder="aiFieldStylePh"
+                        placeholder="如：简约高级感、街头潮流、法式优雅…" />
+                      <div class="ai-form-chips" data-field="style">
+                        <button type="button" class="ai-chip" data-value="简约高级感">高级感</button>
+                        <button type="button" class="ai-chip" data-value="街头潮流">街头潮流</button>
+                        <button type="button" class="ai-chip" data-value="法式优雅">法式优雅</button>
+                        <button type="button" class="ai-chip" data-value="日系清新">日系清新</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <button id="refAiGenerateBtn" class="ai-gen-submit-btn" type="button">
+                  <span class="ai-gen-submit-icon">✦</span>
+                  <span data-i18n="refAiGenerateBtn">AI 生成</span>
+                </button>
               </div>
               <div id="refAiResultGrid" class="ref-grid"></div>
             </div>

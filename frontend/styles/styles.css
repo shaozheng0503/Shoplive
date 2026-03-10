@@ -1300,6 +1300,157 @@ input:focus-visible {
   color: rgba(223, 236, 255, 0.55);
 }
 
+/* ── AI Form Box (3-field input) ─────────────────── */
+.ai-form-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+
+.ai-form-hint {
+  font-size: 11px;
+  color: rgba(200, 220, 255, 0.5);
+  letter-spacing: 0.02em;
+  padding: 0 2px 2px;
+}
+
+.ai-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ai-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ai-form-label {
+  font-size: 11px;
+  font-weight: 660;
+  color: rgba(200, 220, 255, 0.65);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ai-form-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ai-form-input {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e7efff;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ai-form-input:focus {
+  border-color: rgba(121, 168, 255, 0.55);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ai-form-input--error {
+  border-color: rgba(255, 100, 100, 0.6) !important;
+  animation: inputShake 0.3s ease;
+}
+
+@keyframes inputShake {
+  0%, 100% { transform: translateX(0); }
+  25%       { transform: translateX(-4px); }
+  75%       { transform: translateX(4px); }
+}
+
+.ai-form-input::placeholder { color: rgba(200, 220, 255, 0.38); }
+
+.ai-form-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ai-chip {
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(200, 220, 255, 0.72);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.ai-chip:hover {
+  background: rgba(94, 133, 216, 0.18);
+  border-color: rgba(121, 168, 255, 0.4);
+  color: #c8dcff;
+}
+
+.ai-chip.is-active {
+  background: rgba(94, 133, 216, 0.28);
+  border-color: rgba(121, 168, 255, 0.7);
+  color: #dceeff;
+}
+
+.ai-gen-submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(121, 168, 255, 0.35);
+  background: linear-gradient(135deg, rgba(58, 111, 202, 0.35), rgba(94, 133, 216, 0.2));
+  color: #c8dcff;
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.ai-gen-submit-btn:hover {
+  background: linear-gradient(135deg, rgba(58, 111, 202, 0.5), rgba(94, 133, 216, 0.35));
+  border-color: rgba(121, 168, 255, 0.6);
+  color: #dceeff;
+}
+
+.ai-gen-submit-btn:active { transform: scale(0.98); }
+
+.ai-gen-submit-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ai-gen-submit-icon {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.ai-gen-submit-icon.spin {
+  display: inline-block;
+  animation: spinIcon 1s linear infinite;
+}
+
+@keyframes spinIcon {
+  to { transform: rotate(360deg); }
+}
+
 /* ── AI Loading State ─────────────────────────────── */
 .ai-loading-wrap {
   width: 100%;

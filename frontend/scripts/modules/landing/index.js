@@ -17,8 +17,10 @@ const refUploadPanel = document.getElementById("refUploadPanel");
 const refAiPanel = document.getElementById("refAiPanel");
 const refUploadGrid = document.getElementById("refUploadGrid");
 const refAiResultGrid = document.getElementById("refAiResultGrid");
-const refAiPromptInput = document.getElementById("refAiPromptInput");
 const refAiGenerateBtn = document.getElementById("refAiGenerateBtn");
+const aiFieldRegion   = document.getElementById("aiFieldRegion");
+const aiFieldCategory = document.getElementById("aiFieldCategory");
+const aiFieldStyle    = document.getElementById("aiFieldStyle");
 const enhancePromptBtn = document.getElementById("enhancePromptBtn");
 
 const i18n = {
@@ -56,6 +58,16 @@ const i18n = {
     refEmpty: "No images yet",
     refGenerating: "Generating...",
     refGenerateFail: "Generation failed",
+    aiFieldRegionLabel: "Model region",
+    aiFieldRegionPh: "e.g. US, Japan, Southeast Asia…",
+    aiFieldCategoryLabel: "Product category",
+    aiFieldCategoryPh: "e.g. Dress, Sneakers, Handbag…",
+    aiFieldStyleLabel: "Style",
+    aiFieldStylePh: "e.g. Minimalist luxury, streetwear, French elegance…",
+    aiFormHint: "Fill in 1–3 fields · AI will craft the optimal image prompt automatically",
+    aiChipsRegion: ["US/Europe", "Japan", "SE Asia", "Middle East"],
+    aiChipsCategory: ["Dress", "Sneakers", "Handbag", "T-Shirt"],
+    aiChipsStyle: ["Luxury minimal", "Streetwear", "French elegance", "Japanese fresh"],
   },
   zh: {
     navFeatures: "功能",
@@ -87,6 +99,16 @@ const i18n = {
     refEmpty: "资产库中暂无图片",
     refGenerating: "AI 生图中...",
     refGenerateFail: "生成失败",
+    aiFieldRegionLabel: "模特地区",
+    aiFieldRegionPh: "如：欧美、日本、东南亚、中东…",
+    aiFieldCategoryLabel: "主营品类",
+    aiFieldCategoryPh: "如：连衣裙、运动鞋、手提包…",
+    aiFieldStyleLabel: "风格",
+    aiFieldStylePh: "如：简约高级感、街头潮流、法式优雅…",
+    aiFormHint: "填写 1–3 项 · AI 自动优化提示词并生成图片",
+    aiChipsRegion: ["欧美", "日本", "东南亚", "中东"],
+    aiChipsCategory: ["连衣裙", "运动鞋", "手提包", "T恤"],
+    aiChipsStyle: ["简约高级感", "街头潮流", "法式优雅", "日系清新"],
   },
 };
 
@@ -112,6 +134,24 @@ function applyLanguage(lang) {
   const langLabel = langToggleBtn?.querySelector(".lang-label");
   if (langLabel) langLabel.textContent = lang === "zh" ? "EN" : "中文";
   if (promptInput) promptInput.placeholder = i18n[lang].placeholders[idx % i18n[lang].placeholders.length];
+
+  // Update AI form chip labels
+  const chipMaps = [
+    { field: "region",   key: "aiChipsRegion"   },
+    { field: "category", key: "aiChipsCategory" },
+    { field: "style",    key: "aiChipsStyle"    },
+  ];
+  chipMaps.forEach(({ field, key }) => {
+    const chips = document.querySelectorAll(`.ai-form-chips[data-field="${field}"] .ai-chip`);
+    const labels = i18n[lang]?.[key] || [];
+    chips.forEach((chip, i) => {
+      if (labels[i]) { chip.textContent = labels[i]; chip.dataset.value = labels[i]; }
+    });
+  });
+
+  // Update form hint
+  const hint = document.querySelector(".ai-form-hint");
+  if (hint) hint.textContent = i18n[lang]?.aiFormHint || "";
 }
 
 function gotoAgent(extra = {}) {
@@ -279,18 +319,29 @@ function deriveProductName(text = "") {
 }
 
 async function callLandingImageGenerate(promptText) {
+  const region   = (aiFieldRegion?.value   || "").trim();
+  const category = (aiFieldCategory?.value || "").trim() || promptText;
+  const style    = (aiFieldStyle?.value    || "").trim();
+
+  const selling_region  = region   || (currentLang === "zh" ? "全球" : "global");
+  const main_category   = category;
+  const brand_philosophy = style
+    ? `${style} product storytelling`
+    : "Shoplive conversion-oriented product storytelling";
+  const product_name = category || promptText;
+
   const resp = await fetch(`${window.location.origin}/api/shoplive/image/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      product_name: deriveProductName(promptText),
-      main_category: deriveProductName(promptText),
+      product_name,
+      main_category,
       target_audience: "",
-      brand_philosophy: "Shoplive conversion-oriented product storytelling",
-      selling_region: currentLang === "zh" ? "全球" : "global",
-      selling_points: promptText,
+      brand_philosophy,
+      selling_region,
+      selling_points: [category, style].filter(Boolean).join(", ") || promptText,
       template: "clean",
-      other_info: promptText,
+      other_info: [region, category, style].filter(Boolean).join(", ") || promptText,
       sample_count: 2,
       aspect_ratio: aspectRatioSelect?.value || "16:9",
       location: "us-central1",
@@ -448,12 +499,43 @@ function finishAiProgress(container, success = true) {
   if (label) label.textContent = success ? "100%" : "failed";
 }
 
+// Chip click → fill the associated input field
+document.querySelectorAll(".ai-form-chips .ai-chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const fieldMap = { region: aiFieldRegion, category: aiFieldCategory, style: aiFieldStyle };
+    const fieldName = chip.closest(".ai-form-chips")?.dataset.field;
+    const input = fieldMap[fieldName];
+    if (input) {
+      input.value = chip.dataset.value || chip.textContent;
+      input.focus();
+    }
+    // Highlight active chip within the group
+    chip.closest(".ai-form-chips")?.querySelectorAll(".ai-chip").forEach((c) => c.classList.remove("is-active"));
+    chip.classList.add("is-active");
+  });
+});
+
+// Enter key on any field triggers generate
+[aiFieldRegion, aiFieldCategory, aiFieldStyle].forEach((input) => {
+  input?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); refAiGenerateBtn?.click(); }
+  });
+});
+
 refAiGenerateBtn?.addEventListener("click", async () => {
-  const promptText = String(refAiPromptInput?.value || promptInput?.value || "").trim();
-  if (!promptText) return;
-  const oldText = refAiGenerateBtn.textContent;
+  const category = (aiFieldCategory?.value || "").trim();
+  const region   = (aiFieldRegion?.value   || "").trim();
+  const style    = (aiFieldStyle?.value    || "").trim();
+  // Need at least one field
+  if (!category && !region && !style) {
+    if (aiFieldCategory) { aiFieldCategory.focus(); aiFieldCategory.classList.add("ai-form-input--error"); }
+    return;
+  }
+  [aiFieldRegion, aiFieldCategory, aiFieldStyle].forEach((f) => f?.classList.remove("ai-form-input--error"));
+  const promptText = [category, style, region].filter(Boolean).join(", ");
+  const oldHtml = refAiGenerateBtn.innerHTML;
   refAiGenerateBtn.disabled = true;
-  refAiGenerateBtn.textContent = i18n[currentLang].refGenerating;
+  refAiGenerateBtn.innerHTML = `<span class="ai-gen-submit-icon spin">◌</span><span>${i18n[currentLang].refGenerating}</span>`;
   setActiveRefTab("ai");
   showAiProgress(refAiResultGrid);
   try {
@@ -475,7 +557,7 @@ refAiGenerateBtn?.addEventListener("click", async () => {
       </div>`;
   } finally {
     refAiGenerateBtn.disabled = false;
-    refAiGenerateBtn.textContent = oldText || i18n[currentLang].refAiGenerateBtn;
+    refAiGenerateBtn.innerHTML = oldHtml;
   }
 });
 
