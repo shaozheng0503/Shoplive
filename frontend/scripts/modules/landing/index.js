@@ -342,7 +342,7 @@ async function callLandingImageGenerate(promptText) {
       selling_points: [category, style].filter(Boolean).join(", ") || promptText,
       template: "clean",
       other_info: [region, category, style].filter(Boolean).join(", ") || promptText,
-      sample_count: 2,
+      sample_count: 1,
       aspect_ratio: aspectRatioSelect?.value || "16:9",
       location: "us-central1",
       language_code: currentLang === "zh" ? "zh-CN" : "en-US",

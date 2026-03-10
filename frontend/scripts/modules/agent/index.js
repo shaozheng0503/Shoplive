@@ -4946,7 +4946,206 @@ function scheduleLandingPrefillAfterWelcome() {
   }, baseDelay);
 }
 
-uploadBtn.addEventListener("click", () => imageInput.click());
+// ── Agent ref-image modal (mirrors landing ref panel) ──────────────────────
+(function initAgentRefModal() {
+  const modal        = document.getElementById("agentRefModal");
+  const closeBtn     = document.getElementById("agentCloseRefPanelBtn");
+  const tabUpload    = document.getElementById("agentRefTabUpload");
+  const tabAi        = document.getElementById("agentRefTabAi");
+  const panelUpload  = document.getElementById("agentRefUploadPanel");
+  const panelAi      = document.getElementById("agentRefAiPanel");
+  const uploadGrid   = document.getElementById("agentRefUploadGrid");
+  const aiGrid       = document.getElementById("agentRefAiResultGrid");
+  const uploadBtn2   = document.getElementById("agentRefUploadBtn");
+  const mosaicBtn    = document.getElementById("agentRefMosaicBtn");
+  const fileInput    = document.getElementById("agentRefFileInput");
+  const aiGenBtn     = document.getElementById("agentRefAiGenerateBtn");
+  const aiRegion     = document.getElementById("agentAiFieldRegion");
+  const aiCategory   = document.getElementById("agentAiFieldCategory");
+  const aiStyle      = document.getElementById("agentAiFieldStyle");
+
+  if (!modal) return;
+
+  let _uploadAssets = [];
+  let _aiAssets     = [];
+  let _progressTimer = null;
+
+  function openModal() {
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+  function closeModal() {
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+  }
+  function setTab(tab) {
+    const isUp = tab === "upload";
+    tabUpload?.classList.toggle("is-active", isUp);
+    tabAi?.classList.toggle("is-active", !isUp);
+    panelUpload?.classList.toggle("is-active", isUp);
+    panelAi?.classList.toggle("is-active", !isUp);
+  }
+
+  function renderGrid(container, items, showVideoBtn = false) {
+    if (!container) return;
+    if (!items.length) {
+      container.innerHTML = `<div class="ref-empty-state"><span class="ref-empty-icon"></span><span class="ref-empty">资产库中暂无图片</span></div>`;
+      return;
+    }
+    container.innerHTML = "";
+    items.forEach((src, idx) => {
+      const card = document.createElement("div");
+      card.className = "ref-card";
+      const imgBtn = document.createElement("button");
+      imgBtn.type = "button";
+      imgBtn.className = "ref-card-img-btn";
+      imgBtn.innerHTML = `<img src="${src}" alt="ref-${idx + 1}" />`;
+      imgBtn.addEventListener("click", () => {
+        // inject as agent image
+        state.images = [{ dataUrl: src, name: `ref-${idx + 1}.png`, source: "agent-ref-modal" }];
+        pushImageMsg(state.images);
+        closeModal();
+        // auto-trigger insight
+        try {
+          const stopP = startInsightProgress();
+          analyzeImageInsight(state.images)
+            .then((r) => { if (r?.insight) applyInsightToState(r.insight); })
+            .catch(() => {})
+            .finally(() => stopP?.());
+        } catch (_) {}
+      });
+      card.appendChild(imgBtn);
+      container.appendChild(card);
+    });
+  }
+
+  function showProgress(container) {
+    if (!container) return;
+    if (_progressTimer) clearInterval(_progressTimer);
+    let pct = 0;
+    container.innerHTML = `<div class="ai-loading-wrap"><div class="ai-loading-cards"><div class="ai-skeleton-card"></div></div><div class="ai-progress-bar-wrap"><div class="ai-progress-bar-track"><div class="ai-progress-bar-fill" id="agentAiPFill" style="width:0%"></div></div><span class="ai-progress-label" id="agentAiPLabel">0%</span></div></div>`;
+    const fill  = container.querySelector("#agentAiPFill");
+    const label = container.querySelector("#agentAiPLabel");
+    _progressTimer = setInterval(() => {
+      pct += Math.max(0.4, (90 - pct) * 0.045);
+      pct = Math.min(pct, 90);
+      if (fill)  fill.style.width    = `${pct.toFixed(1)}%`;
+      if (label) label.textContent   = `${Math.round(pct)}%`;
+    }, 400);
+  }
+
+  function finishProgress(container, ok) {
+    if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+    const fill  = container?.querySelector("#agentAiPFill");
+    const label = container?.querySelector("#agentAiPLabel");
+    if (fill)  { fill.style.width = "100%"; fill.style.background = ok ? "linear-gradient(90deg,#5e85d8,#79a8ff)" : "linear-gradient(90deg,#c0392b,#e74c3c)"; }
+    if (label) label.textContent = ok ? "100%" : "failed";
+  }
+
+  // Chip → input
+  modal.querySelectorAll(".ai-form-chips .ai-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const map = { "agent-region": aiRegion, "agent-category": aiCategory, "agent-style": aiStyle };
+      const key = chip.closest(".ai-form-chips")?.dataset.field;
+      if (map[key]) { map[key].value = chip.dataset.value || chip.textContent; map[key].focus(); }
+      chip.closest(".ai-form-chips")?.querySelectorAll(".ai-chip").forEach((c) => c.classList.remove("is-active"));
+      chip.classList.add("is-active");
+    });
+  });
+
+  // Upload
+  function handleFiles(files) {
+    const picked = Array.from(files || []).slice(0, 8);
+    if (!picked.length) return;
+    Promise.all(picked.map((f) => new Promise((res, rej) => {
+      const r = new FileReader(); r.onload = () => res(String(r.result || "")); r.onerror = rej; r.readAsDataURL(f);
+    }))).then((urls) => {
+      _uploadAssets = [..._uploadAssets, ...urls.filter(Boolean)].slice(0, 16);
+      setTab("upload");
+      renderGrid(uploadGrid, _uploadAssets);
+      fileInput.value = "";
+    });
+  }
+
+  uploadBtn2?.addEventListener("click", () => { setTab("upload"); fileInput?.click(); });
+  mosaicBtn?.addEventListener("click",  () => { setTab("upload"); fileInput?.click(); });
+  fileInput?.addEventListener("change", (e) => handleFiles(e.target.files));
+
+  // AI generate
+  aiGenBtn?.addEventListener("click", async () => {
+    const category = (aiCategory?.value || "").trim();
+    const region   = (aiRegion?.value   || "").trim();
+    const style    = (aiStyle?.value    || "").trim();
+    if (!category && !region && !style) { aiCategory?.focus(); aiCategory?.classList.add("ai-form-input--error"); return; }
+    [aiRegion, aiCategory, aiStyle].forEach((f) => f?.classList.remove("ai-form-input--error"));
+    const oldHtml = aiGenBtn.innerHTML;
+    aiGenBtn.disabled = true;
+    aiGenBtn.innerHTML = `<span class="ai-gen-submit-icon spin">◌</span><span>AI 生图中...</span>`;
+    setTab("ai");
+    showProgress(aiGrid);
+    try {
+      const resp = await fetch(`${window.location.origin}/api/shoplive/image/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          product_name: category || region || style,
+          main_category: category || "ecommerce product",
+          target_audience: "",
+          brand_philosophy: style ? `${style} product storytelling` : "Shoplive conversion-oriented product storytelling",
+          selling_region: region || "global",
+          selling_points: [category, style].filter(Boolean).join(", "),
+          template: "clean",
+          other_info: [region, category, style].filter(Boolean).join(", "),
+          sample_count: 1,
+          aspect_ratio: state.aspectRatio || "16:9",
+          location: "us-central1",
+          language_code: currentLang === "zh" ? "zh-CN" : "en-US",
+          currency_code: "CNY",
+          exchange_rate: "7.2",
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok || !data?.images?.length) throw new Error(data?.error || `HTTP ${resp.status}`);
+      _aiAssets = data.images.map((x) => String(x?.data_url || "")).filter(Boolean);
+      finishProgress(aiGrid, true);
+      await new Promise((r) => setTimeout(r, 300));
+      renderGrid(aiGrid, _aiAssets, true);
+    } catch (err) {
+      finishProgress(aiGrid, false);
+      await new Promise((r) => setTimeout(r, 400));
+      aiGrid.innerHTML = `<div class="ref-empty-state"><span class="ref-empty">⚠️ 生成失败: ${String(err?.message || "")}</span></div>`;
+    } finally {
+      aiGenBtn.disabled = false;
+      aiGenBtn.innerHTML = oldHtml;
+    }
+  });
+
+  // Enter key on fields
+  [aiRegion, aiCategory, aiStyle].forEach((f) => f?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); aiGenBtn?.click(); } }));
+
+  // Tab switching
+  tabUpload?.addEventListener("click", () => setTab("upload"));
+  tabAi?.addEventListener("click",     () => setTab("ai"));
+
+  // Close
+  closeBtn?.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && modal.classList.contains("is-open")) closeModal(); });
+
+  // Init grids
+  renderGrid(uploadGrid, _uploadAssets);
+  renderGrid(aiGrid, _aiAssets);
+
+  // Expose openModal so uploadBtn can call it
+  window._agentOpenRefModal = openModal;
+})();
+
+uploadBtn.addEventListener("click", () => {
+  if (window._agentOpenRefModal) window._agentOpenRefModal();
+  else imageInput.click(); // fallback
+});
 if (toggleProductUrlBtn) {
   toggleProductUrlBtn.addEventListener("click", () => {
     if (!composerCompact) return;
