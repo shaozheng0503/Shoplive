@@ -4887,6 +4887,20 @@ function consumeLandingParams() {
       if (dataUrl && !state.images.length) {
         state.images = [{ dataUrl, name: "landing-reference.png", source: "landing-ref" }];
         pushImageMsg(state.images);
+        setTimeout(() => {
+          const stopProgress = startInsightProgress();
+          analyzeImageInsight(state.images)
+            .then((result) => {
+              const insight = result?.insight || {};
+              if (insight.product_name || insight.main_business || (insight.selling_points || []).length) {
+                applyInsightToState(insight);
+              } else {
+                applyInsightToState(buildFallbackInsightFromName("landing-reference"));
+              }
+            })
+            .catch(() => applyInsightToState(buildFallbackInsightFromName("landing-reference")))
+            .finally(() => stopProgress?.());
+        }, 600);
       }
     } catch (_e) {}
   }
@@ -4903,13 +4917,20 @@ function consumeLandingParams() {
           source: "landing-ai-image",
         }));
         pushImageMsg(state.images);
-        const zh = currentLang === "zh";
-        pushMsg("system",
-          zh
-            ? `✅ 已导入 ${state.images.length} 张 AI 商品图作为参考图，可直接开始生成视频。`
-            : `✅ ${state.images.length} AI product image(s) imported as reference. Ready to generate video.`,
-          { typewriter: false }
-        );
+        setTimeout(() => {
+          const stopProgress = startInsightProgress();
+          analyzeImageInsight(state.images)
+            .then((result) => {
+              const insight = result?.insight || {};
+              if (insight.product_name || insight.main_business || (insight.selling_points || []).length) {
+                applyInsightToState(insight);
+              } else {
+                applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product"));
+              }
+            })
+            .catch(() => applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")))
+            .finally(() => stopProgress?.());
+        }, 600);
       }
     } catch (_e) {}
   }
