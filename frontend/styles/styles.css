@@ -909,13 +909,15 @@ input:focus-visible {
 
 .ref-modal-card {
   width: min(960px, 96vw);
-  min-height: 480px;
+  max-height: min(720px, 92vh);
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: #0b0e14;
   color: #f4f7ff;
   box-shadow: 0 30px 65px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .ref-modal-head {
@@ -948,7 +950,9 @@ input:focus-visible {
 .ref-modal-body {
   display: grid;
   grid-template-columns: 180px 1fr;
-  min-height: 426px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .ref-modal-side {
@@ -957,6 +961,7 @@ input:focus-visible {
   display: grid;
   gap: 10px;
   align-content: start;
+  overflow-y: auto;
 }
 
 .ref-side-btn {
@@ -1043,12 +1048,17 @@ input:focus-visible {
 
 .ref-modal-main {
   padding: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .ref-tabs {
   display: flex;
   gap: 10px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .ref-tab {
@@ -1072,14 +1082,18 @@ input:focus-visible {
 
 .ref-panel {
   display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .ref-panel.is-active {
-  display: block;
+  display: flex;
 }
 
 .ref-grid {
-  min-height: 320px;
+  min-height: 160px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.02);
@@ -1088,6 +1102,8 @@ input:focus-visible {
   gap: 10px;
   align-content: start;
   padding: 12px;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .ref-empty {
@@ -1304,8 +1320,9 @@ input:focus-visible {
 .ai-form-box {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 4px 0 12px;
+  gap: 10px;
+  padding: 4px 0 10px;
+  flex-shrink: 0;
 }
 
 .ai-form-hint {
@@ -1318,13 +1335,13 @@ input:focus-visible {
 .ai-form-fields {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .ai-form-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .ai-form-label {
