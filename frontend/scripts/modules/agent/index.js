@@ -4853,7 +4853,7 @@ function consumeLandingParams() {
   if (aspect && ["16:9", "9:16", "1:1"].includes(aspect)) {
     state.aspectRatio = aspect;
   }
-  if (duration && ["4", "6", "8", "16"].includes(duration)) {
+  if (duration && ["4", "6", "8", "10", "12", "15", "16", "18", "24"].includes(duration)) {
     state.duration = duration;
   }
   if (draft && !chatInput.value.trim()) {
@@ -5028,7 +5028,8 @@ function scheduleLandingPrefillAfterWelcome() {
   function renderGrid(container, items, showVideoBtn = false) {
     if (!container) return;
     if (!items.length) {
-      container.innerHTML = `<div class="ref-empty-state"><span class="ref-empty-icon"></span><span class="ref-empty">资产库中暂无图片</span></div>`;
+      const emptyText = currentLang === "zh" ? "资产库中暂无图片" : "No images yet";
+      container.innerHTML = `<div class="ref-empty-state"><span class="ref-empty-icon"></span><span class="ref-empty">${emptyText}</span></div>`;
       return;
     }
     container.innerHTML = "";
@@ -5039,19 +5040,32 @@ function scheduleLandingPrefillAfterWelcome() {
       imgBtn.type = "button";
       imgBtn.className = "ref-card-img-btn";
       imgBtn.innerHTML = `<img src="${src}" alt="ref-${idx + 1}" />`;
-      imgBtn.addEventListener("click", () => {
+      imgBtn.addEventListener("click", async () => {
         // inject as agent image
         state.images = [{ dataUrl: src, name: `ref-${idx + 1}.png`, source: "agent-ref-modal" }];
         pushImageMsg(state.images);
         closeModal();
-        // auto-trigger insight
+        // full insight + prompt-fill pipeline (same as onUpload)
+        const stopProgress = startInsightProgress();
+        let usedFallback = false;
         try {
-          const stopP = startInsightProgress();
-          analyzeImageInsight(state.images)
-            .then((r) => { if (r?.insight) applyInsightToState(r.insight); })
-            .catch(() => {})
-            .finally(() => stopP?.());
-        } catch (_) {}
+          const result = await analyzeImageInsight(state.images);
+          const insight = result?.insight || {};
+          const hasInsight = Boolean(insight.product_name || insight.main_business || (insight.selling_points || []).length);
+          if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(`ref-${idx + 1}`)); }
+        } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(`ref-${idx + 1}`)); }
+        stopProgress();
+        chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
+        state.lastPrompt = chatInput.value.trim();
+        state.lastStoryboard = buildStoryboardText();
+        try { await hydrateWorkflowTexts(true); } catch (_) {}
+        if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
+        syncSimpleControlsFromState();
+        pushMsg("system", t("parseDone", {
+          product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+          business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+          style: state.template || "clean",
+        }));
       });
       card.appendChild(imgBtn);
       container.appendChild(card);
