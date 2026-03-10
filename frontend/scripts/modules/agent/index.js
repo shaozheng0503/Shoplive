@@ -1017,6 +1017,72 @@ async function _grokConcat(base, urlA, urlB) {
   }
 }
 
+async function _splitPromptForGrok(base, originalPrompt, clips) {
+  /**
+   * Use LLM to split a single prompt into N distinct scene prompts for Grok.
+   * Falls back to structured hardcoded variants if LLM fails.
+   */
+  const totalSec = clips * 6;
+  const systemMsg =
+    `You are an ecommerce video prompt architect.\n`
+    + `Given a single video generation prompt, split it into exactly ${clips} ${Math.round(totalSec / clips)}-second segments `
+    + `that together form a cohesive ${totalSec}-second product video.\n\n`
+    + `STRICT ANTI-REPETITION RULES (highest priority):\n`
+    + `- Each segment MUST cover a DIFFERENT narrative moment and scene.\n`
+    + `- Segment 1: Product introduction, hero shot, first impression — camera moves toward product.\n`
+    + (clips >= 2
+      ? `- Segment 2: Usage demonstration or selling-point close-up — DIFFERENT angle/environment from Segment 1.\n`
+      : "")
+    + (clips >= 3
+      ? `- Segment 3: Lifestyle context, emotional payoff, confident CTA close.\n`
+      : "")
+    + `\nCONSISTENCY RULES:\n`
+    + `- All segments MUST keep identical: product identity, visual style, lighting, color palette.\n`
+    + `- Transitions must feel like a continuous story.\n\n`
+    + `FORMAT RULES:\n`
+    + `- Each segment prompt must be complete and self-contained.\n`
+    + `- Write in English only.\n`
+    + `- Output ONLY valid JSON with keys "part1"${clips >= 2 ? ', "part2"' : ""}${clips >= 3 ? ', "part3"' : ""}.`;
+
+  try {
+    const resp = await postJson(
+      `${base}/api/agent/chat`,
+      {
+        model: "bedrock-claude-4-5-haiku",
+        messages: [
+          { role: "system", content: systemMsg },
+          { role: "user", content: `Original prompt (target total: ${totalSec}s, each segment: ${Math.round(totalSec / clips)}s):\n\n${originalPrompt}` },
+        ],
+        temperature: 0.25,
+        max_tokens: 1600,
+      },
+      25000
+    );
+    const raw = String(resp?.content || "").trim();
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (_) {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) try { parsed = JSON.parse(m[0]); } catch (_2) {}
+    }
+    const parts = [];
+    for (let i = 1; i <= clips; i++) {
+      const p = String(parsed?.[`part${i}`] || "").trim();
+      parts.push(p || null);
+    }
+    if (parts.every(Boolean)) return parts;
+  } catch (_) {}
+
+  // Smart fallback: generate structurally distinct prompts without LLM
+  const sceneInstructions = [
+    "Product hero introduction. Camera slowly pushes in, revealing the product's full form. Close-up on key selling feature with sharp focus.",
+    "Usage and lifestyle scene. A person naturally uses or interacts with the product in a real-life setting. Emotional connection moment.",
+    "Closing and CTA. Dynamic product reveal from a fresh angle. Confident final shot with product prominently featured.",
+  ];
+  return Array.from({ length: clips }, (_, i) =>
+    `${originalPrompt} — Scene ${i + 1}/${clips}: ${sceneInstructions[i] || sceneInstructions[sceneInstructions.length - 1]}`
+  );
+}
+
 async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
   const zh    = currentLang === "zh";
   const base  = getApiBase();
@@ -1028,20 +1094,24 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
 
   const startLabel = clips === 1
     ? (zh ? `⏳ Grok Video 生成中（约6s），请稍候…` : `⏳ Grok Video generating (~6s), please wait…`)
-    : (zh ? `⏳ Grok Video：分${clips}段生成（每段约6s），请稍候…` : `⏳ Grok Video: ${clips} clips (~6s each), please wait…`);
+    : (zh ? `⏳ Grok Video：AI 拆分分镜中，分${clips}段生成…` : `⏳ Grok Video: splitting into ${clips} scenes with AI…`);
   const pollBubble = pushMsg("system", startLabel, { typewriter: false });
-
   updateVideoTask(taskId, { status: "running", stage: zh ? "Grok 生成中" : "Grok generating" });
-
-  // Narration hints per part (used for multi-clip only)
-  const partHints = [
-    "product introduction, hero shot, first impression and opening scene.",
-    "core selling-point showcase, usage demonstration, close-up texture details. Maintain identical product identity and style as Part 1.",
-    "lifestyle context, emotional appeal, confident closing CTA. Maintain identical product identity and style as previous parts.",
-  ];
 
   try {
     const core = prompt.replace(/\d+[\s-]*second[s]?\s*continuous[^.]*\./i, "").trim();
+
+    // For multi-clip: use LLM to generate truly distinct per-segment prompts
+    let segmentPrompts;
+    if (clips > 1) {
+      if (pollBubble) pollBubble.textContent = zh
+        ? `⏳ Grok Video：AI 正在拆分提示词为 ${clips} 段分镜…`
+        : `⏳ Grok Video: AI splitting prompt into ${clips} scenes…`;
+      segmentPrompts = await _splitPromptForGrok(base, core, clips);
+    } else {
+      segmentPrompts = [core];
+    }
+
     const results = [];
     for (let i = 0; i < clips; i++) {
       if (state.taskMap?.[taskId]?.cancelRequested) throw new Error("CANCELLED");
@@ -1052,9 +1122,8 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
         ? (zh ? `⏳ Grok Video 第${n}/${clips}段生成中（0%）…` : `⏳ Grok Video clip ${n}/${clips} generating (0%)…`)
         : (zh ? `⏳ Grok Video 生成中（0%）…` : `⏳ Grok Video generating (0%)…`);
       updateVideoTask(taskId, { status: "running", stage: zh ? `${labelZh} 0%` : `${labelEn} 0%` });
-      const clipPrompt = clips > 1
-        ? buildGrokVideoPrompt(core, 6) + ` Part ${n} of ${clips}: ${partHints[i] || ""}`
-        : buildGrokVideoPrompt(core, 6);
+      // Use the LLM-split segment prompt, wrapped with Grok-friendly prefix/suffix
+      const clipPrompt = buildGrokVideoPrompt(segmentPrompts[i] || core, 6);
       const res = await _runOneGrokGeneration(base, clipPrompt, model, taskId, labelZh, labelEn);
       results.push(res.videoUrl);
     }
@@ -1068,7 +1137,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
       updateVideoTask(taskId, { status: "running", stage: zh ? `拼接 ${i}+${i + 1}` : `Concat ${i}+${i + 1}` });
       const merged = await _grokConcat(base, finalUrl, results[i]);
       if (merged) finalUrl = merged;
-      else break; // keep what we have so far
+      else break;
     }
 
     const approxSec = clips * 6;
@@ -3898,32 +3967,39 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
           {
             role: "system",
             content:
-              "You are an expert ecommerce video prompt architect for Google Veo 3.1.\n"
+              "You are an ecommerce video prompt architect for Google Veo 3.1.\n"
               + "Given a single video generation prompt, split it into exactly TWO 8-second segments "
               + "that together form a cohesive 16-second product video.\n\n"
-              + "Each segment MUST follow this 5-part formula:\n"
-              + "[Cinematography] + [Subject] + [Action] + [Context] + [Style & Ambiance]\n\n"
+              + "STRICT ANTI-REPETITION RULES (highest priority):\n"
+              + "- Part 1 and Part 2 MUST cover DIFFERENT narrative moments. "
+              + "They must NOT show the same action, the same product angle, or the same scene.\n"
+              + "- Part 1 (8s): Product introduction, first impression, hero shot, "
+              + "core selling-point showcase — camera moves TOWARD the product.\n"
+              + "- Part 2 (8s): A DISTINCTLY DIFFERENT scene — usage demonstration, "
+              + "lifestyle context, emotional payoff, or CTA close. "
+              + "The product must appear in a new environment, angle, or activity. "
+              + "DO NOT repeat the same shot or description from Part 1.\n\n"
+              + "CONSISTENCY RULES:\n"
+              + "- Both parts MUST keep identical: product identity, brand color, visual style, "
+              + "lighting style, camera language, color palette, aspect ratio.\n"
+              + "- The transition from Part 1 to Part 2 must feel like a continuous story.\n\n"
               + "Each segment MUST use timestamp prompting for precise 2-second shot control:\n"
               + "[00:00-00:02] first shot description.\n"
               + "[00:02-00:04] second shot description.\n"
               + "[00:04-00:06] third shot description.\n"
               + "[00:06-00:08] fourth shot description.\n\n"
-              + "Rules:\n"
-              + "- Part 1 (8s): Product introduction, first impression, core selling-point showcase.\n"
-              + "- Part 2 (8s): Usage experience, emotional appeal, lifestyle context, confident closing.\n"
-              + "- Both parts MUST keep identical: product identity, visual style, lighting, camera language, color palette, aspect ratio.\n"
-              + "- NO repeated content between parts. Part 2 must narratively follow Part 1.\n"
-              + "- Each part must be a complete, self-contained video prompt (not a fragment).\n"
-              + "- NEVER use quotation marks (Veo renders them as on-screen text). Use colons for speech.\n"
+              + "FORMAT RULES:\n"
+              + "- NEVER use quotation marks (Veo renders them as on-screen text).\n"
               + "- NEVER include text overlay, subtitles, captions, or on-screen characters.\n"
-              + "- Focus each 8s segment on a single coherent scene (official Veo best practice).\n"
-              + "- Write in English only. No Chinese characters.\n\n"
+              + "- Each part must be complete and self-contained (not a fragment).\n"
+              + "- Include the compliance suffix if present in original prompt.\n"
+              + "- Write in English only.\n\n"
               + 'Output ONLY valid JSON: {"part1": "...", "part2": "..."}'
           },
-          { role: "user", content: finalPrompt },
+          { role: "user", content: `Original prompt (target total: 16s, each segment: 8s):\n\n${finalPrompt}` },
         ],
-        temperature: 0.3,
-        max_tokens: 1200,
+        temperature: 0.25,
+        max_tokens: 1600,
       },
       30000
     );
@@ -3936,8 +4012,27 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     promptA = sanitizePromptForVeo(String(parsed?.part1 || "").trim()) || "";
     promptB = sanitizePromptForVeo(String(parsed?.part2 || "").trim()) || "";
   } catch (_e) {}
-  if (!promptA) promptA = sanitizePromptForVeo(finalPrompt) || finalPrompt;
-  if (!promptB) promptB = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+
+  // Smart fallback: generate structurally different prompts even without LLM
+  if (!promptA || !promptB) {
+    const base16Prompt = sanitizePromptForVeo(finalPrompt) || finalPrompt;
+    promptA = promptA || (
+      base16Prompt
+      + " [Part 1/2 — Product Introduction] "
+      + "[00:00-00:02] Cinematic hero shot, camera slowly pushing in toward the product, revealing its full form and silhouette."
+      + " [00:02-00:04] Close-up detail shot highlighting the key selling-point feature with sharp focus and studio lighting."
+      + " [00:04-00:06] Medium shot showing product in its natural environment context."
+      + " [00:06-00:08] Elegant rotation or slide revealing the product from a new angle."
+    );
+    promptB = promptB || (
+      base16Prompt
+      + " [Part 2/2 — Usage & CTA] "
+      + "[00:00-00:02] Lifestyle scene showing a person naturally interacting with or using the product in daily life."
+      + " [00:02-00:04] Reaction shot or experience moment — emotional connection with the product."
+      + " [00:04-00:06] Dynamic usage demonstration highlighting a secondary feature or benefit."
+      + " [00:06-00:08] Confident closing shot — product prominently featured, camera pulls back for final reveal."
+    );
+  }
 
   const segBody = { ...startBody, duration_seconds: 8 };
 
