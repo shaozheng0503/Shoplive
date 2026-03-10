@@ -4087,6 +4087,9 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   }
 
   const segBody = { ...startBody, duration_seconds: 8 };
+  // Snapshot the model at start time — polling MUST use the same model name as submission.
+  // Using getVeoModel() during polling risks a mismatch if the user switches the dropdown mid-flight.
+  const lockedModel = segBody.model || getVeoModel();
 
   async function submitSafe(prompt, label) {
     try {
@@ -4123,7 +4126,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       await new Promise((r) => setTimeout(r, waitMs));
       if (elapsed < 30) continue;
       try {
-        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: getVeoModel(), operation_name: op }, 15000);
+        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: lockedModel, operation_name: op }, 15000);
         if (st?.transient) {
           const retryAttempts = Math.max(0, Number(st?.retry_attempts || 0));
           const waitMs = transientBackoff.apply(retryAttempts);
