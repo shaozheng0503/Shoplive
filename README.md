@@ -437,11 +437,11 @@ curl -sS -X POST "http://127.0.0.1:8000/api/veo/concat-segments" \
 ### Agent 自然语言编辑视频
 
 ```bash
-# 将视频加速 2 倍
+# 将视频加速 2 倍，底部加文字
 curl -sS -X POST "http://127.0.0.1:8000/api/agent/run" \
   -H "Content-Type: application/json" \
   -d '{
-    "instruction": "将这个视频加速2倍，并在底部加上文字「限时特卖 8折优惠」",
+    "prompt": "将这个视频加速2倍，并在底部加上文字「限时特卖 8折优惠」",
     "context": {
       "video_url": "http://127.0.0.1:8000/video-edits/my-video.mp4"
     }
