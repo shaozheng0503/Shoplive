@@ -609,6 +609,7 @@ const state = {
   skipImageConfirmed: false,
   entryFocusMode: false,
   lastModelAdviceKey: "",
+  activeVideoCardId: "",
   videoEdit: {
     maskText: "",
     maskStyle: "elegant",
@@ -1423,6 +1424,35 @@ function focusWorkspaceTop() {
   scrollToBottom();
 }
 
+function getActiveVideoCard() {
+  if (!chatList || !state.activeVideoCardId) return null;
+  return chatList.querySelector(`[data-task-card-id="${state.activeVideoCardId}"]`);
+}
+
+function updateActiveVideoCardState() {
+  if (!chatList) return;
+  chatList.querySelectorAll(".video-msg.is-active").forEach((el) => el.classList.remove("is-active"));
+  const activeCard = getActiveVideoCard();
+  if (activeCard) activeCard.classList.add("is-active");
+}
+
+function focusActiveVideoCard(behavior = "smooth", block = "center") {
+  const card = getActiveVideoCard();
+  if (!card) return false;
+  updateActiveVideoCardState();
+  card.scrollIntoView({ behavior, block, inline: "nearest" });
+  return true;
+}
+
+function restoreWorkspaceAnchor(behavior = "smooth", block = "center") {
+  requestAnimationFrame(() => {
+    if (!focusActiveVideoCard(behavior, block) && state.canUseEditors) {
+      const page = document.querySelector(".agent-page");
+      if (page) page.scrollIntoView({ block: "start", behavior });
+    }
+  });
+}
+
 function normalizePointsList(raw = "") {
   return String(raw)
     .split(/[，,；;\n]/)
@@ -1901,6 +1931,7 @@ function applyWorkspaceMode() {
   if (videoEditorPanel) videoEditorPanel.hidden = !state.videoEditorOpen;
   updateWorkspaceTabs();
   updateChatTailWindow();
+  updateActiveVideoCardState();
 }
 
 function updateWorkspaceTabs() {
@@ -3415,10 +3446,11 @@ function openEditorPanel(type) {
   applyWorkspaceMode();
   renderVideoEditor();
   renderScriptEditor();
-  focusWorkspaceTop();
+  restoreWorkspaceAnchor();
   if (type === "script" && (!state.lastStoryboard || !state.lastPrompt)) {
     hydrateWorkflowTexts(true).then(() => {
       if (state.scriptEditorOpen) renderScriptEditor();
+      restoreWorkspaceAnchor("auto", "nearest");
     });
   }
 }
@@ -3430,7 +3462,7 @@ function toggleEditorPanel(type) {
   applyWorkspaceMode();
   renderVideoEditor();
   renderScriptEditor();
-  focusWorkspaceTop();
+  restoreWorkspaceAnchor();
 }
 
 function setThinking(show, text = "") {
@@ -4781,6 +4813,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   card.className = "msg system video-msg";
   const cardId = `task-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   card.dataset.taskCardId = cardId;
+  state.activeVideoCardId = cardId;
   const title = document.createElement("div");
   title.textContent = t("done");
 
@@ -4849,22 +4882,17 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     state.lastVideoUrl = cardVideoUrl;
     state.lastPrompt = cardPrompt;
     state.lastStoryboard = cardStoryboard;
+    state.activeVideoCardId = cardId;
     state.videoEditorOpen = true;
     state.scriptEditorOpen = true;
     applyWorkspaceMode();
     renderVideoEditor();
     renderScriptEditor();
-    // Scroll page to top so editor panels are fully visible, then scroll
-    // the chat column to show the specific card that was clicked
-    const page = document.querySelector(".agent-page");
-    if (page) page.scrollIntoView({ block: "start", behavior: "smooth" });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    requestAnimationFrame(() => {
-      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
+    restoreWorkspaceAnchor("smooth", "center");
     if (focusScript && (!state.lastStoryboard || !state.lastPrompt)) {
       hydrateWorkflowTexts(true).then(() => {
         if (state.scriptEditorOpen) renderScriptEditor();
+        restoreWorkspaceAnchor("auto", "nearest");
       });
     }
   };
