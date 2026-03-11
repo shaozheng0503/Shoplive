@@ -3056,3 +3056,215 @@ body {
 .video-edit-surface:-webkit-full-screen .video-fs-btn {
   display: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHAT BUBBLE ENHANCEMENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Markdown content inside system bubbles ─────────────────────────────── */
+.msg.system p                { margin: 0 0 6px; }
+.msg.system p:last-child     { margin-bottom: 0; }
+.msg.system ul,
+.msg.system ol               { margin: 4px 0; padding-left: 18px; }
+.msg.system li               { margin-bottom: 3px; }
+.msg.system strong           { color: #c4d8ff; }
+.msg.system a                { color: #7eb8ff; text-underline-offset: 2px; }
+.msg.system code {
+  font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 0.85em;
+  background: rgba(100, 140, 255, 0.15);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.msg.system pre {
+  background: rgba(8, 16, 38, 0.72);
+  border: 1px solid rgba(120, 160, 240, 0.22);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.msg.system pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.84em;
+}
+/* Remove pre-wrap from system bubbles so Markdown <p>/<ul> controls layout */
+.msg.system { white-space: normal; }
+
+/* Light-theme overrides */
+.workspace .msg.system strong { color: #1a3a7a; }
+.workspace .msg.system a      { color: #2255cc; }
+.workspace .msg.system code   { background: rgba(40, 80, 200, 0.1); color: #1a3266; }
+.workspace .msg.system pre    { background: #f0f5ff; border-color: #c8d8f0; }
+
+/* ── 2. Streaming bubble cursor ────────────────────────────────────────────── */
+.msg.is-streaming::after {
+  content: "▋";
+  display: inline-block;
+  margin-left: 2px;
+  animation: cursorBlink 0.7s step-end infinite;
+  color: var(--brand, #4a7fff);
+  font-size: 0.88em;
+  vertical-align: text-bottom;
+}
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* ── 3. Error bubble ────────────────────────────────────────────────────────── */
+.msg.error {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  border-left: 3px solid #e05252 !important;
+  background: linear-gradient(160deg, rgba(80, 18, 18, 0.75), rgba(55, 14, 14, 0.6)) !important;
+  border-color: rgba(220, 80, 80, 0.4) !important;
+  color: #ffd0d0 !important;
+  white-space: normal;
+}
+.msg-error-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  user-select: none;
+}
+/* Light-theme error */
+.workspace .msg.error {
+  background: linear-gradient(180deg, #fff5f5, #ffe9e9) !important;
+  border-left: 3px solid #d93030 !important;
+  border-color: #f0c8c8 !important;
+  color: #7a1c1c !important;
+}
+
+/* ── 4. Message grouping ───────────────────────────────────────────────────── */
+.msg.system.group-top    { border-top-left-radius: 4px; }
+.msg.user.group-top      { border-top-right-radius: 4px; }
+.msg.system.group-bottom { border-bottom-left-radius: 4px; }
+.msg.user.group-bottom   { border-bottom-right-radius: 4px; }
+.msg.group-top           { margin-top: -6px; }
+
+/* ── 5. Hover action bar ────────────────────────────────────────────────────── */
+.msg { position: relative; }
+
+.msg-hover-bar {
+  position: absolute;
+  top: -30px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+}
+.msg:hover .msg-hover-bar,
+.msg:focus-within .msg-hover-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msg.user .msg-hover-bar { right: auto; left: 4px; }
+
+.msg-action-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid rgba(140, 175, 240, 0.3);
+  background: rgba(14, 26, 58, 0.9);
+  color: #9abeff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  backdrop-filter: blur(6px);
+  transition: background 0.15s, color 0.15s, transform 0.12s;
+  flex-shrink: 0;
+}
+.msg-action-btn:hover {
+  background: rgba(63, 111, 255, 0.42);
+  color: #fff;
+  transform: scale(1.08);
+}
+.msg-action-btn.is-copied {
+  background: rgba(32, 160, 100, 0.52);
+  color: #a8ffcc;
+}
+/* Light-theme */
+.workspace .msg-action-btn {
+  background: rgba(230, 240, 255, 0.96);
+  color: #3a5890;
+  border-color: #c6d8f0;
+  backdrop-filter: none;
+}
+.workspace .msg-action-btn:hover {
+  background: #dceeff;
+  color: #1a3d8c;
+}
+
+/* ── 6. Scroll-to-bottom FAB ────────────────────────────────────────────────── */
+.scroll-bot-fab {
+  position: fixed;
+  bottom: 28px;
+  right: 32px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(140, 175, 240, 0.36);
+  background: linear-gradient(135deg, rgba(18, 34, 70, 0.94), rgba(30, 52, 100, 0.94));
+  color: #9abeff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(10px);
+  z-index: 500;
+  transition: opacity 0.22s, transform 0.22s;
+  animation: fabIn 0.2s ease-out;
+}
+.scroll-bot-fab:hover {
+  transform: translateY(-2px) scale(1.06);
+  background: linear-gradient(135deg, rgba(63, 111, 255, 0.5), rgba(30, 52, 100, 0.97));
+  color: #fff;
+}
+.scroll-bot-fab[hidden] { display: none; }
+
+@keyframes fabIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.scroll-bot-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #e05252;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  padding: 0 4px;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+}
+.scroll-bot-badge[hidden] { display: none; }
+
+/* Light-theme FAB */
+.workspace .scroll-bot-fab {
+  background: rgba(240, 246, 255, 0.97);
+  color: #3a5890;
+  border-color: #c6d8f0;
+  box-shadow: 0 8px 22px rgba(44, 72, 128, 0.2);
+  backdrop-filter: none;
+}
+.workspace .scroll-bot-fab:hover {
+  background: #dceeff;
+  color: #1a3d8c;
+}

@@ -517,6 +517,10 @@ const REGION_ITEMS = [
 
 let currentLang = localStorage.getItem("shoplive.lang") || "zh";
 let thinkingNode = null;
+
+// ── Scroll-to-bottom FAB state ──────────────────────────────────────────────
+let _userScrolledUp = false;
+let _unreadCount = 0;
 const MAX_CONCURRENT_VIDEO_JOBS = 3;
 
 const state = {
@@ -1215,7 +1219,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
   } catch (e) {
     if (pollBubble.parentNode) pollBubble.remove();
     if (String(e?.message || "") === "CANCELLED" || state.taskMap?.[taskId]?.cancelRequested) return;
-    pushMsg("system", String(e?.message || "") || t("genFail"));
+    pushMsg("system", String(e?.message || "") || t("genFail"), { error: true });
     updateVideoTask(taskId, { status: "failed", stage: zh ? "失败" : "Failed" });
     throw e;
   }
@@ -1235,6 +1239,16 @@ function syncStateFromSimpleControls() {
 
 function scrollToBottom() {
   updateChatTailWindow();
+  if (_userScrolledUp) {
+    // User is reading history — don't force scroll, just update badge
+    _unreadCount += 1;
+    const badge = document.getElementById("scrollBotBadge");
+    if (badge) {
+      badge.textContent = _unreadCount > 99 ? "99+" : String(_unreadCount);
+      badge.hidden = false;
+    }
+    return;
+  }
   chatList.scrollTop = chatList.scrollHeight;
 }
 
@@ -2821,7 +2835,7 @@ function renderVideoEditor() {
       }
     } catch (_e) {
       applyVideoEditsToPreview();
-      pushMsg("system", t("videoExportFail"));
+      pushMsg("system", t("videoExportFail"), { error: true });
     }
   });
   videoEditorPanel.querySelector("#resetVideoEditorBtn")?.addEventListener("click", () => {
@@ -2905,18 +2919,127 @@ function setThinking(show, text = "") {
   }
 }
 
+// ── Markdown renderer (graceful fallback if marked/DOMPurify not loaded) ────
+function _renderMd(el, text) {
+  if (typeof marked !== "undefined" && typeof DOMPurify !== "undefined") {
+    el.innerHTML = DOMPurify.sanitize(marked.parse(text || ""));
+  } else {
+    el.textContent = text || "";
+  }
+}
+
 function typewriter(el, text, speed = 24) {
   const content = String(text || "");
   let i = 0;
+  let accumulated = "";
   const tick = () => {
     if (i >= content.length) return;
-    el.textContent += content[i];
     const ch = content[i];
+    accumulated += ch;
     i += 1;
+    _renderMd(el, accumulated);
     scrollToBottom();
     setTimeout(tick, /[，。！？,.!?]/.test(ch) ? speed * 2.5 : speed);
   };
   tick();
+}
+
+// ── Streaming bubble: returns append(delta) / finish() handles ──────────────
+function pushStreamingMsg(role) {
+  if (state.entryFocusMode) {
+    state.entryFocusMode = false;
+    applyWorkspaceMode();
+  }
+  const el = document.createElement("article");
+  el.className = `msg ${role} is-streaming`;
+  _attachHoverBar(el, role);
+  chatList.appendChild(el);
+  _applyGroupRadius();
+  scrollToBottom();
+  let accumulated = "";
+  return {
+    el,
+    append(delta) {
+      accumulated += delta;
+      _renderMd(el, accumulated);
+      scrollToBottom();
+    },
+    finish() {
+      el.classList.remove("is-streaming");
+    },
+    remove() {
+      el.remove();
+      _applyGroupRadius();
+    },
+  };
+}
+
+// ── Message grouping: tighten radius between consecutive same-role bubbles ───
+function _applyGroupRadius() {
+  const msgs = Array.from(
+    chatList.querySelectorAll(":scope > article.msg:not(.video-msg):not(.form-card)")
+  );
+  msgs.forEach((el, i) => {
+    const role = el.classList.contains("user") ? "user" : "system";
+    const prev = i > 0 ? msgs[i - 1] : null;
+    const next = i < msgs.length - 1 ? msgs[i + 1] : null;
+    const prevRole = prev ? (prev.classList.contains("user") ? "user" : "system") : null;
+    const nextRole = next ? (next.classList.contains("user") ? "user" : "system") : null;
+    el.classList.toggle("group-top", prevRole === role);
+    el.classList.toggle("group-bottom", nextRole === role);
+  });
+}
+
+// ── Hover action bar: copy + retry ──────────────────────────────────────────
+function _attachHoverBar(el, role) {
+  const bar = document.createElement("div");
+  bar.className = "msg-hover-bar";
+  bar.innerHTML = `
+    <button class="msg-action-btn" data-action="copy" title="${currentLang === "zh" ? "复制" : "Copy"}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2"/>
+        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+      </svg>
+    </button>
+    ${role === "system" ? `<button class="msg-action-btn" data-action="retry" title="${currentLang === "zh" ? "重试" : "Retry"}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 109-9M3 12V4M3 12H11"/>
+      </svg>
+    </button>` : ""}
+  `;
+  bar.querySelector('[data-action="copy"]')?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const content = (el.innerText || el.textContent || "").trim();
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch (_) {
+      // fallback for non-HTTPS
+      const ta = document.createElement("textarea");
+      ta.value = content;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    const btn = e.currentTarget;
+    btn.classList.add("is-copied");
+    setTimeout(() => btn.classList.remove("is-copied"), 1500);
+  });
+  bar.querySelector('[data-action="retry"]')?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    // Re-trigger send with the last user message text
+    const lastUser = [...chatList.querySelectorAll(".msg.user")].at(-1);
+    if (lastUser) {
+      const txt = (lastUser.innerText || lastUser.textContent || "").trim();
+      if (txt && chatInput) {
+        chatInput.value = txt;
+        sendBtn?.click();
+      }
+    }
+  });
+  el.appendChild(bar);
 }
 
 function pushMsg(role, text, opts = {}) {
@@ -2925,11 +3048,31 @@ function pushMsg(role, text, opts = {}) {
     applyWorkspaceMode();
   }
   const el = document.createElement("article");
-  el.className = `msg ${role}`;
+  el.className = `msg ${role}${opts.error ? " error" : ""}`;
+  _attachHoverBar(el, role);
   chatList.appendChild(el);
+  _applyGroupRadius();
   scrollToBottom();
-  if (role === "system" && opts.typewriter !== false) typewriter(el, text, opts.speed || 22);
-  else el.textContent = text;
+
+  if (opts.error) {
+    // Error bubble: icon + text, no typewriter
+    const icon = document.createElement("span");
+    icon.className = "msg-error-icon";
+    icon.textContent = "⚠️";
+    const textNode = document.createElement("span");
+    textNode.textContent = text;
+    el.appendChild(icon);
+    el.appendChild(textNode);
+    return el;
+  }
+
+  if (role === "system" && opts.typewriter !== false) {
+    typewriter(el, text, opts.speed || 22);
+  } else if (role === "system") {
+    _renderMd(el, text);
+  } else {
+    el.textContent = text;
+  }
   return el;
 }
 
@@ -3886,11 +4029,12 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
         "system",
         currentLang === "zh"
           ? "视频播放失败：当前账号缺少 GCS 对象读取权限（storage.objects.get）。请联系管理员授权后重试，或重新生成（不指定 storage_uri）。"
-          : "Video playback failed: current account lacks GCS object read permission (storage.objects.get). Grant permission and retry, or regenerate without storage_uri."
+          : "Video playback failed: current account lacks GCS object read permission (storage.objects.get). Grant permission and retry, or regenerate without storage_uri.",
+        { error: true }
       );
       return;
     }
-    pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.");
+    pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.", { error: true });
   });
   surface.appendChild(video);
   setupSurfaceFullscreen(surface);
@@ -4422,9 +4566,10 @@ async function generateVideo(promptOverride = "") {
           if (isVeoSafetyRejection(opError)) {
             pushMsg("system", zh
               ? `视频生成被安全策略拦截：${opError.slice(0, 120)}。请简化提示词后重试。`
-              : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`);
+              : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`,
+              { error: true });
           } else {
-            pushMsg("system", t("genFail"));
+            pushMsg("system", t("genFail"), { error: true });
           }
           finishVideoTask(taskId, false, zh ? "失败" : "Failed");
           releaseSlotOnce();
@@ -4443,7 +4588,7 @@ async function generateVideo(promptOverride = "") {
       } catch (_e) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        pushMsg("system", t("pollFail"));
+        pushMsg("system", t("pollFail"), { error: true });
         finishVideoTask(taskId, false, zh ? "轮询异常" : "Polling error");
         releaseSlotOnce();
         return;
@@ -4462,7 +4607,7 @@ async function generateVideo(promptOverride = "") {
     const detail = /aborted|abort/i.test(detailRaw)
       ? currentLang === "zh" ? "请求超时，请重试" : "request timeout, please retry"
       : detailRaw;
-    pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"));
+    pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"), { error: true });
     finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
     releaseSlotOnce();
   }
@@ -4806,7 +4951,7 @@ async function enhancePromptByAgent() {
         ? "请求超时，请重试"
         : "request timeout, please retry"
       : detailRaw;
-    const box = pushMsg("system", detail ? `${t("enhanceFail")} (${detail})` : t("enhanceFail"), { typewriter: false });
+    const box = pushMsg("system", detail ? `${t("enhanceFail")} (${detail})` : t("enhanceFail"), { typewriter: false, error: true });
     renderOptions(box, [
       {
         title: t("enhanceRetry"),
@@ -4992,7 +5137,7 @@ async function parseShopProductByUrl(inputUrl = "") {
     );
   } catch (_e) {
     stopParseProgress();
-    pushMsg("system", t("parseLinkFail"));
+    pushMsg("system", t("parseLinkFail"), { error: true });
   }
 }
 
@@ -5491,7 +5636,7 @@ if (aiGenerateFramesBtn) {
         ? `AI 已生成首尾帧${state.frameMode ? "，可直接用于视频生成。" : "（部分生成失败，请手动上传）。"}`
         : `AI generated frames${state.frameMode ? ". Ready for video generation." : " (partial failure, please upload manually)."}`);
     } catch (e) {
-      pushMsg("system", zh ? `首尾帧生成失败: ${e.message}` : `Frame generation failed: ${e.message}`);
+      pushMsg("system", zh ? `首尾帧生成失败: ${e.message}` : `Frame generation failed: ${e.message}`, { error: true });
     } finally {
       aiGenerateFramesBtn.disabled = false;
       aiGenerateFramesBtn.textContent = zh ? "AI 自动生成" : "AI Generate";
@@ -5587,3 +5732,28 @@ consumeLandingParams();
 pushMsg("system", t("welcome"));
 if (state._landingHint) pushMsg("system", state._landingHint);
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
+
+// ── Scroll-to-bottom FAB setup ──────────────────────────────────────────────
+(function initScrollFab() {
+  const fab = document.getElementById("scrollBotFab");
+  const badge = document.getElementById("scrollBotBadge");
+  if (!fab || !chatList) return;
+
+  chatList.addEventListener("scroll", () => {
+    const dist = chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight;
+    _userScrolledUp = dist > 80;
+    fab.hidden = !_userScrolledUp;
+    if (!_userScrolledUp) {
+      _unreadCount = 0;
+      if (badge) { badge.hidden = true; badge.textContent = "0"; }
+    }
+  }, { passive: true });
+
+  fab.addEventListener("click", () => {
+    _userScrolledUp = false;
+    _unreadCount = 0;
+    fab.hidden = true;
+    if (badge) { badge.hidden = true; badge.textContent = "0"; }
+    chatList.scrollTo({ top: chatList.scrollHeight, behavior: "smooth" });
+  });
+})();

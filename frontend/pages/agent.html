@@ -10,6 +10,9 @@
     <title>Shoplive Agent</title>
     <link rel="stylesheet" href="/styles/styles.css" />
     <link rel="stylesheet" href="/styles/agent.css" />
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   </head>
   <body>
   <script>
@@ -119,6 +122,14 @@
         </section>
       </section>
     </main>
+
+    <!-- 回到底部 FAB -->
+    <button id="scrollBotFab" class="scroll-bot-fab" aria-label="回到底部" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="6 9 12 15 18 9"/>
+      </svg>
+      <span id="scrollBotBadge" class="scroll-bot-badge" hidden>0</span>
+    </button>
 
     <!-- 参考图选择弹窗（复用 landing 结构）-->
     <section id="agentRefModal" class="ref-modal" aria-hidden="true">
