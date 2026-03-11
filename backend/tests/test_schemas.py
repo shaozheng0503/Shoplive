@@ -184,7 +184,9 @@ class TestVeoStartRequest:
 
     def test_invalid_duration_seconds(self):
         with pytest.raises(ValidationError):
-            VeoStartRequest(prompt="test", duration_seconds=5)
+            VeoStartRequest(prompt="test", duration_seconds=3)  # below min=4
+        with pytest.raises(ValidationError):
+            VeoStartRequest(prompt="test", duration_seconds=16)  # above max=15
 
     def test_invalid_mime_type_rejected(self):
         with pytest.raises(ValidationError):
@@ -351,6 +353,7 @@ class TestToolSchemasRegistry:
             "export_edited_video",
             "render_video_timeline",
             "generate_product_image",
+            "agent_run",
         }
         assert expected == set(TOOL_SCHEMAS.keys())
 

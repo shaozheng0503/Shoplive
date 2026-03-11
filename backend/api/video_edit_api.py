@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from flask import g, jsonify, request
 
@@ -41,9 +41,26 @@ def _build_atempo_chain(speed: float) -> str:
     return ",".join([f"atempo={x}" for x in chunks])
 
 
+def _probe_has_audio(src_path: Path) -> bool:
+    """Return True if the video file has at least one audio stream."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            str(src_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return bool((result.stdout or "").strip())
+
+
 def _render_timeline_video(
     *,
-    source_video_url: str,
+    source_video_urls: List[str],
     proxy: str,
     include_audio: bool,
     tracks,
@@ -58,24 +75,27 @@ def _render_timeline_video(
 ):
     with tempfile.TemporaryDirectory(prefix="shoplive-timeline-") as tmp_dir:
         tmp_dir_path = Path(tmp_dir)
-        src_path = tmp_dir_path / "source.mp4"
-        download_video_to_file(source_video_url, src_path, proxy)
+
+        # Download all source videos
+        src_paths: List[Path] = []
+        for i, url in enumerate(source_video_urls):
+            sp = tmp_dir_path / f"source_{i}.mp4"
+            download_video_to_file(url, sp, proxy)
+            if not sp.exists() or sp.stat().st_size < 1024:
+                raise ValueError(f"源视频 {i} 下载失败或内容为空 (url={url[:80]})")
+            src_paths.append(sp)
+
         if on_progress:
             on_progress(30, "source_downloaded")
-        if not src_path.exists() or src_path.stat().st_size < 1024:
-            raise ValueError("源视频下载失败或内容为空")
 
+        # Use first source to determine timeline duration (for percent-based segments)
         if duration_hint is None:
             probe = subprocess.run(
                 [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "default=noprint_wrappers=1:nokey=1",
-                    str(src_path),
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(src_paths[0]),
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -97,12 +117,17 @@ def _render_timeline_video(
             on_progress(45, "segments_normalized")
         if not normalized_segments:
             raise ValueError("时间线中没有可渲染的视频片段")
+
+        # Clamp out-of-bounds source_index to max valid index
+        max_src_idx = len(src_paths) - 1
+        for seg in normalized_segments:
+            seg["source_index"] = int(min(seg.get("source_index", 0), max_src_idx))
+
         total_render_seconds = max(
             0.001,
             sum(max(0.0, float(seg["end"]) - float(seg["start"])) for seg in normalized_segments),
         )
 
-        has_audio = False
         has_muted_video_track = any(
             isinstance(t, dict)
             and bool(t.get("enabled", True))
@@ -111,66 +136,50 @@ def _render_timeline_video(
             for t in tracks
         )
         effective_include_audio = include_audio and (not has_muted_video_track)
+
+        # Probe audio for each source that is actually referenced by some segment
+        referenced_src_indices = {seg["source_index"] for seg in normalized_segments}
+        source_has_audio: Dict[int, bool] = {}
         if effective_include_audio:
-            probe_audio = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "a",
-                    "-show_entries",
-                    "stream=index",
-                    "-of",
-                    "csv=p=0",
-                    str(src_path),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            has_audio = bool((probe_audio.stdout or "").strip())
+            for idx in referenced_src_indices:
+                source_has_audio[idx] = _probe_has_audio(src_paths[idx])
+        # Audio output only when ALL referenced sources have audio
+        has_audio = effective_include_audio and all(source_has_audio.get(i, False)
+                                                    for i in referenced_src_indices)
 
         filter_parts = []
-        for idx, seg in enumerate(normalized_segments):
+        for seg_idx, seg in enumerate(normalized_segments):
             s = _fmt_float(seg["start"], 4)
             e = _fmt_float(seg["end"], 4)
-            filter_parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{idx}]")
-            if effective_include_audio and has_audio:
-                filter_parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{idx}]")
+            si = seg["source_index"]
+            filter_parts.append(f"[{si}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{seg_idx}]")
+            if has_audio:
+                filter_parts.append(f"[{si}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{seg_idx}]")
 
-        v_inputs = "".join([f"[v{i}]" for i in range(len(normalized_segments))])
-        if effective_include_audio and has_audio:
+        n = len(normalized_segments)
+        if has_audio:
             # concat(v=1,a=1) expects interleaved pads: [v0][a0][v1][a1]...
-            va_inputs = "".join([f"[v{i}][a{i}]" for i in range(len(normalized_segments))])
-            filter_parts.append(
-                f"{va_inputs}concat=n={len(normalized_segments)}:v=1:a=1[vout][aout]"
-            )
+            va_inputs = "".join([f"[v{i}][a{i}]" for i in range(n)])
+            filter_parts.append(f"{va_inputs}concat=n={n}:v=1:a=1[vout][aout]")
         else:
-            filter_parts.append(f"{v_inputs}concat=n={len(normalized_segments)}:v=1:a=0[vout]")
+            v_inputs = "".join([f"[v{i}]" for i in range(n)])
+            filter_parts.append(f"{v_inputs}concat=n={n}:v=1:a=0[vout]")
+
         if on_progress:
             on_progress(60, "ffmpeg_started")
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-nostats",
-            "-i",
-            str(src_path),
-            "-filter_complex",
-            ";".join(filter_parts),
-            "-map",
-            "[vout]",
-            "-progress",
-            "pipe:1",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-        ]
-        if effective_include_audio and has_audio:
+        cmd = ["ffmpeg", "-y", "-nostats"]
+        for sp in src_paths:
+            cmd.extend(["-i", str(sp)])
+        cmd.extend([
+            "-filter_complex", ";".join(filter_parts),
+            "-map", "[vout]",
+            "-progress", "pipe:1",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+        ])
+        if has_audio:
             cmd.extend(["-map", "[aout]", "-c:a", "aac"])
         else:
             cmd.append("-an")
@@ -236,6 +245,7 @@ def _render_timeline_video(
             "segments_rendered": len(normalized_segments),
             "timeline_duration_seconds": duration,
             "include_audio": effective_include_audio,
+            "source_count": len(src_paths),
         }
 
 
@@ -252,8 +262,9 @@ def register_video_edit_routes(
     video_edit_export_dir: Path,
 ):
     _ = concat_videos_ffmpeg
-    timeline_jobs = {}
+    timeline_jobs: Dict[str, Dict] = {}
     timeline_jobs_lock = threading.Lock()
+    TIMELINE_JOB_MAX = 200  # prevent unbounded memory growth
 
     def _update_job(job_id: str, **kwargs):
         with timeline_jobs_lock:
@@ -463,11 +474,12 @@ def register_video_edit_routes(
     @app.post("/api/video/timeline/render")
     @validate_request(VideoTimelineRenderRequest)
     def api_video_timeline_render():
-        payload = g.req.model_dump()
+        req_obj = g.req  # VideoTimelineRenderRequest Pydantic instance
         try:
-            source_video_url = str(payload.get("source_video_url") or "").strip()
-            if not source_video_url:
-                return json_error("source_video_url 不能为空")
+            # Resolve source URLs: source_videos takes precedence over source_video_url
+            source_video_urls = req_obj.resolved_source_videos()
+
+            payload = req_obj.model_dump()
             proxy = str(payload.get("proxy") or "").strip()
             include_audio = bool(payload.get("include_audio", True))
             tracks = payload.get("tracks") or []
@@ -492,6 +504,17 @@ def register_video_edit_routes(
             if async_job:
                 job_id = f"timeline-job-{uuid.uuid4().hex}"
                 with timeline_jobs_lock:
+                    # Evict oldest terminal jobs if limit reached
+                    if len(timeline_jobs) >= TIMELINE_JOB_MAX:
+                        terminal = [
+                            (k, v.get("updated_at", 0)) for k, v in timeline_jobs.items()
+                            if v.get("status") in {"done", "failed", "cancelled"}
+                        ]
+                        if terminal:
+                            oldest_key = min(terminal, key=lambda x: x[1])[0]
+                            del timeline_jobs[oldest_key]
+                        else:
+                            return json_error("异步任务队列已满，请稍后再试", 429)
                     timeline_jobs[job_id] = {
                         "job_id": job_id,
                         "status": "queued",
@@ -512,7 +535,7 @@ def register_video_edit_routes(
                             _update_job(job_id, status="cancelled", progress=0, message="cancelled")
                             return
                         result = _render_timeline_video(
-                            source_video_url=source_video_url,
+                            source_video_urls=source_video_urls,
                             proxy=proxy,
                             include_audio=include_audio,
                             tracks=tracks,
@@ -544,6 +567,7 @@ def register_video_edit_routes(
                                 "segments_rendered": result["segments_rendered"],
                                 "timeline_duration_seconds": result["timeline_duration_seconds"],
                                 "include_audio": result["include_audio"],
+                                "source_count": result["source_count"],
                                 "segment_sort_strategy": sort_strategy,
                             },
                         )
@@ -555,10 +579,11 @@ def register_video_edit_routes(
                             _update_job(job_id, status="failed", progress=100, message="failed", error=msg)
 
                 threading.Thread(target=_job_runner, daemon=True).start()
-                return jsonify({"ok": True, "async_job": True, "job_id": job_id, "status": "queued"})
+                return jsonify({"ok": True, "async_job": True, "job_id": job_id, "status": "queued",
+                                "source_count": len(source_video_urls)})
 
             result = _render_timeline_video(
-                source_video_url=source_video_url,
+                source_video_urls=source_video_urls,
                 proxy=proxy,
                 include_audio=include_audio,
                 tracks=tracks,
@@ -577,6 +602,7 @@ def register_video_edit_routes(
                     "segments_rendered": result["segments_rendered"],
                     "timeline_duration_seconds": result["timeline_duration_seconds"],
                     "include_audio": result["include_audio"],
+                    "source_count": result["source_count"],
                     "segment_sort_strategy": sort_strategy,
                 }
             )

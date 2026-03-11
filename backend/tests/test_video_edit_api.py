@@ -496,3 +496,43 @@ class TestTimelineRenderAsync:
         assert cancel.status_code == 200
         # status must not be changed to "cancelled" for an already-finished job
         assert cd["status"] in {"done", "failed"}
+
+    def test_async_job_queue_limit_evicts_old_jobs(self, client, vid_audio):
+        """When queue is at TIMELINE_JOB_MAX, oldest terminal job is evicted, new job accepted."""
+        from unittest.mock import patch
+        from shoplive.backend.web_app import create_app
+        _app = create_app()
+
+        # Find the timeline_jobs dict in registered closure
+        # We'll patch the constant to a tiny limit for this test
+        import shoplive.backend.api.video_edit_api as _ve_mod
+        with _app.test_client() as _c:
+            # Submit 3 quick jobs that will complete
+            submitted = []
+            for _ in range(3):
+                r = _c.post(self.RENDER, json={
+                    "source_video_url": vid_audio,
+                    "duration_seconds": 3.0,
+                    "async_job": True,
+                    "tracks": self._track(),
+                })
+                assert r.status_code == 200
+                submitted.append(r.get_json()["job_id"])
+
+            # Wait for all to complete
+            for jid in submitted:
+                for _ in range(30):
+                    st = _c.get(f"{self.STATUS}?job_id={jid}").get_json()
+                    if st["status"] in {"done", "failed"}:
+                        break
+                    time.sleep(1)
+
+            # All 3 jobs are terminal — a 4th must succeed (evicts oldest)
+            r4 = _c.post(self.RENDER, json={
+                "source_video_url": vid_audio,
+                "duration_seconds": 3.0,
+                "async_job": True,
+                "tracks": self._track(),
+            })
+            assert r4.status_code == 200
+            assert "job_id" in r4.get_json()

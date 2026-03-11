@@ -23,6 +23,7 @@ from shoplive.backend.briefing import (
 )
 from shoplive.backend.infra import (
     PROJECT_ROOT as SHOPLIVE_PROJECT_ROOT,
+    SHOPLIVE_DIR,
     build_proxies,
     get_access_token,
     parse_common_payload,
@@ -80,7 +81,7 @@ from shoplive.backend.infra import get_token_cache_stats
 FRONTEND_ROOT = (SHOPLIVE_PROJECT_ROOT / "shoplive" / "frontend").resolve()
 FRONTEND_PAGES_DIR = (FRONTEND_ROOT / "pages").resolve()
 app = Flask(__name__, static_folder=str(FRONTEND_ROOT), static_url_path="")
-VIDEO_EDIT_EXPORT_DIR = (SHOPLIVE_PROJECT_ROOT / "shoplive_video_edits").resolve()
+VIDEO_EDIT_EXPORT_DIR = (SHOPLIVE_DIR / "video_edits").resolve()
 VIDEO_EDIT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Setup audit middleware for automatic request tracing

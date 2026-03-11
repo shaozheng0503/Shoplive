@@ -219,6 +219,57 @@ class VideoWorkflowRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Agentic Run (Tool-Calling Loop)
+# ---------------------------------------------------------------------------
+
+class AgentRunRequest(BaseModel):
+    """Run the agent in an agentic tool-calling loop.
+
+    The agent autonomously decides which tools to call based on the conversation.
+    Specify ``tools`` to limit which tools are available (defaults to video-editing set).
+    Always returns SSE stream of events: start → thinking → tool_call → tool_result → delta → done.
+
+    Example:
+        {
+            "prompt": "把这个视频加速1.5倍，叠加文字'立即购买'",
+            "context": {"video_url": "https://storage.googleapis.com/.../video.mp4"},
+            "tools": ["export_edited_video"]
+        }
+    """
+    api_base: str = Field(default="", description="LiteLLM API base URL.")
+    api_key: str = Field(default="", description="LiteLLM API key.")
+    model: str = Field(default="", description="LLM model. Defaults to LITELLM_MODEL env var.")
+    proxy: str = Field(default="", description="HTTP proxy URL.")
+    messages: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Full conversation history [{role, content}]. If omitted, 'prompt' is used.",
+    )
+    prompt: str = Field(
+        default="",
+        description="Single user instruction. Used when 'messages' is not provided.",
+    )
+    tools: Optional[List[str]] = Field(
+        default=None,
+        description="Tool names to enable. None = default video-editing set "
+                    "(export_edited_video, render_video_timeline). "
+                    "Pass ['*'] to enable all tools.",
+    )
+    max_rounds: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Maximum tool-call iterations before stopping. Default 5.",
+    )
+    context: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Session context injected into system prompt. "
+                    "Common keys: video_url (current video), gcs_uri, model (veo model).",
+    )
+    temperature: Optional[float] = Field(default=None, description="LLM sampling temperature.")
+    max_tokens: Optional[int] = Field(default=None, description="Max tokens in LLM response.")
+
+
+# ---------------------------------------------------------------------------
 # Veo Video Generation
 # ---------------------------------------------------------------------------
 
@@ -474,6 +525,12 @@ class TimelineSegmentRequest(BaseModel):
         gt=0.0,
         description="Optional segment absolute end time in seconds. If provided, overrides width.",
     )
+    source_index: int = Field(
+        default=0,
+        ge=0,
+        description="0-based index into source_videos list. Defaults to 0 (the primary source_video_url). "
+                    "Use this to reference different source clips in a multi-source timeline.",
+    )
 
     @field_validator("end_seconds")
     @classmethod
@@ -512,14 +569,24 @@ class TimelineTrackRequest(BaseModel):
 
 class VideoTimelineRenderRequest(BaseModel):
     source_video_url: str = Field(
-        description="Source video URL. Supports HTTP(S) URL or data:video/* base64.",
+        default="",
+        description="Primary source video URL. Supports HTTP(S) URL or data:video/* base64. "
+                    "Corresponds to source_index=0 in segments. Required unless source_videos is provided.",
+    )
+    source_videos: Optional[List[str]] = Field(
+        default=None,
+        description="List of source video URLs for multi-clip rendering. "
+                    "Each entry supports HTTP(S) or data:video/*. "
+                    "Segments reference a clip via source_index (0-based). "
+                    "When provided, source_video_url is treated as source_videos[0] if not already included.",
     )
     proxy: str = Field(default="", description="HTTP proxy for downloading source video.")
     duration_seconds: Optional[float] = Field(
         default=None,
         gt=0.0,
         le=600.0,
-        description="Optional timeline duration in seconds for percent-to-time conversion.",
+        description="Optional timeline duration in seconds for percent-to-time conversion. "
+                    "Defaults to the duration of the first source video if omitted.",
     )
     include_audio: bool = Field(
         default=True,
@@ -544,11 +611,26 @@ class VideoTimelineRenderRequest(BaseModel):
     @classmethod
     def validate_source_video_url(cls, v: str) -> str:
         v = str(v or "").strip()
-        if not v:
-            raise ValueError("source_video_url is required")
-        if not (v.startswith("http://") or v.startswith("https://") or v.startswith("data:video/")):
+        if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("data:video/")):
             raise ValueError("source_video_url must be http(s) or data:video/*")
         return v
+
+    @field_validator("source_videos")
+    @classmethod
+    def validate_source_videos(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return v
+        result = []
+        for url in v:
+            url = str(url or "").strip()
+            if not url:
+                raise ValueError("source_videos entries must be non-empty URLs")
+            if not (url.startswith("http://") or url.startswith("https://") or url.startswith("data:video/")):
+                raise ValueError("source_videos entries must be http(s) or data:video/*")
+            result.append(url)
+        if not result:
+            raise ValueError("source_videos must not be empty if provided")
+        return result
 
     @field_validator("tracks")
     @classmethod
@@ -561,6 +643,14 @@ class VideoTimelineRenderRequest(BaseModel):
         if total_segments > 80:
             raise ValueError("too many segments (max 80)")
         return tracks
+
+    def resolved_source_videos(self) -> List[str]:
+        """Return the ordered list of source URLs (source_videos takes precedence)."""
+        if self.source_videos:
+            return list(self.source_videos)
+        if self.source_video_url:
+            return [self.source_video_url]
+        raise ValueError("source_video_url or source_videos is required")
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +722,7 @@ TOOL_SCHEMAS: Dict[str, type] = {
     "parse_product_url": ProductInsightRequest,
     "analyze_product_image": ImageInsightRequest,
     "chat_with_llm": AgentChatRequest,
+    "agent_run": AgentRunRequest,
     "run_video_workflow": VideoWorkflowRequest,
     "generate_video": VeoStartRequest,
     "chain_video_segments": VeoChainRequest,

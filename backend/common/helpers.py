@@ -380,7 +380,7 @@ def _is_retryable_litellm_status(resp: Response) -> bool:
 
 
 def _build_litellm_body(model: str, messages: List[Dict], temperature, max_tokens, top_p,
-                        stream: bool = False) -> Dict:
+                        stream: bool = False, tools: Optional[List[Dict]] = None) -> Dict:
     """Build the LiteLLM request body, skipping unsupported params for gpt-5 family."""
     body: Dict[str, Any] = {"model": model, "messages": messages}
     if stream:
@@ -393,7 +393,24 @@ def _build_litellm_body(model: str, messages: List[Dict], temperature, max_token
             body["max_tokens"] = max_tokens
         if top_p is not None:
             body["top_p"] = top_p
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     return body
+
+
+def extract_tool_calls(response_data: Dict) -> List[Dict]:
+    """Extract tool_calls list from a LiteLLM /chat/completions response.
+
+    Returns a list of tool call objects, each with:
+        id, type, function.name, function.arguments (JSON string)
+    Returns empty list if no tool calls in response.
+    """
+    choices = response_data.get("choices") or []
+    if not choices:
+        return []
+    message = choices[0].get("message") or {}
+    return message.get("tool_calls") or []
 
 
 def call_litellm_chat(
@@ -406,6 +423,7 @@ def call_litellm_chat(
     temperature=None,
     max_tokens=None,
     top_p=None,
+    tools: Optional[List[Dict]] = None,
 ) -> Tuple[int, Dict]:
     def _safe_response_body(resp: Response) -> Dict:
         content_type = (resp.headers.get("content-type", "") or "").lower()
@@ -416,7 +434,7 @@ def call_litellm_chat(
                 pass
         return {"raw": resp.text}
 
-    body = _build_litellm_body(model, messages, temperature, max_tokens, top_p)
+    body = _build_litellm_body(model, messages, temperature, max_tokens, top_p, tools=tools)
     proxy_candidates = build_proxy_candidates(proxy)
     max_attempts_per_route = 2
     total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
@@ -1141,6 +1159,7 @@ def normalize_timeline_video_segments(
                 "end": end,
                 "track_index": float(track_index),
                 "track_order": float(t.get("order", 0)),
+                "source_index": int(max(0, seg.get("source_index", 0))),
             })
     if sort_strategy == "start_then_track":
         normalized.sort(key=lambda x: (x["start"], x["track_order"], x["track_index"], x["end"]))

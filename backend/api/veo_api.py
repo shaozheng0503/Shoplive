@@ -718,8 +718,15 @@ def register_veo_routes(
                         )
                         try:
                             _base_signed = sign_gcs_url(_base_uri, _c["key_file"])
-                        except Exception:
+                        except Exception as _sign_err:
                             _base_signed = ""
+                            audit_log.record(
+                                tool="chain_video_segments", action="sign_gcs_url",
+                                input_summary={"uri": _base_uri[:80]},
+                                output_summary={},
+                                status="error", error_code="GCS_SIGN_FAILED",
+                                duration_ms=0,
+                            )
                         _segments = [{
                             "step": 1, "type": "base_generate",
                             "operation_name": _base_op,
@@ -1070,6 +1077,55 @@ def register_veo_routes(
                 "error": job.get("error"),
             })
 
+    @app.get("/api/veo/chain/stream")
+    def api_veo_chain_stream():
+        """SSE stream for async chain job progress.
+
+        Query params:
+            job_id: str — returned by POST /api/veo/chain when async_mode=true
+
+        Streams ``data: {...}`` events (1s interval) until the job reaches a
+        terminal state, then emits ``data: [DONE]`` and closes the connection.
+        """
+        import json as _json
+
+        job_id = str(request.args.get("job_id") or "").strip()
+        if not job_id:
+            return json_error("job_id 不能为空")
+        with _chain_jobs_lock:
+            if job_id not in _chain_jobs:
+                return json_error("job 不存在", 404)
+
+        def _generate():
+            while True:
+                with _chain_jobs_lock:
+                    job = _chain_jobs.get(job_id)
+                if not job:
+                    yield f"data: {_json.dumps({'error': 'job not found'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                event = {
+                    "job_id": job["job_id"],
+                    "status": job["status"],
+                    "progress": job.get("progress", 0),
+                    "message": job.get("message", ""),
+                }
+                if job.get("result") is not None:
+                    event["result"] = job["result"]
+                if job.get("error"):
+                    event["error"] = job["error"]
+                yield f"data: {_json.dumps(event)}\n\n"
+                if job["status"] in {"done", "failed", "cancelled"}:
+                    yield "data: [DONE]\n\n"
+                    return
+                time.sleep(1.0)
+
+        return Response(
+            stream_with_context(_generate()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.post("/api/veo/status")
     @validate_request(VeoStatusRequest)
     def api_veo_status():
@@ -1191,13 +1247,13 @@ def register_veo_routes(
             for uri in gs_paths:
                 try:
                     signed_all_urls.append({"gs_uri": uri, "url": sign_gcs_url(uri, key_file)})
-                except Exception:
-                    pass
+                except Exception as _sign_err:
+                    signed_all_urls.append({"gs_uri": uri, "url": "", "sign_error": str(_sign_err)[:200]})
             for uri in video_uris:
                 try:
                     signed_video_urls.append({"gs_uri": uri, "url": sign_gcs_url(uri, key_file)})
-                except Exception:
-                    pass
+                except Exception as _sign_err:
+                    signed_video_urls.append({"gs_uri": uri, "url": "", "sign_error": str(_sign_err)[:200]})
             _dur_ms = int((time.monotonic() - _t0) * 1000)
             is_done = bool(data.get("done"))
             audit_log.record(
@@ -1628,16 +1684,63 @@ def register_veo_routes(
             if errors:
                 failed = ", ".join(e["label"] for e in errors)
                 _dur_ms = int((time.monotonic() - _t0) * 1000)
+                # Partial success: at least one segment succeeded → return it instead of 502
+                if segments:
+                    ok_labels = ", ".join(s["label"] for s in segments)
+                    partial_tmp = Path(tempfile.mkdtemp(prefix=f"veo{total_seconds}s_partial_"))
+                    try:
+                        seg0 = segments[0]
+                        lp = partial_tmp / f"seg_{seg0['label']}.mp4"
+                        download_gcs_blob_to_file(seg0["gcs_uri"], lp, key_file, project_id)
+                        partial_data = lp.read_bytes()
+                    finally:
+                        shutil.rmtree(partial_tmp, ignore_errors=True)
+                    partial_video_url = ""
+                    if video_export_dir:
+                        try:
+                            out_name = f"split-{total_seconds}s-partial-{_uuid.uuid4().hex}.mp4"
+                            out_file = video_export_dir / out_name
+                            out_file.write_bytes(partial_data)
+                            partial_video_url = f"{request.host_url.rstrip('/')}/video-edits/{out_name}"
+                        except Exception:
+                            pass
+                    audit_log.record(
+                        tool=tool_name, action=action_name,
+                        input_summary={"prompt_length": len(prompt), "model": model},
+                        output_summary={"errors": errors, "segments_ok": len(segments),
+                                        "partial": True, "has_video_url": bool(partial_video_url)},
+                        status="error", error_code=f"VEO_{total_seconds}S_PARTIAL",
+                        error_message=f"segments {failed} failed; returned partial from {ok_labels}",
+                        duration_ms=_dur_ms,
+                    )
+                    partial_result = {
+                        "ok": True,
+                        "partial": True,
+                        "status_code": 206,
+                        "warning": f"Segment(s) {failed} failed; returning partial video from segment(s) {ok_labels}",
+                        "errors": errors,
+                        "model": model,
+                        "mode": f"prompt_split_{total_seconds}s_partial",
+                        "final_duration_seconds": segment_seconds,
+                        "segments": [{"label": s["label"], "gcs_uri": s["gcs_uri"],
+                                      "signed_url": s["signed_url"]} for s in segments],
+                        "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
+                        "video_data_url": f"data:video/mp4;base64,{b64mod.b64encode(partial_data).decode()}",
+                    }
+                    if partial_video_url:
+                        partial_result["video_url"] = partial_video_url
+                    return jsonify(partial_result), 206
+                # All segments failed
                 audit_log.record(
                     tool=tool_name, action=action_name,
                     input_summary={"prompt_length": len(prompt), "model": model},
-                    output_summary={"errors": errors, "segments_ok": len(segments)},
+                    output_summary={"errors": errors, "segments_ok": 0},
                     status="error", error_code=f"VEO_{total_seconds}S_SEGMENT_FAILED", duration_ms=_dur_ms,
                 )
                 return jsonify({
                     "ok": False, "status_code": 502,
                     "error": f"Segment(s) {failed} failed",
-                    "errors": errors, "segments": segments,
+                    "errors": errors, "segments": [],
                     "prompt_parts": {"part1": prompt_a, "part2": prompt_b},
                 }), 502
 

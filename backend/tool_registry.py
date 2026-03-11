@@ -294,8 +294,9 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "display_name": "Export Edited Video",
         "description": (
             "Apply post-production edits and export the final video. "
-            "Supports: speed adjustment (0.5x-2x), color grading (saturation, vibrance, temperature, tint), "
-            "text overlay with positioning, and BGM mixing. "
+            "Supports speed adjustment (0.5x–2x), color grading, text overlay, and BGM mixing. "
+            "Always pass an 'edits' object with the specific edit fields — "
+            "e.g. {'speed': 2.0} to double speed, {'sat': 1.3} to boost saturation. "
             "Returns a download URL for the edited video."
         ),
         "endpoint": "POST /api/video/edit/export",
@@ -309,7 +310,20 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             },
             "edits": {
                 "type": "object",
-                "description": "Edit params: speed, sat, vibrance, temp, tint, maskText, bgmExtract, bgmVolume.",
+                "required": True,
+                "description": (
+                    "Edit parameters object. All fields are optional — include only those you want to change. "
+                    "Fields (use EXACT field names): "
+                    "speed (float 0.5–2.0, e.g. 2.0 = double speed, 0.5 = half speed), "
+                    "sat (float 0.0–3.0, saturation multiplier, 1.0 = original), "
+                    "vibrance (float -1.0–1.0), "
+                    "temp (float -1.0–1.0, color temperature warm/cool), "
+                    "tint (float -1.0–1.0), "
+                    "maskText (string, text to burn into the video frame — use this field name exactly, NOT 'text_overlay'), "
+                    "bgmExtract (bool, extract background music), "
+                    "bgmVolume (float 0.0–1.0). "
+                    "Examples: {'speed': 1.5, 'sat': 1.2} or {'maskText': '限时特卖'} or {'speed': 2.0}."
+                ),
             },
         },
         "output_summary": {
@@ -321,10 +335,10 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         "name": "render_video_timeline",
         "display_name": "Render Video Timeline",
         "description": (
-            "Render and export a video based on timeline tracks and segments. "
-            "This MVP tool consumes video timeline segments (N segments), cuts the source video, "
-            "concatenates clips in order, and exports a final MP4 file. "
-            "Use this for Studio timeline editing workflows."
+            "Cut and concatenate segments from a source video based on a timeline. "
+            "Use this to clip a specific time range or assemble multiple segments. "
+            "Pass 'tracks' with a list of segments, each specifying start/end in seconds. "
+            "Example: to keep seconds 1-3, use tracks=[{label:'Video', segments:[{start_seconds:1, end_seconds:3}]}]."
         ),
         "endpoint": "POST /api/video/timeline/render",
         "tags": ["video", "timeline", "editing", "render", "ffmpeg"],
@@ -333,21 +347,43 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
             "source_video_url": {
                 "type": "string",
                 "required": True,
-                "description": "Source video URL. Supports HTTPS or data:video/* base64.",
+                "description": "Source video URL (HTTPS).",
             },
             "duration_seconds": {
                 "type": "number",
-                "description": "Optional timeline duration in seconds for percent-to-time conversion.",
+                "description": "Total video duration in seconds. Used when segments use percentages. Optional if using start_seconds/end_seconds.",
             },
             "include_audio": {
                 "type": "boolean",
                 "default": True,
-                "description": "Whether to keep and export audio.",
+                "description": "Whether to keep audio in output. Default true.",
             },
             "tracks": {
                 "type": "array",
                 "required": True,
-                "description": "Timeline tracks with segments. MVP renderer consumes video-track segments.",
+                "description": (
+                    "Array of timeline tracks. Each track has: "
+                    "label (string, e.g. 'Video'), "
+                    "segments (array of segment objects). "
+                    "Each segment: {start_seconds: number, end_seconds: number}. "
+                    "Example: [{label: 'Video', segments: [{start_seconds: 1.0, end_seconds: 3.0}]}]"
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "segments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start_seconds": {"type": "number"},
+                                    "end_seconds": {"type": "number"},
+                                },
+                            },
+                        },
+                    },
+                },
             },
         },
         "output_summary": {
@@ -481,3 +517,50 @@ def build_tool_manifest() -> Dict[str, Any]:
         "skills": SKILL_DEFINITIONS,
         "tools": TOOL_REGISTRY,
     }
+
+
+def build_openai_tools(tool_names: List[str] = None) -> List[Dict[str, Any]]:
+    """Convert TOOL_REGISTRY entries to OpenAI function-calling format.
+
+    Args:
+        tool_names: Optional whitelist of tool names to include.
+                    None or empty list means include all tools.
+
+    Returns:
+        List of dicts in OpenAI ``tools`` format:
+        [{"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}]
+    """
+    whitelist = set(tool_names) if tool_names else None
+    result = []
+    for tool_def in TOOL_REGISTRY:
+        if whitelist and tool_def["name"] not in whitelist:
+            continue
+        properties: Dict[str, Any] = {}
+        required: List[str] = []
+        for param_name, param_info in (tool_def.get("parameters") or {}).items():
+            prop: Dict[str, Any] = {
+                "type": param_info.get("type", "string"),
+                "description": param_info.get("description", ""),
+            }
+            if "enum" in param_info:
+                prop["enum"] = param_info["enum"]
+            if "default" in param_info:
+                prop["default"] = param_info["default"]
+            if "items" in param_info:
+                prop["items"] = param_info["items"]
+            properties[param_name] = prop
+            if param_info.get("required"):
+                required.append(param_name)
+        result.append({
+            "type": "function",
+            "function": {
+                "name": tool_def["name"],
+                "description": tool_def["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            },
+        })
+    return result

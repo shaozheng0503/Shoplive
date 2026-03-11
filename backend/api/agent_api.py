@@ -14,9 +14,112 @@ from shoplive.backend.async_executor import make_cache_key, product_insight_cach
 from shoplive.backend.validation import validate_request
 from shoplive.backend.schemas import (
     AgentChatRequest,
+    AgentRunRequest,
     ImageInsightRequest,
     ProductInsightRequest,
 )
+
+# ---------------------------------------------------------------------------
+# Module-level constants & helpers for the agentic loop
+# ---------------------------------------------------------------------------
+
+_DEFAULT_AGENT_TOOLS = ["export_edited_video", "render_video_timeline"]
+_ALL_AGENT_TOOL_NAMES = [
+    "parse_product_url", "analyze_product_image", "run_video_workflow",
+    "generate_video", "chain_video_segments", "check_video_status", "extend_video",
+    "export_edited_video", "render_video_timeline", "generate_product_image",
+]
+_TOOL_ENDPOINT_MAP = {
+    "parse_product_url":     ("api_agent_shop_product_insight", "/api/agent/shop-product-insight"),
+    "analyze_product_image": ("api_agent_image_insight",        "/api/agent/image-insight"),
+    "run_video_workflow":    ("api_shoplive_video_workflow",     "/api/shoplive/video/workflow"),
+    "generate_video":        ("api_veo_start",                  "/api/veo/start"),
+    "chain_video_segments":  ("api_veo_chain",                  "/api/veo/chain"),
+    "check_video_status":    ("api_veo_status",                 "/api/veo/status"),
+    "extend_video":          ("api_veo_extend",                 "/api/veo/extend"),
+    "export_edited_video":   ("api_video_edit_export",          "/api/video/edit/export"),
+    "render_video_timeline": ("api_video_timeline_render",      "/api/video/timeline/render"),
+    "generate_product_image":("api_shoplive_image_generate",    "/api/shoplive/image/generate"),
+}
+
+
+def _execute_agent_tool(tool_name: str, arguments: dict, timeout_seconds: float = 30.0,
+                        host_url: str = ""):
+    """Execute a registered tool by name via Flask test_request_context.
+
+    Returns (ok: bool, result: dict).
+    host_url: if provided, passed as SERVER_NAME so inner views return correct absolute URLs.
+    Importable at module level for testing.
+    """
+    import concurrent.futures as _cf
+    if tool_name not in _TOOL_ENDPOINT_MAP:
+        return False, {"error": f"Unknown tool: {tool_name}", "error_code": "UNKNOWN_TOOL"}
+    view_name, path = _TOOL_ENDPOINT_MAP[tool_name]
+
+    def _run():
+        from shoplive.backend.web_app import app as _app
+        # Pass base_url so request.host_url inside the view returns the real server address.
+        # Werkzeug EnvironBuilder respects base_url for SERVER_NAME / HTTP_HOST computation.
+        _ctx_kwargs = {}
+        if host_url:
+            _ctx_kwargs["base_url"] = host_url.rstrip("/") + "/"
+        with _app.test_request_context(path, method="POST", json=arguments, **_ctx_kwargs):
+            view_func = _app.view_functions.get(view_name)
+            if not view_func:
+                return False, {"error": f"View not registered: {view_name}", "error_code": "VIEW_NOT_FOUND"}
+            resp = view_func()
+            if isinstance(resp, tuple):
+                resp_obj, status = resp[0], int(resp[1])
+            else:
+                resp_obj, status = resp, 200
+            result = resp_obj.get_json(silent=True) if hasattr(resp_obj, "get_json") else {}
+            if result is None:
+                result = {"error": "Tool returned non-JSON response", "error_code": "INVALID_RESPONSE"}
+                return False, result
+            # Distinguish validation errors (4xx) from server errors (5xx)
+            if 400 <= status < 500:
+                result.setdefault("error_code", "TOOL_VALIDATION_ERROR")
+            elif status >= 500:
+                result.setdefault("error_code", "TOOL_SERVER_ERROR")
+            return status < 400, result
+
+    _ex = _cf.ThreadPoolExecutor(max_workers=1)
+    future = _ex.submit(_run)
+    _ex.shutdown(wait=False)  # don't block; let thread run independently
+    try:
+        return future.result(timeout=timeout_seconds)
+    except _cf.TimeoutError:
+        future.cancel()
+        return False, {"error": f"Tool '{tool_name}' timed out after {timeout_seconds}s", "error_code": "TOOL_TIMEOUT"}
+    except Exception as exc:
+        return False, {"error": str(exc), "error_code": "TOOL_EXCEPTION"}
+
+
+def _build_agent_system_prompt(enabled_tools: list, context: dict) -> str:
+    """Build a concise system prompt for the agentic loop."""
+    tool_names_str = ", ".join(enabled_tools) or "none"
+    lines = [
+        "You are a video production assistant with direct access to tools.",
+        f"Available tools: {tool_names_str}",
+        "",
+        "Guidelines:",
+        "- Call tools proactively when the user asks for an action.",
+        "- ALWAYS pass the complete edit parameters in the FIRST tool call — never make an empty/exploratory call first.",
+        "- Use EXACT field names from the tool schema — do not invent field names like 'text_overlay'; the correct field is 'maskText'.",
+        "- After each tool call, summarize the result briefly.",
+        "- For video edits, always include the resulting video_url in your reply.",
+        "- If a tool returns an error, explain it to the user and suggest a fix.",
+        "- Respond in the same language as the user.",
+    ]
+    if context:
+        lines.append("")
+        lines.append("Session context:")
+        for k, v in context.items():
+            # Escape newlines to prevent prompt injection via context values
+            safe_v = str(v).replace("\n", "\\n").replace("\r", "\\r")
+            lines.append(f"  {k}: {safe_v}")
+    return "\n".join(lines)
+
 
 from shoplive.backend.scraper.adapters import (
     assess_parse_quality,
@@ -967,4 +1070,203 @@ def register_agent_routes(
                                     "Try with a proxy if behind a firewall.",
                 error_code="CHAT_FAILED",
             )
+
+    @app.post("/api/agent/run")
+    @validate_request(AgentRunRequest)
+    def api_agent_run():
+        """Agentic tool-calling loop — always streams SSE events.
+
+        Event types emitted:
+          start        {"ok", "model", "tools_enabled", "max_rounds"}
+          thinking     {"round", "message"}
+          tool_call    {"round", "tool_name", "tool_call_id", "args"}
+          tool_result  {"round", "tool_name", "tool_call_id", "ok", "result", "video_url"?}
+          delta        {"delta"}   — LLM text chunks for the final reply
+          done         {"ok", "content", "rounds_used", "tool_calls_made"}
+          error        {"ok", "error", "error_code"}
+        """
+        import shoplive.backend.common.helpers as _h
+        from shoplive.backend.tool_registry import build_openai_tools
+
+        _t0 = time.monotonic()
+        req = g.req  # AgentRunRequest
+
+        api_base = (req.api_base or os.getenv("LITELLM_API_BASE") or "https://litellm.shoplazza.site").rstrip("/")
+        api_key  = req.api_key or os.getenv("LITELLM_API_KEY") or ""
+        model    = (req.model or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+        proxy    = req.proxy
+        max_rounds = req.max_rounds
+        context  = req.context or {}
+        # Capture host_url from the real incoming request so inner tool views return correct URLs
+        _host_url = request.host_url.rstrip("/")
+
+        # Resolve which tools to enable
+        requested = req.tools
+        if requested and requested == ["*"]:
+            enabled_tool_names = list(_ALL_AGENT_TOOL_NAMES)
+        elif requested:
+            enabled_tool_names = [t for t in requested if t in _TOOL_ENDPOINT_MAP]
+        else:
+            enabled_tool_names = list(_DEFAULT_AGENT_TOOLS)
+
+        openai_tools = build_openai_tools(enabled_tool_names)
+
+        # Build initial messages
+        messages = list(req.messages or [])
+        if not messages:
+            if not req.prompt:
+                return json_error("messages 或 prompt 至少提供一个", error_code="MISSING_INPUT")
+            messages = [{"role": "user", "content": req.prompt}]
+
+        # Inject system prompt (prepend if not already present)
+        if not messages or messages[0].get("role") != "system":
+            sys_prompt = _build_agent_system_prompt(enabled_tool_names, context)
+            messages = [{"role": "system", "content": sys_prompt}] + messages
+
+        def _pack(event: str, payload: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        def _event_stream():
+            nonlocal messages
+            rounds_used = 0
+            tool_calls_made = 0
+            final_content = ""
+
+            yield _pack("start", {
+                "ok": True,
+                "model": model,
+                "tools_enabled": enabled_tool_names,
+                "max_rounds": max_rounds,
+            })
+
+            try:
+                for round_num in range(1, max_rounds + 1):
+                    rounds_used = round_num
+                    yield _pack("thinking", {"round": round_num, "message": "calling LLM..."})
+
+                    sc, wrap = _h.call_litellm_chat(
+                        api_base=api_base, api_key=api_key, model=model,
+                        messages=messages, proxy=proxy,
+                        temperature=req.temperature, max_tokens=req.max_tokens,
+                        tools=openai_tools if openai_tools else None,
+                    )
+                    if not wrap.get("ok"):
+                        yield _pack("error", {
+                            "ok": False,
+                            "error": f"LLM call failed: status={sc}",
+                            "error_code": "LLM_FAILED",
+                        })
+                        return
+
+                    raw_resp = wrap.get("response", {})
+                    tool_calls = _h.extract_tool_calls(raw_resp)
+                    assistant_content = extract_chat_content(raw_resp)
+
+                    # Append assistant message (may have tool_calls)
+                    assistant_msg: dict = {"role": "assistant", "content": assistant_content or None}
+                    if tool_calls:
+                        assistant_msg["tool_calls"] = tool_calls
+                    messages.append(assistant_msg)
+
+                    if not tool_calls:
+                        # No more tool calls → final reply
+                        final_content = assistant_content
+                        for ch in (final_content or ""):
+                            yield _pack("delta", {"delta": ch})
+                        break
+
+                    # Execute each tool call
+                    for tc in tool_calls:
+                        fn = tc.get("function") or {}
+                        tool_name = fn.get("name", "")
+                        tool_call_id = tc.get("id", "")
+                        raw_args = fn.get("arguments") or "{}"
+                        parse_error = None
+                        try:
+                            args = json.loads(raw_args)
+                        except Exception as _je:
+                            args = {}
+                            parse_error = str(_je)
+
+                        yield _pack("tool_call", {
+                            "round": round_num,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "args": args,
+                        })
+
+                        if parse_error:
+                            ok = False
+                            result = {"error": f"Invalid tool arguments JSON: {parse_error}", "error_code": "ARGS_PARSE_ERROR"}
+                        else:
+                            ok, result = _execute_agent_tool(tool_name, args, host_url=_host_url)
+                        tool_calls_made += 1
+
+                        # Extract video_url for convenience
+                        video_url = result.get("video_url") or result.get("final_signed_video_url") or ""
+
+                        yield _pack("tool_result", {
+                            "round": round_num,
+                            "tool_name": tool_name,
+                            "tool_call_id": tool_call_id,
+                            "ok": ok,
+                            "result": result,
+                            **({"video_url": video_url} if video_url else {}),
+                        })
+
+                        # Feed result back as tool message
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": json.dumps(result, ensure_ascii=False),
+                        })
+
+                else:
+                    # max_rounds exhausted — ask LLM for final summary
+                    yield _pack("thinking", {"round": max_rounds + 1, "message": "generating summary..."})
+                    sc2, wrap2 = _h.call_litellm_chat(
+                        api_base=api_base, api_key=api_key, model=model,
+                        messages=messages, proxy=proxy,
+                        temperature=req.temperature, max_tokens=req.max_tokens,
+                    )
+                    final_content = extract_chat_content(wrap2.get("response", {})) if wrap2.get("ok") else ""
+                    for ch in (final_content or ""):
+                        yield _pack("delta", {"delta": ch})
+
+                _dur_ms = int((time.monotonic() - _t0) * 1000)
+                audit_log.record(
+                    tool="agent_run", action="agentic_loop",
+                    input_summary={"model": model, "tools": enabled_tool_names,
+                                   "message_count": len(req.messages or [])},
+                    output_summary={"rounds_used": rounds_used, "tool_calls_made": tool_calls_made,
+                                    "content_length": len(final_content)},
+                    status="success", duration_ms=_dur_ms,
+                )
+                yield _pack("done", {
+                    "ok": True,
+                    "content": final_content,
+                    "rounds_used": rounds_used,
+                    "tool_calls_made": tool_calls_made,
+                })
+
+            except Exception as exc:
+                _dur_ms = int((time.monotonic() - _t0) * 1000)
+                audit_log.record(
+                    tool="agent_run", action="agentic_loop",
+                    input_summary={"model": model},
+                    output_summary={},
+                    status="error", error_code="AGENT_RUN_FAILED",
+                    error_message=str(exc)[:200], duration_ms=_dur_ms,
+                )
+                yield _pack("error", {"ok": False, "error": str(exc), "error_code": "AGENT_RUN_FAILED"})
+
+        return Response(
+            stream_with_context(_event_stream()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
