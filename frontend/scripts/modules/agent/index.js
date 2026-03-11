@@ -14,7 +14,6 @@ const imageInput = document.getElementById("imageInput");
 const langToggleBtn = document.getElementById("langToggleBtn");
 const aspectRatioSelect = document.getElementById("aspectRatioSelect");
 const durationSelect = document.getElementById("durationSelect");
-const veoModelSelect = document.getElementById("veoModelSelect");
 const durationHint   = document.getElementById("durationHint");
 const enhancePromptBtn = document.getElementById("enhancePromptBtn");
 const uploadHint = document.getElementById("uploadHint");
@@ -41,7 +40,6 @@ const i18n = {
     uploadHint: "上传商品图后可自动解析关键信息，并用于提示词优化。",
     ratioLabel: "比例",
     durationLabel: "视频时长",
-    modelLabel: "模型",
     welcome:
       "Hi — 我是 Shoplive 的 AI 助手 😊 现在你可以直接填写提示词并一键生成；上传参考图后我会自动识别商品信息并辅助优化提示词。",
     uploaded: "已收到 {count} 张商品图，我先帮你识别商品和风格。",
@@ -87,6 +85,26 @@ const i18n = {
     pollFail: "当前生成失败，请调整信息后重试。",
     genFail: "当前生成失败，请调整信息后重试。",
     tooManyJobs: "当前已有 3 个视频任务在生成中，请稍候其中一个完成后再提交。",
+    detectedConfigTitle: "识别到你的提示词中包含以下设置：",
+    detectedConfigRatio: "比例：{value}",
+    detectedConfigDuration: "时长：{value}秒",
+    detectedConfigDurationAdjusted: "时长：{input}秒（按当前链路推荐为 {recommended}秒）",
+    detectedConfigAsk: "是否按该设置生成视频？",
+    detectedConfigConfirm: "确认并生成",
+    detectedConfigConfirmDesc: "使用识别到的设置开始生成",
+    detectedConfigEdit: "去编辑设置",
+    detectedConfigEditDesc: "先调整比例/时长，再手动生成",
+    detectedConfigApplied: "已应用识别设置，可继续编辑后再点击生成。",
+    detectedConfigUseAck: "按识别设置生成",
+    speedIntentNoVideo: "当前没有可编辑的视频，请先生成或选中一个视频结果。",
+    speedIntentApplying: "已识别为视频速度调整：{speed}x。正在基于当前视频重新导出…",
+    speedIntentApplied: "已完成：当前视频已更新为 {speed}x。",
+    speedIntentFailed: "视频倍速调整失败，请稍后重试。",
+    assetRequiredGenerate: "生成视频前，请先准备商品图。你可以上传商品图、解析商品链接回填图片，或先用 AI 生成商品图。",
+    assetRequiredEnhance: "提示词增强前，请先准备商品图。你可以上传商品图、解析商品链接回填图片，或先用 AI 生成商品图。",
+    uploadHintLocked: "未检测到商品图：将按纯文字走 Grok 文生视频；上传商品图后会自动切到 Veo 图生视频。",
+    uploadHintReady: "商品图已就绪：将走 Veo 图生视频，并优先保持商品主体与品类一致。",
+    modelRecommendVeo: "当前已有商品图。若希望商品主体与品类更稳定，建议优先使用 Veo；Grok 路线目前主要依赖文本提示词，实测更容易漂移到其他品类。",
     taskQueueTitle: "并发任务（最多3个）",
     taskQueued: "排队中",
     taskRunning: "进行中",
@@ -217,7 +235,7 @@ const i18n = {
     bgmReplaceKeep: "保持原视频节奏",
     bgmReplaceStrongBeat: "强调节奏感",
     timelineTitle: "关键帧点位时间轴",
-    timelineHint: "选择轨道后可添加/删除关键帧，点击点位可跳转到对应时间。",
+    timelineHint: "选择轨道后可添加/删除关键帧；每两个关键帧形成一段生效区间（类似剪映）。轨道空白处可连点两次或按住 Shift 拖拽快速创建区间，Enter确认，Esc取消。",
     videoModuleTitle: "模块编辑",
     videoModuleHint: "点击下方时间轴轨道切换模块，右侧仅显示当前模块参数。",
     timelineToggleVisible: "切换轨道可见性",
@@ -233,6 +251,10 @@ const i18n = {
     timelineAddKeyframe: "添加关键帧",
     timelineRemoveKeyframe: "删除最近关键帧",
     timelineNoKeyframe: "暂无关键帧",
+    timelinePendingIdle: "快捷操作：在轨道空白处点两次可直接创建一段。",
+    timelinePendingArmed: "已记录起点 {time}，移动鼠标可预览区间，Enter 确认，Esc 取消。",
+    timelinePendingCommitted: "区间已创建：{start} - {end}",
+    timelinePendingCancelled: "已取消待创建区间。",
     scriptEditTitle: "分镜脚本输出修改（重新生成）",
     scriptEditHint: "可编辑分镜文案与完整提示词，然后重新生成视频。",
     promptLabel: "完整生成视频提示词",
@@ -260,7 +282,6 @@ const i18n = {
     uploadHint: "Upload reference images to auto-parse product info for prompt optimization.",
     ratioLabel: "Aspect Ratio",
     durationLabel: "Duration",
-    modelLabel: "Model",
     welcome:
       "Hi — I’m Shoplive’s AI assistant 😊 You can now generate directly with one prompt. Upload reference images and I’ll auto-parse product signals to improve prompt quality.",
     uploaded: "Received {count} product image(s). I’ll now infer product and style.",
@@ -307,6 +328,26 @@ const i18n = {
     pollFail: "Generation failed. Please adjust inputs and retry.",
     genFail: "Generation failed. Please adjust inputs and retry.",
     tooManyJobs: "There are already 3 video jobs running. Please wait for one to finish before submitting another.",
+    detectedConfigTitle: "Detected these settings from your prompt:",
+    detectedConfigRatio: "Aspect ratio: {value}",
+    detectedConfigDuration: "Duration: {value}s",
+    detectedConfigDurationAdjusted: "Duration: {input}s (recommended as {recommended}s for current route)",
+    detectedConfigAsk: "Generate with these settings?",
+    detectedConfigConfirm: "Confirm and generate",
+    detectedConfigConfirmDesc: "Use detected settings and start generation",
+    detectedConfigEdit: "Edit settings first",
+    detectedConfigEditDesc: "Adjust ratio/duration before generating",
+    detectedConfigApplied: "Detected settings applied. You can tweak them, then generate.",
+    detectedConfigUseAck: "Generate with detected settings",
+    speedIntentNoVideo: "No editable video found. Please generate/select a video first.",
+    speedIntentApplying: "Detected video speed edit: {speed}x. Re-exporting from current video…",
+    speedIntentApplied: "Done: current video updated to {speed}x.",
+    speedIntentFailed: "Failed to update video speed. Please retry later.",
+    assetRequiredGenerate: "Before generating video, please prepare product images first. You can upload product images, parse a product URL with images, or generate product images with AI first.",
+    assetRequiredEnhance: "Before enhancing the prompt, please prepare product images first. You can upload product images, parse a product URL with images, or generate product images with AI first.",
+    uploadHintLocked: "No product images detected: text-only generation will use Grok. Upload product images to switch to Veo image-to-video.",
+    uploadHintReady: "Product images are ready: generation will use Veo image-to-video for better product/category consistency.",
+    modelRecommendVeo: "Product images are present. For better product/category consistency, Veo is recommended; the Grok route currently relies mainly on text prompts and is more likely to drift to another product category.",
     taskQueueTitle: "Concurrent jobs (max 3)",
     taskQueued: "Queued",
     taskRunning: "Running",
@@ -437,7 +478,7 @@ const i18n = {
     bgmReplaceKeep: "Keep original rhythm",
     bgmReplaceStrongBeat: "Stronger beat emphasis",
     timelineTitle: "Keyframe timeline",
-    timelineHint: "Select a track to add/remove keyframes. Click points to jump.",
+    timelineHint: "Select a track to add/remove keyframes. Every two keyframes form one active range (CapCut-like). Click blank track area twice or Shift-drag to create a segment quickly, press Enter to confirm, Esc to cancel.",
     videoModuleTitle: "Module editor",
     videoModuleHint: "Click timeline tracks to switch modules. Top-right shows only the active module settings.",
     timelineToggleVisible: "Toggle track visibility",
@@ -453,6 +494,10 @@ const i18n = {
     timelineAddKeyframe: "Add keyframe",
     timelineRemoveKeyframe: "Remove nearest keyframe",
     timelineNoKeyframe: "No keyframes",
+    timelinePendingIdle: "Quick action: click blank track area twice to create a segment.",
+    timelinePendingArmed: "Start point set at {time}. Move cursor to preview, press Enter to confirm or Esc to cancel.",
+    timelinePendingCommitted: "Segment created: {start} - {end}",
+    timelinePendingCancelled: "Pending segment cancelled.",
     scriptEditTitle: "Storyboard script editing (regenerate)",
     scriptEditHint: "Edit storyboard text and full prompt, then regenerate.",
     promptLabel: "Full video generation prompt",
@@ -526,6 +571,7 @@ const MAX_CONCURRENT_VIDEO_JOBS = 3;
 const state = {
   stage: "awaitMain",
   images: [],
+  productAnchors: {},
   productName: "",
   mainBusiness: "",
   sellingPoints: "",
@@ -538,7 +584,6 @@ const state = {
   template: "clean",
   duration: "16",
   aspectRatio: "16:9",
-  veoModel: "grok-imagine-1.0-video",
   needModel: true,
   summaryShown: false,
   regionBatchIdx: 0,
@@ -563,6 +608,7 @@ const state = {
   workflowHydrated: false,
   skipImageConfirmed: false,
   entryFocusMode: false,
+  lastModelAdviceKey: "",
   videoEdit: {
     maskText: "",
     maskStyle: "elegant",
@@ -606,6 +652,96 @@ const state = {
     },
   },
 };
+
+function normalizeTextList(value, limit = 6) {
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x || "").trim()).filter(Boolean).slice(0, limit);
+  }
+  return String(value || "")
+    .split(/[\n,;；，、]+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function normalizeProductAnchors(anchors = {}) {
+  const source = anchors && typeof anchors === "object" ? anchors : {};
+  return {
+    category: String(source.category || "").trim(),
+    colors: normalizeTextList(source.colors, 5),
+    materials: normalizeTextList(source.materials, 5),
+    silhouette: String(source.silhouette || "").trim(),
+    key_details: normalizeTextList(source.key_details, 6),
+    keep_elements: normalizeTextList(source.keep_elements, 6),
+    usage_scenarios: normalizeTextList(source.usage_scenarios, 4),
+    avoid_elements: normalizeTextList(source.avoid_elements, 4),
+  };
+}
+
+function mergeProductAnchors(base = {}, incoming = {}) {
+  const left = normalizeProductAnchors(base);
+  const right = normalizeProductAnchors(incoming);
+  const mergeList = (a, b, limit = 6) => Array.from(new Set([...(a || []), ...(b || [])])).slice(0, limit);
+  return {
+    category: left.category || right.category,
+    colors: mergeList(left.colors, right.colors, 5),
+    materials: mergeList(left.materials, right.materials, 5),
+    silhouette: left.silhouette || right.silhouette,
+    key_details: mergeList(left.key_details, right.key_details, 6),
+    keep_elements: mergeList(left.keep_elements, right.keep_elements, 6),
+    usage_scenarios: mergeList(left.usage_scenarios, right.usage_scenarios, 4),
+    avoid_elements: mergeList(left.avoid_elements, right.avoid_elements, 4),
+  };
+}
+
+function hasEffectiveProductAsset() {
+  return Boolean(
+    (Array.isArray(state.images) && state.images.length)
+    || (Array.isArray(state.productImageUrls) && state.productImageUrls.length)
+  );
+}
+
+function buildProductAnchorSummary(lang = currentLang) {
+  const anchors = normalizeProductAnchors(state.productAnchors);
+  const lines = [];
+  if (anchors.category) lines.push(lang === "zh" ? `商品子类：${anchors.category}` : `Category: ${anchors.category}`);
+  if (anchors.colors.length) lines.push(lang === "zh" ? `核心颜色：${anchors.colors.join("、")}` : `Core colors: ${anchors.colors.join(", ")}`);
+  if (anchors.materials.length) lines.push(lang === "zh" ? `核心材质：${anchors.materials.join("、")}` : `Core materials: ${anchors.materials.join(", ")}`);
+  if (anchors.silhouette) lines.push(lang === "zh" ? `轮廓版型：${anchors.silhouette}` : `Silhouette: ${anchors.silhouette}`);
+  if (anchors.key_details.length) lines.push(lang === "zh" ? `关键细节：${anchors.key_details.join("、")}` : `Key details: ${anchors.key_details.join(", ")}`);
+  if (anchors.keep_elements.length) lines.push(lang === "zh" ? `必须保留：${anchors.keep_elements.join("、")}` : `Must keep: ${anchors.keep_elements.join(", ")}`);
+  if (anchors.usage_scenarios.length) lines.push(lang === "zh" ? `适用场景：${anchors.usage_scenarios.join("、")}` : `Use scenarios: ${anchors.usage_scenarios.join(", ")}`);
+  if (anchors.avoid_elements.length) lines.push(lang === "zh" ? `禁止偏移：${anchors.avoid_elements.join("、")}` : `Do not drift to: ${anchors.avoid_elements.join(", ")}`);
+  return lines.join(lang === "zh" ? "；" : ". ");
+}
+
+function openProductAssetPicker() {
+  if (composerCompact && !composerCompact.classList.contains("show-link-row")) {
+    composerCompact.classList.add("show-link-row");
+    if (toggleProductUrlBtn) toggleProductUrlBtn.textContent = t("toggleLinkHide");
+  }
+  if (window._agentOpenRefModal) window._agentOpenRefModal();
+  else imageInput?.click();
+}
+
+function showProductAssetRequiredMessage(reason = "generate") {
+  pushMsg("system", reason === "enhance" ? t("assetRequiredEnhance") : t("assetRequiredGenerate"), { typewriter: false, error: true });
+  showUploadRefQuickAction();
+}
+
+function updateGenerationGateUI() {
+  const hasAsset = hasEffectiveProductAsset();
+  if (uploadHint) uploadHint.textContent = hasAsset ? t("uploadHintReady") : t("uploadHintLocked");
+  if (sendBtn) {
+    sendBtn.dataset.locked = "false";
+    sendBtn.title = "";
+  }
+  if (enhancePromptBtn) {
+    enhancePromptBtn.dataset.locked = "false";
+    enhancePromptBtn.title = "";
+  }
+  updateDurationOptions();
+}
 
 function formatElapsedSec(ms) {
   return Math.max(0, Math.floor((Number(ms) || 0) / 1000));
@@ -862,10 +998,8 @@ function applyLang() {
   if (productUrlInput) productUrlInput.placeholder = t("parseLinkPh");
   const ratioLabel = document.querySelector('label[for="aspectRatioSelect"] span');
   const durationLabel = document.querySelector('label[for="durationSelect"] span');
-  const modelLabel = document.querySelector('label[for="veoModelSelect"] span');
   if (ratioLabel) ratioLabel.textContent = t("ratioLabel");
   if (durationLabel) durationLabel.textContent = t("durationLabel");
-  if (modelLabel) modelLabel.textContent = t("modelLabel");
   if (langToggleBtn) langToggleBtn.textContent = currentLang === "zh" ? "EN" : "中文";
   if (taskQueueClearBtn) taskQueueClearBtn.textContent = t("taskClearDone");
   const back = document.querySelector(".back-link");
@@ -889,19 +1023,22 @@ function applyLang() {
 }
 
 const VEO_MODEL_OPTIONS = [
-  { value: "veo-3.1-fast-generate-001", labelZh: "Veo 3.1 Fast",    labelEn: "Veo 3.1 Fast",    provider: "veo" },
-  { value: "veo-3.1-generate-preview",  labelZh: "Veo 3.1 Preview", labelEn: "Veo 3.1 Preview", provider: "veo" },
-  { value: "veo-2.0-generate-001",      labelZh: "Veo 2.0",         labelEn: "Veo 2.0",         provider: "veo" },
-  { value: "grok-imagine-1.0-video",    labelZh: "Grok Video ⚡",   labelEn: "Grok Video ⚡",   provider: "tabcode" },
+  { value: "veo-3.1-fast-generate-001", labelZh: "Veo 3.1 Fast",  labelEn: "Veo 3.1 Fast",  provider: "veo" },
+  { value: "grok-imagine-1.0-video",    labelZh: "Grok Video ⚡", labelEn: "Grok Video ⚡", provider: "tabcode" },
 ];
+const VEO_FIXED_MODEL = "veo-3.1-fast-generate-001";
+const GROK_FIXED_MODEL = "grok-imagine-1.0-video";
 
 function getVeoModel() {
-  return state.veoModel || "grok-imagine-1.0-video";
+  return VEO_FIXED_MODEL;
+}
+
+function getGrokModel() {
+  return GROK_FIXED_MODEL;
 }
 
 function getModelProvider() {
-  const opt = VEO_MODEL_OPTIONS.find((m) => m.value === getVeoModel());
-  return opt?.provider || "veo";
+  return hasEffectiveProductAsset() ? "veo" : "tabcode";
 }
 
 // Duration option definitions per provider
@@ -967,12 +1104,34 @@ function updateDurationHint() {
 function buildGrokVideoPrompt(basePrompt, targetDuration = 8) {
   const dur    = Number(targetDuration) || 8;
   const ratio  = state.aspectRatio || "16:9";
+  const anchors = normalizeProductAnchors(state.productAnchors);
+  const product = String(state.productName || "product").trim() || "product";
+  const business = String(state.mainBusiness || "ecommerce product").trim() || "ecommerce product";
+  const anchorBits = [];
+  if (anchors.category) anchorBits.push(`category ${anchors.category}`);
+  if (anchors.colors.length) anchorBits.push(`colors ${anchors.colors.join(', ')}`);
+  if (anchors.materials.length) anchorBits.push(`materials ${anchors.materials.join(', ')}`);
+  if (anchors.silhouette) anchorBits.push(`silhouette ${anchors.silhouette}`);
+  if (anchors.key_details.length) anchorBits.push(`key details ${anchors.key_details.join(', ')}`);
+  if (anchors.keep_elements.length) anchorBits.push(`must keep ${anchors.keep_elements.join(', ')}`);
+  const avoidBits = anchors.avoid_elements.length
+    ? anchors.avoid_elements.join(', ')
+    : 'jewelry, earrings, clothing, shoes, bags, cosmetics, headphones, unrelated accessories';
   const durStr = dur >= 16
     ? `${dur}-second continuous ecommerce product video (two seamlessly connected scenes, each ~${Math.round(dur / 2)} seconds)`
     : `${dur}-second ecommerce product video`;
   // Strip any existing duration mention, then prepend our clean directive
   let core = String(basePrompt || "").replace(/\b\d+[\s-]*second(s)?\b/gi, "").trim();
-  return `Create a ${durStr}, aspect ratio ${ratio}. ${core}`.replace(/\s{2,}/g, " ").trim();
+  core = core.replace(/uploaded product images?[^.]*\./gi, "").replace(/parsed product information[^.]*\./gi, "").trim();
+  const lockLine = [
+    `Show exactly one product only: ${product}.`,
+    `Business/category context: ${business}.`,
+    anchorBits.length ? `Source-of-truth anchors: ${anchorBits.join('; ')}.` : "",
+    "Keep the same product identity in every shot.",
+    `Never drift to ${avoidBits}.`,
+    "No jewelry, no earrings, no fashion accessories unless they are the exact target product.",
+  ].filter(Boolean).join(" ");
+  return `Create a ${durStr}, aspect ratio ${ratio}. ${lockLine} ${core}`.replace(/\s{2,}/g, " ").trim();
 }
 
 async function _runOneGrokGeneration(base, prompt, model, taskId, labelZh, labelEn) {
@@ -1120,18 +1279,15 @@ async function _splitPromptForGrok(base, originalPrompt, clips) {
   const sceneActions = [
     `[00:00-00:02] Camera slowly pushes in from wide shot, revealing the product's full form and silhouette against the background. `
     + `[00:02-00:04] Medium close-up highlighting the product's primary visual feature with sharp focus. `
-    + `[00:04-00:06] Detail shot — texture, material, or key design element. `
-    + `[00:06-00:08] Pull back slightly to hero framing — product centered, environment visible.`,
+    + `[00:04-00:06] Detail shot and closing hero framing — texture, material, and key design element remain fully consistent.`,
 
     `[00:00-00:02] Product in a lifestyle context — a hand or person naturally interacting with it in its intended use environment. `
     + `[00:02-00:04] Close-up of the product during use — showing a secondary feature or benefit. `
-    + `[00:04-00:06] Reaction or experience moment — emotional satisfaction of using the product. `
-    + `[00:06-00:08] Wide lifestyle shot — product and user together, confident and aspirational.`,
+    + `[00:04-00:06] Emotional payoff and confident lifestyle closing shot — same product identity, no category drift.`,
 
     `[00:00-00:02] Dynamic angle change — product approached from an unexpected fresh perspective. `
     + `[00:02-00:04] Slow pan across the product's profile, showcasing its full design. `
-    + `[00:04-00:06] Final feature close-up — the detail that makes this product worth buying. `
-    + `[00:06-00:08] Confident closing hero shot — product alone, perfect lighting, camera holds still.`,
+    + `[00:04-00:06] Final feature close-up and hero hold — product alone, perfect lighting, camera holds still.`,
   ];
 
   return Array.from({ length: clips }, (_, i) =>
@@ -1142,7 +1298,7 @@ async function _splitPromptForGrok(base, originalPrompt, clips) {
 async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
   const zh    = currentLang === "zh";
   const base  = getApiBase();
-  const model = getVeoModel();
+  const model = getGrokModel();
   const dur   = Number(targetDuration) || 6;
   // Grok single-shot max is ~6s; all longer durations require multi-clip stitching
   // Map selected duration to clip count: 6→1, 12→2, 18→3
@@ -1167,6 +1323,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
     } else {
       segmentPrompts = [core];
     }
+    state.lastStoryboard = buildStoryboardFromPromptSegments(segmentPrompts, 6) || state.lastStoryboard;
 
     const results = [];
     for (let i = 0; i < clips; i++) {
@@ -1229,13 +1386,12 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
 function syncSimpleControlsFromState() {
   if (aspectRatioSelect) aspectRatioSelect.value = state.aspectRatio || "16:9";
   if (durationSelect) durationSelect.value = String(state.duration || "8");
-  if (veoModelSelect) veoModelSelect.value = getVeoModel();
+  updateGenerationGateUI();
 }
 
 function syncStateFromSimpleControls() {
   if (aspectRatioSelect?.value) state.aspectRatio = aspectRatioSelect.value;
   if (durationSelect?.value) state.duration = String(durationSelect.value);
-  if (veoModelSelect?.value) state.veoModel = veoModelSelect.value;
 }
 
 function scrollToBottom() {
@@ -1652,6 +1808,8 @@ function buildWorkflowInput() {
     duration: Number(state.duration || 8),
     aspect_ratio: state.aspectRatio || "16:9",
     need_model: Boolean(state.needModel),
+    image_count: Math.max((state.images || []).length, (state.productImageUrls || []).length, 0),
+    product_anchors: normalizeProductAnchors(state.productAnchors),
   };
 }
 
@@ -1814,15 +1972,41 @@ function buildSegmentedStoryboard(segCount = 1) {
   return segments;
 }
 
+function buildStoryboardFromPromptSegments(prompts = [], segDuration = 8) {
+  const list = Array.isArray(prompts)
+    ? prompts.map((p) => String(p || "").trim()).filter(Boolean)
+    : [];
+  if (!list.length) return "";
+  if (list.length === 1) return list[0];
+  return list
+    .map((p, i) => {
+      const label = currentLang === "zh"
+        ? `[第${i + 1}段（${segDuration}秒）]`
+        : `[Segment ${i + 1} (${segDuration}s)]`;
+      return `${label}\n${p}`;
+    })
+    .join("\n\n");
+}
+
+function parseStoryboardSegments(storyboardText = "") {
+  const raw = String(storyboardText || "").trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(/\n*\[(?:第\d+段（\d+秒）|Segment \d+ \(\d+s\))\]\s*/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts;
+}
+
 function renderScriptEditor() {
   if (!scriptEditorPanel) return;
   if (!state.scriptEditorOpen) return;
 
   const dur = Number(state.duration || 8);
   const segCount = dur >= 16 ? Math.floor(dur / 8) : 1;
-  const existingSegments = (state.lastStoryboard || "").split(/\n*\[第\d+段|Segment \d+/).filter(Boolean);
+  const existingSegments = parseStoryboardSegments(state.lastStoryboard);
   const segments = existingSegments.length === segCount
-    ? existingSegments.map((s) => s.replace(/^\(.*?\)\]\s*/, "").trim())
+    ? existingSegments
     : buildSegmentedStoryboard(segCount);
 
   const durationLabel = currentLang === "zh" ? "视频时长" : "Duration";
@@ -1941,6 +2125,8 @@ function ensureTimelineState() {
     state.videoEdit.timeline = {
       playhead: 0,
       selectedTrack: "mask",
+      pendingRangeStart: null,
+      pendingRangeHoverSec: null,
       trackState: {
         mask: { visible: true, locked: false },
         color: { visible: true, locked: false },
@@ -1974,6 +2160,17 @@ function ensureTimelineState() {
   });
   if (typeof tl.selectedTrack !== "string") tl.selectedTrack = "mask";
   if (!["mask", "color", "bgm", "motion"].includes(tl.selectedTrack)) tl.selectedTrack = "mask";
+  if (
+    tl.pendingRangeStart
+    && (
+      typeof tl.pendingRangeStart !== "object"
+      || !["mask", "color", "bgm", "motion"].includes(String(tl.pendingRangeStart.track || ""))
+      || !Number.isFinite(Number(tl.pendingRangeStart.sec))
+    )
+  ) {
+    tl.pendingRangeStart = null;
+  }
+  if (!Number.isFinite(Number(tl.pendingRangeHoverSec))) tl.pendingRangeHoverSec = null;
   if (typeof state.videoEdit.activeModule !== "string") state.videoEdit.activeModule = tl.selectedTrack;
   if (!["mask", "color", "bgm", "motion"].includes(state.videoEdit.activeModule)) state.videoEdit.activeModule = "mask";
   if (!Number.isFinite(Number(tl.playhead))) tl.playhead = 0;
@@ -1984,7 +2181,8 @@ function buildTrackSegmentsHtml(trackId, points = [], maxSec = 8, isVisible = tr
   if (!points.length) return "";
   const list = points.slice().sort((a, b) => a - b);
   const bars = [];
-  for (let i = 0; i < list.length - 1; i += 1) {
+  // Pairwise ranges: [k1,k2], [k3,k4] ... to support partial edits per segment.
+  for (let i = 0; i < list.length - 1; i += 2) {
     const start = Math.max(0, Math.min(100, (list[i] / maxSec) * 100));
     const end = Math.max(0, Math.min(100, (list[i + 1] / maxSec) * 100));
     const width = Math.max(2, end - start);
@@ -1992,11 +2190,40 @@ function buildTrackSegmentsHtml(trackId, points = [], maxSec = 8, isVisible = tr
       `<i class="kf-seg kf-seg-${trackId}" data-track="${trackId}" data-start-idx="${i}" data-end-idx="${i + 1}" style="left:${start}%;width:${width}%"></i>`,
     );
   }
-  if (list.length === 1) {
-    const start = Math.max(0, Math.min(96, (list[0] / maxSec) * 100));
+  if (list.length % 2 === 1) {
+    const start = Math.max(0, Math.min(96, (list[list.length - 1] / maxSec) * 100));
     bars.push(`<i class="kf-seg kf-seg-${trackId} is-single" style="left:${start}%;width:4%"></i>`);
   }
   return bars.join("");
+}
+
+function getTrackRangesByKeyframes(points = []) {
+  const list = (Array.isArray(points) ? points : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v) && v >= 0)
+    .sort((a, b) => a - b);
+  const ranges = [];
+  for (let i = 0; i < list.length - 1; i += 2) {
+    const start = list[i];
+    const end = list[i + 1];
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      ranges.push([start, end]);
+    }
+  }
+  return ranges;
+}
+
+function isTrackActiveAtTime(trackId = "mask", sec = 0, timeline = null) {
+  const tl = timeline && typeof timeline === "object" ? timeline : state.videoEdit?.timeline;
+  const trackState = tl?.trackState?.[trackId] || { visible: true, locked: false };
+  if (trackState.visible === false) return false;
+  const points = Array.isArray(tl?.keyframes?.[trackId]) ? tl.keyframes[trackId] : [];
+  // Backward compatibility: no ranges configured => global effect still active.
+  if (points.length < 2) return true;
+  const ranges = getTrackRangesByKeyframes(points);
+  if (!ranges.length) return false;
+  const t = Number(sec || 0);
+  return ranges.some(([s, e]) => t >= s && t <= e);
 }
 
 function buildTimelineRowsHtml(maxSec) {
@@ -2012,6 +2239,13 @@ function buildTimelineRowsHtml(maxSec) {
       const points = tl.keyframes[track.id] || [];
       const trackState = tl.trackState?.[track.id] || { visible: true, locked: false };
       const segments = buildTrackSegmentsHtml(track.id, points, maxSec, trackState.visible);
+      const pending = (
+        tl.pendingRangeStart
+        && String(tl.pendingRangeStart.track || "") === track.id
+        && Number.isFinite(Number(tl.pendingRangeStart.sec))
+      )
+        ? `<i class="kf-pending" style="left:${Math.max(0, Math.min(100, (Number(tl.pendingRangeStart.sec) / maxSec) * 100))}%"></i>`
+        : "";
       const dots = points.length
         ? points
             .map((sec, idx) => {
@@ -2031,6 +2265,7 @@ function buildTimelineRowsHtml(maxSec) {
           </div>
           <div class="kf-track ${state.videoEdit.activeModule === track.id ? "is-active" : ""} ${trackState.visible ? "" : "is-hidden"} ${trackState.locked ? "is-locked" : ""}" data-track="${track.id}">
             ${segments}
+            ${pending}
             ${dots}
           </div>
         </div>
@@ -2158,18 +2393,23 @@ const MASK_FONTS = {
 
 function applyVideoEditsToPreview() {
   const fx = state.videoEdit || {};
-  const trackState = fx.timeline?.trackState || {};
-  const speed = trackState.motion?.visible === false ? 1 : clampNum(fx.speed || 1, 0.5, 2);
-  const sat = trackState.color?.visible === false ? 100 : clampNum(100 + Number(fx.sat || 0) * 3, 20, 260);
-  const bright = trackState.color?.visible === false ? 100 : clampNum(100 + Number(fx.vibrance || 0) * 2, 40, 220);
-  const contrast = trackState.color?.visible === false ? 100 : clampNum(100 + Math.abs(Number(fx.temp || 0)) * 1.2, 60, 180);
-  const hue = trackState.color?.visible === false ? 0 : clampNum(Number(fx.tint || 0) * 1.8, -45, 45);
+  const timeline = fx.timeline || state.videoEdit?.timeline || {};
   const bgmVolume = clampNum(Number(fx.bgmVolume || 70), 0, 100) / 100;
 
   const surfaces = Array.from(document.querySelectorAll(".video-edit-surface"));
   surfaces.forEach((surface) => {
     const video = surface.querySelector("video");
     if (!video) return;
+    const sec = Number(video.currentTime || 0);
+    const motionActive = isTrackActiveAtTime("motion", sec, timeline);
+    const colorActive = isTrackActiveAtTime("color", sec, timeline);
+    const maskActive = isTrackActiveAtTime("mask", sec, timeline);
+    const bgmActive = isTrackActiveAtTime("bgm", sec, timeline);
+    const speed = motionActive ? clampNum(fx.speed || 1, 0.5, 2) : 1;
+    const sat = colorActive ? clampNum(100 + Number(fx.sat || 0) * 3, 20, 260) : 100;
+    const bright = colorActive ? clampNum(100 + Number(fx.vibrance || 0) * 2, 40, 220) : 100;
+    const contrast = colorActive ? clampNum(100 + Math.abs(Number(fx.temp || 0)) * 1.2, 60, 180) : 100;
+    const hue = colorActive ? clampNum(Number(fx.tint || 0) * 1.8, -45, 45) : 0;
     video.playbackRate = speed;
     video.volume = bgmVolume;
     video.style.filter = `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`;
@@ -2177,7 +2417,7 @@ function applyVideoEditsToPreview() {
     surface.querySelector(".video-bgm-badge")?.remove();
 
     // Real-time text mask overlay — find-or-create so drag handlers survive re-renders
-    const maskVisible = trackState.mask?.visible !== false;
+    const maskVisible = maskActive;
     const maskText = String(fx.maskText || "").trim();
     let overlay = surface.querySelector(".video-subtitle-overlay");
     if (!maskVisible || !maskText) {
@@ -2211,7 +2451,7 @@ function applyVideoEditsToPreview() {
       bgmAudio.hidden = true;
       surface.appendChild(bgmAudio);
     }
-    const shouldUseLocalBgm = Boolean(fx.bgmExtract && fx.localBgmUrl && trackState.bgm?.visible !== false);
+    const shouldUseLocalBgm = Boolean(fx.bgmExtract && fx.localBgmUrl && bgmActive);
     if (!shouldUseLocalBgm) {
       video.muted = false;
       bgmAudio.pause();
@@ -2262,6 +2502,14 @@ function applyVideoEditsToPreview() {
       surface.dataset.bgmBound = "1";
       surface._bgmListeners = { onPlay, onPause, onSeek, onRate };
     }
+    if (!surface.dataset.timelineFxBound) {
+      const onTimelineTick = () => applyVideoEditsToPreview();
+      video.addEventListener("timeupdate", onTimelineTick);
+      video.addEventListener("seeking", onTimelineTick);
+      video.addEventListener("seeked", onTimelineTick);
+      surface.dataset.timelineFxBound = "1";
+      surface._timelineFxListeners = { onTimelineTick };
+    }
     syncBgm();
   });
 }
@@ -2281,6 +2529,10 @@ function renderVideoEditor() {
   });
   if (_currentHash === state.videoEdit._renderHash && videoEditorPanel?.innerHTML) return;
   state.videoEdit._renderHash = _currentHash;
+  if (typeof state.videoEdit._timelineKeydownHandler === "function") {
+    window.removeEventListener("keydown", state.videoEdit._timelineKeydownHandler);
+    state.videoEdit._timelineKeydownHandler = null;
+  }
   const fx = state.videoEdit || {};
   ensureTimelineState();
   const tl = state.videoEdit.timeline;
@@ -2397,6 +2649,7 @@ function renderVideoEditor() {
         <p class="editor-note">${t("timelineHint")}</p>
         <label>${t("timelinePlayhead")} <span id="playheadVal">${fmtSec(tl.playhead)}</span><input id="timelinePlayheadRange" type="range" min="0" max="${maxSec}" step="0.1" value="${Number(tl.playhead || 0)}" /></label>
         <p class="timeline-track-current">${t("timelineSelectTrack")}：<strong>${activeTrackLabel}</strong></p>
+        <p class="timeline-pending-tip" id="timelinePendingTip">${tl.pendingRangeStart ? t("timelinePendingArmed", { time: fmtSec(Number(tl.pendingRangeStart.sec || 0)) }) : t("timelinePendingIdle")}</p>
         <div class="kf-ruler">
           <span>0:00</span><span>${fmtSec(Math.round(maxSec / 2))}</span><span>${fmtSec(maxSec)}</span>
           <i id="kfPlayheadLine" style="left:${Math.max(0, Math.min(100, (tl.playhead / maxSec) * 100))}%"></i>
@@ -2406,6 +2659,7 @@ function renderVideoEditor() {
           <button id="addKeyframeBtn">${t("timelineAddKeyframe")}</button>
           <button id="removeKeyframeBtn">${t("timelineRemoveKeyframe")}</button>
         </div>
+        <div class="timeline-mini-toast" id="timelineMiniToast"></div>
       </section>
     </div>
     <div class="editor-actions">
@@ -2546,10 +2800,107 @@ function renderVideoEditor() {
   const playheadRange = videoEditorPanel.querySelector("#timelinePlayheadRange");
   const playheadVal = videoEditorPanel.querySelector("#playheadVal");
   const playheadLine = videoEditorPanel.querySelector("#kfPlayheadLine");
+  const pendingTip = videoEditorPanel.querySelector("#timelinePendingTip");
+  const miniToast = videoEditorPanel.querySelector("#timelineMiniToast");
+  const previewVideo = videoEditorPanel.querySelector(".video-edit-surface video");
+  let syncingFromVideo = false;
+  let syncingFromTimeline = false;
+  const syncVideoFromPlayhead = () => {
+    if (!previewVideo || syncingFromVideo) return;
+    const sec = clampNum(Number(playheadRange?.value || 0), 0, maxSec);
+    if (!Number.isFinite(sec)) return;
+    if (Math.abs((previewVideo.currentTime || 0) - sec) < 0.05) return;
+    syncingFromTimeline = true;
+    try {
+      previewVideo.currentTime = sec;
+    } catch (_e) {}
+    setTimeout(() => {
+      syncingFromTimeline = false;
+    }, 0);
+  };
+  const syncPlayheadFromVideo = () => {
+    if (!playheadRange || !previewVideo || syncingFromTimeline) return;
+    const sec = clampNum(Number(previewVideo.currentTime || 0), 0, maxSec);
+    if (!Number.isFinite(sec)) return;
+    const curr = Number(playheadRange.value || 0);
+    if (Math.abs(curr - sec) < 0.05) return;
+    const snapped = snapTimelineSec(sec, 0.08);
+    syncingFromVideo = true;
+    state.videoEdit.timeline.playhead = snapped;
+    playheadRange.value = String(snapped);
+    updatePlayheadUI();
+    syncingFromVideo = false;
+  };
   const updatePlayheadUI = () => {
     const sec = Number(playheadRange?.value || 0);
     if (playheadVal) playheadVal.textContent = fmtSec(sec);
     if (playheadLine) playheadLine.style.left = `${Math.max(0, Math.min(100, (sec / maxSec) * 100))}%`;
+    syncVideoFromPlayhead();
+  };
+  const updatePendingTip = (msg = "") => {
+    if (!pendingTip) return;
+    pendingTip.textContent = String(msg || "").trim() || t("timelinePendingIdle");
+  };
+  const flashTimelineToast = (msg = "") => {
+    if (!miniToast) return;
+    miniToast.textContent = String(msg || "").trim();
+    if (!miniToast.textContent) return;
+    miniToast.classList.add("is-show");
+    if (state.videoEdit._timelineToastTimer) {
+      clearTimeout(state.videoEdit._timelineToastTimer);
+      state.videoEdit._timelineToastTimer = null;
+    }
+    state.videoEdit._timelineToastTimer = setTimeout(() => {
+      miniToast.classList.remove("is-show");
+    }, 1600);
+  };
+  const pendingToastText = String(state.videoEdit._timelineToastNext || "").trim();
+  if (pendingToastText) {
+    state.videoEdit._timelineToastNext = "";
+    setTimeout(() => flashTimelineToast(pendingToastText), 0);
+  }
+  const updatePendingPreview = (trackEl, track, hoverSec) => {
+    if (!trackEl) return;
+    const pending = state.videoEdit.timeline.pendingRangeStart;
+    let preview = trackEl.querySelector(".kf-seg-preview");
+    if (!pending || pending.track !== track || !Number.isFinite(Number(hoverSec))) {
+      if (preview) preview.remove();
+      return;
+    }
+    const startSec = Number(pending.sec || 0);
+    const endSec = Number(hoverSec || 0);
+    if (Math.abs(endSec - startSec) < 0.03) {
+      if (preview) preview.remove();
+      return;
+    }
+    const start = Math.min(startSec, endSec);
+    const end = Math.max(startSec, endSec);
+    if (!preview) {
+      preview = document.createElement("i");
+      preview.className = `kf-seg kf-seg-${track} kf-seg-preview`;
+      trackEl.appendChild(preview);
+    }
+    preview.style.left = `${Math.max(0, Math.min(100, (start / maxSec) * 100))}%`;
+    preview.style.width = `${Math.max(2, ((end - start) / maxSec) * 100)}%`;
+  };
+  const commitPendingRange = (track, endSecRaw) => {
+    const pending = state.videoEdit.timeline.pendingRangeStart;
+    if (!pending || pending.track !== track) return null;
+    const endSec = clampNum(Number(endSecRaw || 0), 0, maxSec);
+    const start = Math.min(Number(pending.sec || 0), endSec);
+    const end = Math.max(Number(pending.sec || 0), endSec);
+    state.videoEdit.timeline.pendingRangeStart = null;
+    state.videoEdit.timeline.pendingRangeHoverSec = null;
+    if (Math.abs(end - start) < 0.06) return null;
+    const list = (state.videoEdit.timeline.keyframes[track] || []).slice();
+    const pushIfMissing = (v) => {
+      if (!list.some((x) => Math.abs(Number(x) - v) <= 0.06)) list.push(v);
+    };
+    pushIfMissing(Math.round(start * 100) / 100);
+    pushIfMissing(Math.round(end * 100) / 100);
+    list.sort((a, b) => a - b);
+    state.videoEdit.timeline.keyframes[track] = list;
+    return { start, end };
   };
   playheadRange?.addEventListener("input", () => {
     const raw = Number(playheadRange.value || 0);
@@ -2559,15 +2910,163 @@ function renderVideoEditor() {
     updatePlayheadUI();
   });
   updatePlayheadUI();
-  videoEditorPanel.querySelectorAll(".kf-track, .kf-row .kf-label").forEach((trackNode) => {
-    trackNode.addEventListener("click", () => {
-      const row = trackNode.closest(".kf-row");
-      const track = row?.getAttribute("data-track") || trackNode.getAttribute("data-track") || "mask";
+  if (previewVideo && !previewVideo.dataset.timelineSyncBound) {
+    previewVideo.addEventListener("timeupdate", syncPlayheadFromVideo);
+    previewVideo.addEventListener("seeked", syncPlayheadFromVideo);
+    previewVideo.addEventListener("loadedmetadata", syncPlayheadFromVideo);
+    previewVideo.dataset.timelineSyncBound = "1";
+  }
+  videoEditorPanel.querySelectorAll(".kf-row .kf-label").forEach((labelNode) => {
+    labelNode.addEventListener("click", () => {
+      const row = labelNode.closest(".kf-row");
+      const track = row?.getAttribute("data-track") || "mask";
       state.videoEdit.timeline.selectedTrack = track;
       state.videoEdit.activeModule = track;
+      state.videoEdit.timeline.pendingRangeStart = null;
+      state.videoEdit.timeline.pendingRangeHoverSec = null;
       renderVideoEditor();
     });
   });
+  videoEditorPanel.querySelectorAll(".kf-track").forEach((trackNode) => {
+    let suppressNextClick = false;
+    trackNode.addEventListener("pointerdown", (ev) => {
+      const target = ev.target;
+      if (target instanceof Element && target.closest(".kf-dot, .kf-seg")) return;
+      if (!ev.shiftKey) return;
+      const track = trackNode.getAttribute("data-track") || "mask";
+      if (state.videoEdit.timeline.trackState?.[track]?.locked) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const toSec = (clientX) => {
+        const rect = trackNode.getBoundingClientRect();
+        const ratio = clampNum((clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+        return Math.round((ratio * maxSec) * 100) / 100;
+      };
+      const startSec = toSec(ev.clientX);
+      state.videoEdit.timeline.selectedTrack = track;
+      state.videoEdit.activeModule = track;
+      state.videoEdit.timeline.playhead = startSec;
+      if (playheadRange) playheadRange.value = String(startSec);
+      updatePlayheadUI();
+      state.videoEdit.timeline.pendingRangeStart = { track, sec: startSec };
+      state.videoEdit.timeline.pendingRangeHoverSec = startSec;
+      updatePendingTip(t("timelinePendingArmed", { time: fmtSec(startSec) }));
+      updatePendingPreview(trackNode, track, startSec);
+      trackNode.classList.add("is-drag-creating");
+      const onMove = (moveEv) => {
+        const sec = toSec(moveEv.clientX);
+        state.videoEdit.timeline.pendingRangeHoverSec = sec;
+        state.videoEdit.timeline.playhead = sec;
+        if (playheadRange) playheadRange.value = String(sec);
+        updatePlayheadUI();
+        updatePendingPreview(trackNode, track, sec);
+      };
+      const onUp = (upEv) => {
+        suppressNextClick = true;
+        trackNode.classList.remove("is-drag-creating");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        const sec = toSec(upEv.clientX);
+        const committed = commitPendingRange(track, sec);
+        if (committed) {
+          state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+        } else {
+          state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+        }
+        renderVideoEditor();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+    trackNode.addEventListener("pointermove", (ev) => {
+      const track = trackNode.getAttribute("data-track") || "mask";
+      const pending = state.videoEdit.timeline.pendingRangeStart;
+      if (!pending || pending.track !== track) {
+        updatePendingPreview(trackNode, track, Number.NaN);
+        return;
+      }
+      const rect = trackNode.getBoundingClientRect();
+      const ratio = clampNum((ev.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      const sec = Math.round((ratio * maxSec) * 100) / 100;
+      state.videoEdit.timeline.pendingRangeHoverSec = sec;
+      updatePendingPreview(trackNode, track, sec);
+    });
+    trackNode.addEventListener("pointerleave", () => {
+      const track = trackNode.getAttribute("data-track") || "mask";
+      state.videoEdit.timeline.pendingRangeHoverSec = null;
+      updatePendingPreview(trackNode, track, Number.NaN);
+    });
+    trackNode.addEventListener("click", (ev) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
+      const target = ev.target;
+      if (target instanceof Element && target.closest(".kf-dot, .kf-seg")) return;
+      const track = trackNode.getAttribute("data-track") || "mask";
+      const rect = trackNode.getBoundingClientRect();
+      const ratio = clampNum((ev.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+      const sec = Math.round((ratio * maxSec) * 100) / 100;
+      state.videoEdit.timeline.selectedTrack = track;
+      state.videoEdit.activeModule = track;
+      state.videoEdit.timeline.playhead = sec;
+      if (playheadRange) playheadRange.value = String(sec);
+      updatePlayheadUI();
+      if (state.videoEdit.timeline.trackState?.[track]?.locked) {
+        state.videoEdit.timeline.pendingRangeStart = null;
+        state.videoEdit.timeline.pendingRangeHoverSec = null;
+        renderVideoEditor();
+        return;
+      }
+      const pending = state.videoEdit.timeline.pendingRangeStart;
+      if (!pending || pending.track !== track) {
+        state.videoEdit.timeline.pendingRangeStart = { track, sec };
+        state.videoEdit.timeline.pendingRangeHoverSec = null;
+        updatePendingTip(t("timelinePendingArmed", { time: fmtSec(sec) }));
+        renderVideoEditor();
+        return;
+      }
+      const committed = commitPendingRange(track, sec);
+      if (committed) {
+        state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+      }
+      renderVideoEditor();
+    });
+  });
+  const timelineKeydownHandler = (ev) => {
+    if (!state.videoEditorOpen) return;
+    const pending = state.videoEdit.timeline.pendingRangeStart;
+    if (!pending) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      state.videoEdit.timeline.pendingRangeStart = null;
+      state.videoEdit.timeline.pendingRangeHoverSec = null;
+      state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+      renderVideoEditor();
+      return;
+    }
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      const track = String(pending.track || "mask");
+      if (state.videoEdit.timeline.trackState?.[track]?.locked) {
+        state.videoEdit.timeline.pendingRangeStart = null;
+        state.videoEdit.timeline.pendingRangeHoverSec = null;
+        state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+        renderVideoEditor();
+        return;
+      }
+      const endSec = Number.isFinite(Number(state.videoEdit.timeline.pendingRangeHoverSec))
+        ? Number(state.videoEdit.timeline.pendingRangeHoverSec)
+        : Number(state.videoEdit.timeline.playhead || pending.sec || 0);
+      const committed = commitPendingRange(track, endSec);
+      if (committed) {
+        state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+      }
+      renderVideoEditor();
+    }
+  };
+  state.videoEdit._timelineKeydownHandler = timelineKeydownHandler;
+  window.addEventListener("keydown", timelineKeydownHandler);
   videoEditorPanel.querySelectorAll(".kf-ctrl").forEach((btn) => {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -2592,6 +3091,8 @@ function renderVideoEditor() {
       const track = dot.getAttribute("data-track") || "mask";
       state.videoEdit.timeline.selectedTrack = track;
       state.videoEdit.timeline.playhead = sec;
+      state.videoEdit.timeline.pendingRangeStart = null;
+      state.videoEdit.timeline.pendingRangeHoverSec = null;
       if (playheadRange) playheadRange.value = String(sec);
       updatePlayheadUI();
     });
@@ -2646,6 +3147,8 @@ function renderVideoEditor() {
         state.videoEdit.timeline.keyframes[track] = list;
         state.videoEdit.timeline.selectedTrack = track;
         state.videoEdit.activeModule = track;
+        state.videoEdit.timeline.pendingRangeStart = null;
+        state.videoEdit.timeline.pendingRangeHoverSec = null;
         dot.classList.remove("is-dragging");
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
@@ -2716,6 +3219,8 @@ function renderVideoEditor() {
         state.videoEdit.timeline.keyframes[track] = list;
         state.videoEdit.timeline.selectedTrack = track;
         state.videoEdit.activeModule = track;
+        state.videoEdit.timeline.pendingRangeStart = null;
+        state.videoEdit.timeline.pendingRangeHoverSec = null;
         seg.classList.remove("is-dragging");
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
@@ -2736,6 +3241,8 @@ function renderVideoEditor() {
       list.sort((a, b) => a - b);
       state.videoEdit.timeline.keyframes[track] = list;
     }
+    state.videoEdit.timeline.pendingRangeStart = null;
+    state.videoEdit.timeline.pendingRangeHoverSec = null;
     renderVideoEditor();
   });
 
@@ -2756,10 +3263,20 @@ function renderVideoEditor() {
     }
     list.splice(nearestIdx, 1);
     state.videoEdit.timeline.keyframes[track] = list;
+    state.videoEdit.timeline.pendingRangeStart = null;
+    state.videoEdit.timeline.pendingRangeHoverSec = null;
     renderVideoEditor();
   });
 
   videoEditorPanel.querySelector("#closeVideoPanelBtn")?.addEventListener("click", () => {
+    if (typeof state.videoEdit._timelineKeydownHandler === "function") {
+      window.removeEventListener("keydown", state.videoEdit._timelineKeydownHandler);
+      state.videoEdit._timelineKeydownHandler = null;
+    }
+    if (state.videoEdit._timelineToastTimer) {
+      clearTimeout(state.videoEdit._timelineToastTimer);
+      state.videoEdit._timelineToastTimer = null;
+    }
     state.videoEditorOpen = false;
     applyWorkspaceMode();
   });
@@ -2899,7 +3416,7 @@ function openEditorPanel(type) {
   renderVideoEditor();
   renderScriptEditor();
   focusWorkspaceTop();
-  if (type === "script") {
+  if (type === "script" && (!state.lastStoryboard || !state.lastPrompt)) {
     hydrateWorkflowTexts(true).then(() => {
       if (state.scriptEditorOpen) renderScriptEditor();
     });
@@ -3163,6 +3680,7 @@ function pushImageMsg(images) {
     addBtn.title = currentLang === "zh" ? "补传商品图" : "Upload more images";
     addBtn.addEventListener("click", () => imageInput?.click());
     thumbs.appendChild(addBtn);
+    updateGenerationGateUI();
   };
   renderThumbs();
   box.appendChild(thumbs);
@@ -3192,7 +3710,7 @@ function showUploadRefQuickAction() {
     {
       title: t("uploadNow"),
       desc: "",
-      onClick: () => imageInput?.click(),
+      onClick: () => openProductAssetPicker(),
     },
   ]);
 }
@@ -3215,6 +3733,46 @@ function parseDataUrl(dataUrl) {
   const m = /^data:(image\/(?:png|jpeg));base64,(.+)$/i.exec(dataUrl || "");
   if (!m) return null;
   return { mime: m[1].toLowerCase(), base64: m[2] };
+}
+
+function buildVeoReferencePayload() {
+  const localImages = (Array.isArray(state.images) ? state.images : [])
+    .map((item) => {
+      const parsed = parseDataUrl(item?.dataUrl || "");
+      return parsed ? { base64: parsed.base64, mime_type: parsed.mime } : null;
+    })
+    .filter(Boolean)
+    .slice(0, 4);
+  const remoteUrls = (Array.isArray(state.productImageUrls) ? state.productImageUrls : [])
+    .map((url) => String(url || "").trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  if (localImages.length > 1) {
+    return {
+      veo_mode: "reference",
+      reference_images_base64: localImages.slice(0, 4),
+    };
+  }
+  if (localImages.length === 1) {
+    return {
+      veo_mode: "image",
+      image_base64: localImages[0].base64,
+      image_mime_type: localImages[0].mime_type,
+    };
+  }
+  if (remoteUrls.length > 1) {
+    return {
+      veo_mode: "reference",
+      reference_image_urls: remoteUrls.slice(0, 4),
+    };
+  }
+  if (remoteUrls.length === 1) {
+    return {
+      veo_mode: "image",
+      image_url: remoteUrls[0],
+    };
+  }
+  return { veo_mode: "text" };
 }
 
 function sanitizeInputValue(value = "") {
@@ -3262,7 +3820,30 @@ function buildFallbackInsightFromName(fileName = "") {
     target_user: "",
     sales_region: "",
     brand_direction: "",
+    product_anchors: {},
   };
+}
+
+function mergeInsightPayloads(base = {}, extra = {}) {
+  const merged = { ...(base || {}) };
+  const next = extra || {};
+  for (const key of [
+    "product_name",
+    "main_business",
+    "style_template",
+    "target_user",
+    "sales_region",
+    "brand_direction",
+    "review_summary",
+    "fetch_confidence",
+  ]) {
+    if (!merged[key] && next[key]) merged[key] = next[key];
+  }
+  const mergedPoints = normalizeTextList(merged.selling_points, 6);
+  const nextPoints = normalizeTextList(next.selling_points, 6);
+  merged.selling_points = Array.from(new Set([...mergedPoints, ...nextPoints])).slice(0, 6);
+  merged.product_anchors = mergeProductAnchors(merged.product_anchors || {}, next.product_anchors || {});
+  return merged;
 }
 
 function applyInsightToState(insight = {}) {
@@ -3278,6 +3859,9 @@ function applyInsightToState(insight = {}) {
   if (!state.targetUser && insight.target_user) state.targetUser = String(insight.target_user).trim();
   if (!state.salesRegion && insight.sales_region) state.salesRegion = String(insight.sales_region).trim();
   if (!state.brandInfo && insight.brand_direction) state.brandInfo = String(insight.brand_direction).trim();
+  state.productAnchors = mergeProductAnchors(state.productAnchors, insight.product_anchors || {});
+  state.workflowHydrated = false;
+  updateGenerationGateUI();
 }
 
 function startInsightProgress() {
@@ -3703,11 +4287,13 @@ function buildPrompt() {
       ? `需规避的负向评论痛点：${state.reviewNegativePoints.slice(0, 2).join("；")}。`
       : `Potential pain points to avoid or improve in visuals/copy: ${state.reviewNegativePoints.slice(0, 2).join("; ")}.`
     : "";
+  const anchorSummary = buildProductAnchorSummary(currentLang);
   if (currentLang === "zh") {
     return [
       `${state.aspectRatio || "16:9"} 超高清商业画质，电影级影棚布光。`,
       "商品主体严格参考上传商品图或已解析信息，保持颜色、材质、结构和细节一致。",
       `商品：${state.productName || "该商品"}；主营方向：${state.mainBusiness || "电商"}。`,
+      anchorSummary ? `商品锚点：${anchorSummary}。` : "",
       `核心卖点仅聚焦1-2个：${pointsText}。`,
       `目标人群：${state.targetUser || "目标用户"}；销售地区：${state.salesRegion || "目标地区"}；风格模板：${state.template || "clean"}；模特策略：${modelText}；时长：${state.duration || "8"}秒。`,
       "镜头节奏遵循主框架+辅助框架（4.1~4.6），强调可执行镜头、环境布光、情绪锚点与转化收口。",
@@ -3723,6 +4309,7 @@ function buildPrompt() {
     "Keep product appearance fully consistent with uploaded references or parsed product information.",
     `Product name: ${state.productName || "Unnamed product"}.`,
     `Business focus: ${state.mainBusiness || "ecommerce product"}.`,
+    anchorSummary ? `${anchorSummary}.` : "",
     `Focus on only 1-2 core selling points: ${pointsText}.`,
     `Target audience: ${state.targetUser || "audience"}. Sales region: ${state.salesRegion || "region"}.`,
     `Brand direction: ${state.brandInfo || "default"}. Style template: ${state.template || "clean"}. Model strategy: ${modelText}. Duration: ${state.duration || "8"} seconds.`,
@@ -3750,6 +4337,182 @@ function sanitizePromptForUser(raw = "") {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return text;
+}
+
+function extractAspectRatioFromPrompt(raw = "") {
+  const text = String(raw || "");
+  if (!text) return "";
+  const ratioMatch = text.match(/(?:aspect\s*ratio|ratio|画幅|比例)\s*[:：]?\s*(9:16|16:9|1:1)\b/i);
+  if (ratioMatch?.[1]) return ratioMatch[1];
+  const directMatch = text.match(/\b(9:16|16:9|1:1)\b/);
+  if (!directMatch?.[1]) return "";
+  const near = text.slice(Math.max(0, directMatch.index - 28), Math.min(text.length, (directMatch.index || 0) + 28)).toLowerCase();
+  if (/(aspect|ratio|画幅|比例|vertical|horizontal|portrait|landscape|竖屏|横屏)/i.test(near)) {
+    return directMatch[1];
+  }
+  return "";
+}
+
+function extractDurationFromPrompt(raw = "") {
+  const text = String(raw || "");
+  if (!text) return 0;
+  const patterns = [
+    /(?:duration|video duration|时长|秒数)\s*[:：]?\s*(\d{1,2})\s*(?:s|sec|secs|second|seconds|秒)\b/i,
+    /\b(?:create|make|generate)\s+(?:a\s+)?(\d{1,2})\s*-\s*second\b/i,
+    /\b(\d{1,2})\s*-\s*second\b/i,
+    /\b(\d{1,2})\s*(?:s|sec|secs)\b/i,
+    /(\d{1,2})\s*秒\b/,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    const n = Number(m?.[1] || 0);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  let maxEnd = 0;
+  const rangeRe = /(\d{1,2})\s*(?:s|sec|秒)\s*[-~—]\s*(\d{1,2})\s*(?:s|sec|秒)/gi;
+  let hit = null;
+  while ((hit = rangeRe.exec(text)) !== null) {
+    const end = Number(hit?.[2] || 0);
+    if (Number.isFinite(end) && end > maxEnd) maxEnd = end;
+  }
+  return maxEnd;
+}
+
+function normalizeDurationForProvider(durationNum = 0, provider = "veo") {
+  const n = Number(durationNum || 0);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const opts = (DURATION_OPTIONS[provider] || DURATION_OPTIONS.veo).map((o) => Number(o.value));
+  if (!opts.length) return "";
+  if (opts.includes(n)) return String(n);
+  const nearest = opts.reduce((best, cur) => (
+    Math.abs(cur - n) < Math.abs(best - n) ? cur : best
+  ), opts[0]);
+  return String(nearest);
+}
+
+function applyDetectedVideoSettings(config = {}) {
+  const ratio = String(config?.ratio || "").trim();
+  const duration = String(config?.duration || "").trim();
+  if (ratio) {
+    state.aspectRatio = ratio;
+    if (aspectRatioSelect) aspectRatioSelect.value = ratio;
+  }
+  updateDurationOptions();
+  if (durationSelect && duration) {
+    const hasOption = Array.from(durationSelect.options || []).some((o) => o.value === duration);
+    if (hasOption) {
+      durationSelect.value = duration;
+      state.duration = duration;
+      updateDurationHint();
+    }
+  }
+}
+
+async function submitSimplePromptGeneration(finalText = "") {
+  const text = String(finalText || "").trim();
+  if (!text) return;
+  if (!canStartVideoJob()) {
+    pushMsg("system", t("tooManyJobs"));
+    return;
+  }
+  if (chatInput) chatInput.value = "";
+  syncStateFromSimpleControls();
+  state.lastPrompt = text;
+  state.primarySubmitLocked = false;
+  state.workflowHydrated = true;
+  pushMsg("user", text, { typewriter: false });
+  await generateVideo(text);
+}
+
+function showPromptConfigConfirmBubble(finalText = "") {
+  const text = String(finalText || "").trim();
+  if (!text) return false;
+  const detectedRatio = extractAspectRatioFromPrompt(text);
+  const detectedDurationRaw = extractDurationFromPrompt(text);
+  const provider = getModelProvider();
+  const recommendedDuration = normalizeDurationForProvider(detectedDurationRaw, provider);
+  if (!detectedRatio && !recommendedDuration) return false;
+
+  const lines = [t("detectedConfigTitle")];
+  if (detectedRatio) lines.push(`- ${t("detectedConfigRatio", { value: detectedRatio })}`);
+  if (recommendedDuration) {
+    const adjusted = Number(detectedDurationRaw) > 0 && String(Number(detectedDurationRaw)) !== recommendedDuration;
+    lines.push(`- ${adjusted
+      ? t("detectedConfigDurationAdjusted", { input: Number(detectedDurationRaw), recommended: recommendedDuration })
+      : t("detectedConfigDuration", { value: recommendedDuration })}`);
+  }
+  lines.push(t("detectedConfigAsk"));
+
+  const box = pushMsg("system", lines.join("\n"), { typewriter: false });
+  renderOptions(box, [
+    {
+      title: t("detectedConfigConfirm"),
+      desc: t("detectedConfigConfirmDesc"),
+      onClick: async () => {
+        applyDetectedVideoSettings({ ratio: detectedRatio, duration: recommendedDuration });
+        pushMsg("user", t("detectedConfigUseAck"), { typewriter: false });
+        await submitSimplePromptGeneration(text);
+      },
+    },
+    {
+      title: t("detectedConfigEdit"),
+      desc: t("detectedConfigEditDesc"),
+      onClick: () => {
+        applyDetectedVideoSettings({ ratio: detectedRatio, duration: recommendedDuration });
+        pushMsg("system", t("detectedConfigApplied"), { typewriter: false });
+      },
+    },
+  ]);
+  return true;
+}
+
+function extractPlaybackSpeedIntent(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) return 0;
+  if (!/(视频|video|播放|playback|倍速|加速|减速|speed)/i.test(text)) return 0;
+  const m = text.match(/([0-2](?:\.\d+)?)\s*(?:x|X|倍速)/);
+  const n = Number(m?.[1] || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(0.5, Math.min(2, Math.round(n * 100) / 100));
+}
+
+async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
+  const normalized = Math.max(0.5, Math.min(2, Number(speed) || 1));
+  if (!state.lastVideoUrl) {
+    pushMsg("system", t("speedIntentNoVideo"), { error: true });
+    return;
+  }
+  state.videoEdit = {
+    ...state.videoEdit,
+    speed: String(normalized),
+  };
+  const speedSelect = videoEditorPanel?.querySelector("#videoEditSpeed");
+  if (speedSelect) speedSelect.value = String(normalized);
+  applyVideoEditsToPreview();
+  pushMsg("system", t("speedIntentApplying", { speed: normalized.toFixed(2).replace(/\.00$/, "") }));
+  try {
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/edit/export`,
+      {
+        video_url: state.lastVideoUrl,
+        edits: state.videoEdit,
+      },
+      240000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => {
+      v.src = exportedUrl;
+    });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushMsg("system", t("speedIntentApplied", { speed: normalized.toFixed(2).replace(/\.00$/, "") }));
+  } catch (_e) {
+    applyVideoEditsToPreview();
+    pushMsg("system", t("speedIntentFailed"), { error: true });
+  }
 }
 
 function sanitizePromptForVeo(raw = "") {
@@ -3795,9 +4558,11 @@ function buildSingleVeoFallbackPrompt() {
   const style = String(state.template || "clean cinematic").trim() || "clean cinematic";
   const points = normalizePointsList(state.sellingPoints || "").slice(0, 2).join("; ") || "one core selling point";
   const modelText = state.needModel === false ? "without model showcase" : "with model showcase";
+  const anchorSummary = buildProductAnchorSummary("en");
   return [
     `[Style] ${style}, commercial ultra-HD quality, cinematic lighting.`,
     `[Subject] ${product} for ${business}, keep identity consistent with uploaded references.`,
+    anchorSummary ? `[Anchors] ${anchorSummary}.` : "",
     `[Context] For ${region}, aimed at ${target}, ${modelText}.`,
     `[Action] Focus on ${points}.`,
     `[00:00-00:02] Hero intro shot and product silhouette.`,
@@ -3811,9 +4576,10 @@ function buildSingleVeoFallbackPrompt() {
 async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
   const source = String(rawPrompt || "").trim();
   if (!source) return "";
+  const anchorHint = buildProductAnchorSummary("en");
   const needsRewrite = hasCjkChars(source);
   if (!needsRewrite) {
-    return sanitizePromptForVeo(source) || source;
+    return sanitizePromptForVeo([source, anchorHint ? `Preserve these product anchors exactly: ${anchorHint}.` : ""].filter(Boolean).join(" ")) || source;
   }
   try {
     updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提示词语义对齐中" : "Aligning prompt semantics" });
@@ -3827,11 +4593,12 @@ async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
             content:
               "Rewrite the user's ecommerce video prompt into ONE Veo-ready English prompt.\n"
               + "Keep original product intent and selling points.\n"
+              + "Do not change the product category, silhouette, color family, materials, or key details when anchors are provided.\n"
               + "Output must be plain text only (no markdown), max 220 words.\n"
               + "Must include four timestamp shots: [00:00-00:02], [00:02-00:04], [00:04-00:06], [00:06-00:08].\n"
               + "Must avoid text overlays/subtitles/captions and avoid quotation marks.",
           },
-          { role: "user", content: source },
+          { role: "user", content: [source, anchorHint ? `Product anchors to preserve exactly: ${anchorHint}.` : ""].filter(Boolean).join("\n") },
         ],
         temperature: 0.3,
         max_tokens: 700,
@@ -3848,6 +4615,10 @@ async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
 
 function isVeoSafetyRejection(msg = "") {
   return /violate.*usage guidelines|Responsible AI|sensitive words|support codes/i.test(String(msg));
+}
+
+function isVeoRetryableLoadError(msg = "") {
+  return /currently experiencing high load|try again later|service unavailable|resource exhausted/i.test(String(msg || ""));
 }
 
 function buildAutoPromptDraftFromParsed(source = "image") {
@@ -3879,6 +4650,7 @@ function buildAutoPromptDraftFromParsed(source = "image") {
       : currentLang === "zh"
         ? "请严格参考已解析商品信息，保持商品特征一致。"
         : "Strictly follow parsed product information and keep product details consistent.";
+  const anchorSummary = buildProductAnchorSummary(currentLang);
   if (currentLang === "zh") {
     return [
       `[Style] ${style}，超高清商业画质，电影级影棚布光，真实可拍可剪。`,
@@ -3891,6 +4663,7 @@ function buildAutoPromptDraftFromParsed(source = "image") {
       `[Transition / Editing] 节奏匹配剪辑，关键动作点顺滑衔接。`,
       `[Call to Action] 以推荐动作和购买动机收口。`,
       `基础约束：画幅${ratio}，时长${duration}秒，商品${product}，目标人群${target}，模特策略${modelText}。`,
+      anchorSummary ? `商品锚点：${anchorSummary}。` : "",
       sourceHint,
       "请从4.1~4.6选择最合适的组合完成上述结构，避免空话。",
       "合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。",
@@ -3907,6 +4680,7 @@ function buildAutoPromptDraftFromParsed(source = "image") {
     `[Transition / Editing] Beat-matched transitions with smooth action continuity.`,
     `[Call to Action] End with recommendation intent and conversion hook.`,
     `Base constraints: ratio ${ratio}, duration ${duration}s, product ${product}, audience ${target}, model strategy ${modelText}.`,
+    anchorSummary ? `${anchorSummary}.` : "",
     sourceHint,
     "Select the best mix from 4.1~4.6 to complete this structure.",
     "Compliance suffix: clean highlight edges, controlled reflections, clear textures, sharp structure edges, no distorted limbs/structures, no third-party logos or watermarks.",
@@ -4088,7 +4862,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     requestAnimationFrame(() => {
       card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
-    if (focusScript) {
+    if (focusScript && (!state.lastStoryboard || !state.lastPrompt)) {
       hydrateWorkflowTexts(true).then(() => {
         if (state.scriptEditorOpen) renderScriptEditor();
       });
@@ -4248,10 +5022,10 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       + "[00:06-00:08] Confident closing hero shot — product alone, perfect lighting, camera holds still for final reveal."
     );
   }
+  state.lastStoryboard = buildStoryboardFromPromptSegments([promptA, promptB], 8) || state.lastStoryboard;
 
   const segBody = { ...startBody, duration_seconds: 8 };
   // Snapshot the model at start time — polling MUST use the same model name as submission.
-  // Using getVeoModel() during polling risks a mismatch if the user switches the dropdown mid-flight.
   const lockedModel = segBody.model || getVeoModel();
 
   async function submitSafe(prompt, label) {
@@ -4361,9 +5135,21 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   scrollToBottom();
   const seg2Body = { ...segBody, prompt: promptB };
   if (bridgeFrameB64) {
-    seg2Body.veo_mode = "image";
-    seg2Body.image_base64 = bridgeFrameB64;
-    seg2Body.image_mime_type = bridgeFrameMime;
+    if (segBody.veo_mode === "reference") {
+      const mergedRefs = [
+        { base64: bridgeFrameB64, mime_type: bridgeFrameMime },
+        ...((Array.isArray(segBody.reference_images_base64) ? segBody.reference_images_base64 : []).slice(0, 3)),
+      ].slice(0, 4);
+      seg2Body.veo_mode = "reference";
+      seg2Body.reference_images_base64 = mergedRefs;
+      delete seg2Body.image_base64;
+      delete seg2Body.image_mime_type;
+      delete seg2Body.image_url;
+    } else {
+      seg2Body.veo_mode = "image";
+      seg2Body.image_base64 = bridgeFrameB64;
+      seg2Body.image_mime_type = bridgeFrameMime;
+    }
   }
   let startB;
   try {
@@ -4371,7 +5157,23 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   } catch (e) {
     if (isVeoSafetyRejection(String(e?.message || ""))) {
       const saferBody = { ...segBody, prompt: `Clean cinematic product video continuation, 8 seconds, natural lighting, smooth camera, usage experience.` };
-      if (bridgeFrameB64) { saferBody.veo_mode = "image"; saferBody.image_base64 = bridgeFrameB64; saferBody.image_mime_type = bridgeFrameMime; }
+      if (bridgeFrameB64) {
+        if (segBody.veo_mode === "reference") {
+          const mergedRefs = [
+            { base64: bridgeFrameB64, mime_type: bridgeFrameMime },
+            ...((Array.isArray(segBody.reference_images_base64) ? segBody.reference_images_base64 : []).slice(0, 3)),
+          ].slice(0, 4);
+          saferBody.veo_mode = "reference";
+          saferBody.reference_images_base64 = mergedRefs;
+          delete saferBody.image_base64;
+          delete saferBody.image_mime_type;
+          delete saferBody.image_url;
+        } else {
+          saferBody.veo_mode = "image";
+          saferBody.image_base64 = bridgeFrameB64;
+          saferBody.image_mime_type = bridgeFrameMime;
+        }
+      }
       startB = await postJson(`${base}/api/veo/start`, saferBody, 30000);
     } else { throw e; }
   }
@@ -4417,6 +5219,14 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     }
   } catch (_outerErr) {}
 
+  const playable = String(
+    concatUrl
+    || resA.url
+    || buildPlayableUrlFromGcs(resA.gcs)
+    || resB.url
+    || buildPlayableUrlFromGcs(resB.gcs)
+    || ""
+  ).trim();
   if (statusBubble.parentNode) statusBubble.remove();
   if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
 
@@ -4439,9 +5249,7 @@ async function generateVideo(promptOverride = "") {
     slotReleased = true;
     releaseVideoJobSlot();
   };
-  const _m = VEO_MODEL_OPTIONS.find((m) => m.value === getVeoModel());
-  const _mLabel = currentLang === "zh" ? (_m?.labelZh || getVeoModel()) : (_m?.labelEn || getVeoModel());
-  const taskId = createVideoTask(`${state.duration || "8"}s · ${_mLabel}`);
+  const taskId = createVideoTask(`${state.duration || "8"}s`);
   // Register release & abort handle so cancelVideoTask() can use them
   if (state.taskMap[taskId]) {
     state.taskMap[taskId]._releaseSlot = releaseSlotOnce;
@@ -4452,22 +5260,25 @@ async function generateVideo(promptOverride = "") {
       await hydrateWorkflowTexts(false);
     }
     const finalPrompt = String(promptOverride || state.lastPrompt || buildPrompt()).trim();
+    const promptRatio = extractAspectRatioFromPrompt(finalPrompt);
+    if (promptRatio) {
+      state.aspectRatio = promptRatio;
+      if (aspectRatioSelect) aspectRatioSelect.value = promptRatio;
+    }
     state.lastPrompt = finalPrompt;
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
     pushMsg("system", t("submit"));
     updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提交任务中" : "Submitting job" });
-    const imageParsed = parseDataUrl(state.images[0]?.dataUrl);
-    const fallbackImageUrl = Array.isArray(state.productImageUrls) ? String(state.productImageUrls[0] || "").trim() : "";
-    const useImageMode = Boolean((imageParsed?.base64 && imageParsed?.mime) || fallbackImageUrl);
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const base = getApiBase();
     const safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
+    const imagePayload = buildVeoReferencePayload();
     const startBody = {
       project_id: "gemini-sl-20251120",
       model: getVeoModel(),
       prompt: safePrompt,
       sample_count: 1,
-      veo_mode: useFrameMode ? "frame" : useImageMode ? "image" : "text",
+      veo_mode: useFrameMode ? "frame" : imagePayload.veo_mode,
       duration_seconds: Number(state.duration),
       aspect_ratio: state.aspectRatio || "16:9",
     };
@@ -4482,11 +5293,8 @@ async function generateVideo(promptOverride = "") {
         startBody.last_frame_base64 = lastParsed.base64;
         startBody.last_frame_mime_type = lastParsed.mime;
       }
-    } else if (imageParsed?.base64 && imageParsed?.mime) {
-      startBody.image_base64 = imageParsed.base64;
-      startBody.image_mime_type = imageParsed.mime;
-    } else if (fallbackImageUrl) {
-      startBody.image_url = fallbackImageUrl;
+    } else {
+      Object.assign(startBody, imagePayload);
     }
     if (getModelProvider() === "tabcode") {
       const targetDuration = Number(state.duration) || 6;
@@ -4505,7 +5313,8 @@ async function generateVideo(promptOverride = "") {
     }
 
     const start = await postJson(`${base}/api/veo/start`, startBody);
-    const operationName = start?.operation_name;
+    let operationName = start?.operation_name;
+    let submitAttempts = 1;
     if (!operationName) throw new Error("operation_name missing");
     updateVideoTask(taskId, {
       status: "running",
@@ -4580,6 +5389,24 @@ async function generateVideo(promptOverride = "") {
         }
         const opError = status?.response?.error?.message || "";
         if (status?.response?.done && opError) {
+          if (isVeoRetryableLoadError(opError) && submitAttempts < 2) {
+            submitAttempts += 1;
+            pushMsg("system", zh
+              ? "Veo 上游当前负载较高，已自动重新提交一次任务…"
+              : "Veo upstream is under high load. Retrying submission once automatically…");
+            const retryStart = await postJson(`${base}/api/veo/start`, startBody);
+            const retryOp = retryStart?.operation_name;
+            if (retryOp) {
+              operationName = retryOp;
+              updateVideoTask(taskId, {
+                status: "running",
+                stage: zh ? "已重提，轮询中" : "Resubmitted, polling",
+                operationName,
+              });
+              scheduleNext(8000);
+              return;
+            }
+          }
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
           if (isVeoSafetyRejection(opError)) {
@@ -4596,7 +5423,7 @@ async function generateVideo(promptOverride = "") {
         }
         const videoUrl = pickPlayableUrl(status);
         const gcsUri = String(status?.video_uris?.[0] || "").trim();
-        if (videoUrl) {
+        if (videoUrl || gcsUri) {
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
           renderGeneratedVideoCard(videoUrl, gcsUri, operationName, taskId);
@@ -4722,28 +5549,25 @@ async function onSend() {
   if (SIMPLE_AGENT_MODE) {
     const linkText = String(productUrlInput?.value || "").trim();
     const promptText = String(chatInput.value || "").trim();
-    // Clear immediately after submit to avoid stale text staying in composer.
-    if (chatInput) chatInput.value = "";
     const firstUrlMatch = (linkText || promptText).match(/(?:https?:\/\/|www\.)[^\s]+/i);
     const urlCandidate = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : "";
     const needPrefillFromUrl = Boolean(
-      urlCandidate && (!state.productName || !state.mainBusiness || !state.sellingPoints)
+      urlCandidate && (!state.productName || !state.mainBusiness || !state.sellingPoints || !hasEffectiveProductAsset())
     );
     if (needPrefillFromUrl) {
       await parseShopProductByUrl(urlCandidate);
     }
     const finalText = String(chatInput.value || "").trim() || promptText;
     if (!finalText) return;
-    if (!canStartVideoJob()) {
-      pushMsg("system", t("tooManyJobs"));
+    const speedIntent = extractPlaybackSpeedIntent(finalText);
+    if (speedIntent > 0) {
+      if (chatInput) chatInput.value = "";
+      pushMsg("user", finalText, { typewriter: false });
+      await applyPlaybackSpeedToCurrentVideo(speedIntent);
       return;
     }
-    syncStateFromSimpleControls();
-    state.lastPrompt = finalText;
-    state.primarySubmitLocked = false;
-    state.workflowHydrated = true;
-    pushMsg("user", finalText, { typewriter: false });
-    generateVideo(finalText);
+    if (showPromptConfigConfirmBubble(finalText)) return;
+    await submitSimplePromptGeneration(finalText);
     return;
   }
 
@@ -5044,11 +5868,7 @@ async function parseShopProductByUrl(inputUrl = "") {
       45000
     );
     stopParseProgress();
-    const insight = data?.insight || {};
-    const parsedProductName = String(insight.product_name || "").trim();
-    const parsedSellingPoints = Array.isArray(insight.selling_points)
-      ? insight.selling_points.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 6)
-      : [];
+    let insight = data?.insight || {};
     const parsedImageUrls = Array.isArray(insight.image_urls)
       ? insight.image_urls.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 10)
       : [];
@@ -5064,6 +5884,18 @@ async function parseShopProductByUrl(inputUrl = "") {
             };
           })
           .filter(Boolean)
+      : [];
+
+    if (imageItems.length) {
+      try {
+        const visualResp = await analyzeImageInsight(imageItems);
+        insight = mergeInsightPayloads(insight, visualResp?.insight || {});
+      } catch (_e) {}
+    }
+
+    const parsedProductName = String(insight.product_name || "").trim();
+    const parsedSellingPoints = Array.isArray(insight.selling_points)
+      ? insight.selling_points.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 6)
       : [];
 
     if (!parsedProductName && !parsedSellingPoints.length && !parsedImageUrls.length && !imageItems.length) {
@@ -5091,6 +5923,7 @@ async function parseShopProductByUrl(inputUrl = "") {
     if (Array.isArray(insight.selling_points) && insight.selling_points.length) {
       state.sellingPoints = insight.selling_points.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 6).join("，");
     }
+    state.productAnchors = mergeProductAnchors(state.productAnchors, insight.product_anchors || {});
     state.productImageUrls = parsedImageUrls;
     state.reviewPositivePoints = Array.isArray(insight.review_positive_points)
       ? insight.review_positive_points.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 6)
@@ -5107,11 +5940,9 @@ async function parseShopProductByUrl(inputUrl = "") {
       showUploadScreenshotGuide();
       showUploadRefQuickAction();
     }
-    const reviewSummary = String(insight.review_summary || "").trim();
+    state.workflowHydrated = false;
+    updateGenerationGateUI();
     const fetchConfidence = String(insight.fetch_confidence || data?.confidence || "").trim().toLowerCase();
-    const positiveText = state.reviewPositivePoints.length ? state.reviewPositivePoints.slice(0, 2).join("；") : "";
-    const negativeText = state.reviewNegativePoints.length ? state.reviewNegativePoints.slice(0, 2).join("；") : "";
-    const sellingText = state.sellingPoints || (currentLang === "zh" ? "突出核心卖点" : "highlight core selling points");
     if (!state.productName) {
       const urlFallbackName = inferProductNameFromUrl(url);
       if (urlFallbackName) state.productName = urlFallbackName;
@@ -5121,10 +5952,7 @@ async function parseShopProductByUrl(inputUrl = "") {
     const currentText = String(chatInput.value || "").trim();
     const shouldOverwriteDraft = !currentText || isLikelyUrlOnlyText(currentText) || currentText === url;
     if (shouldOverwriteDraft) {
-      chatInput.value =
-        currentLang === "zh"
-          ? `请为商品「${state.productName || "该商品"}」生成一条${state.duration || "8"}秒电商短视频，比例${state.aspectRatio || "16:9"}，重点卖点：${sellingText}。${positiveText ? `好评强调点：${positiveText}。` : ""}${negativeText ? `差评规避点：${negativeText}。` : ""}${reviewSummary ? `补充反馈：${reviewSummary}。` : ""}镜头自然、真实质感、突出转化。`
-          : `Create a ${state.duration || "8"}s ecommerce video for "${state.productName || "this product"}" in ${state.aspectRatio || "16:9"}. Key selling points: ${sellingText}. ${positiveText ? `Emphasize positive review signals: ${positiveText}.` : ""}${negativeText ? `Avoid negative feedback triggers: ${negativeText}.` : ""}${reviewSummary ? `Additional review cues: ${reviewSummary}.` : ""} Natural cinematic motion, realistic texture, conversion-focused.`;
+      chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
       state.lastPrompt = String(chatInput.value || "").trim();
     }
     const refillOk = Boolean(state.productName && state.mainBusiness && state.template);
@@ -5402,7 +6230,8 @@ function scheduleLandingPrefillAfterWelcome() {
     if (!container) return;
     if (_progressTimer) clearInterval(_progressTimer);
     let pct = 0;
-    container.innerHTML = `<div class="ai-loading-wrap"><div class="ai-loading-cards"><div class="ai-skeleton-card"></div></div><div class="ai-progress-bar-wrap"><div class="ai-progress-bar-track"><div class="ai-progress-bar-fill" id="agentAiPFill" style="width:0%"></div></div><span class="ai-progress-label" id="agentAiPLabel">0%</span></div></div>`;
+    const loadingTitle = currentLang === "zh" ? "AI 生图进度" : "AI image generation progress";
+    container.innerHTML = `<div class="ai-loading-wrap"><div class="ai-loading-head"><strong class="ai-loading-title">${loadingTitle}</strong><span class="ai-progress-label" id="agentAiPLabel">0%</span></div><div class="ai-progress-bar-wrap"><div class="ai-progress-bar-track"><div class="ai-progress-bar-fill" id="agentAiPFill" style="width:0%"></div></div></div><div class="ai-loading-cards"><div class="ai-skeleton-card"></div></div></div>`;
     const fill  = container.querySelector("#agentAiPFill");
     const label = container.querySelector("#agentAiPLabel");
     _progressTimer = setInterval(() => {
@@ -5418,7 +6247,7 @@ function scheduleLandingPrefillAfterWelcome() {
     const fill  = container?.querySelector("#agentAiPFill");
     const label = container?.querySelector("#agentAiPLabel");
     if (fill)  { fill.style.width = "100%"; fill.style.background = ok ? "linear-gradient(90deg,#5e85d8,#79a8ff)" : "linear-gradient(90deg,#c0392b,#e74c3c)"; }
-    if (label) label.textContent = ok ? "100%" : "failed";
+    if (label) label.textContent = ok ? "100%" : (currentLang === "zh" ? "失败" : "Failed");
   }
 
   // Chip → input
@@ -5712,15 +6541,6 @@ if (taskQueueList) {
     if (action === "cancel") cancelVideoTask(taskId);
   });
 }
-if (veoModelSelect) {
-  veoModelSelect.addEventListener("change", () => {
-    state.veoModel = veoModelSelect.value || "grok-imagine-1.0-video";
-    const opt = VEO_MODEL_OPTIONS.find((m) => m.value === state.veoModel);
-    const label = currentLang === "zh" ? (opt?.labelZh || state.veoModel) : (opt?.labelEn || state.veoModel);
-    pushMsg("system", currentLang === "zh" ? `生成模型已切换为：${label}` : `Video model switched to: ${label}`);
-    updateDurationOptions();
-  });
-}
 window.addEventListener("resize", () => updateToolbarIndicator());
 
 // If the browser goes fullscreen on a raw <video> inside a .video-edit-surface
@@ -5746,6 +6566,7 @@ document.addEventListener("webkitfullscreenchange", () => {
 applyLang();
 syncSimpleControlsFromState();
 updateDurationOptions();
+updateGenerationGateUI();
 applyWorkspaceMode();
 consumeLandingParams();
 pushMsg("system", t("welcome"));
@@ -5776,3 +6597,61 @@ if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
     chatList.scrollTo({ top: chatList.scrollHeight, behavior: "smooth" });
   });
 })();
+
+// 测试钩子 - 仅用于自动化测试
+if (typeof window !== 'undefined') {
+  window.__agentTestHook = {
+    getState: () => state,
+    setState: (updates) => Object.assign(state, updates),
+    openVideoEditor: () => {
+      state.canUseEditors = true;
+      state.lastVideoUrl = state.lastVideoUrl || 'data:video/mp4;base64,test';
+      state.lastPrompt = state.lastPrompt || '测试提示词';
+      state.lastStoryboard = state.lastStoryboard || '测试分镜';
+      if (!state.videoEdit) {
+        state.videoEdit = {
+          speed: 1.0,
+          maskStyle: 'elegant',
+          maskText: '',
+          maskFont: 'sans',
+          maskColor: '#ffffff',
+          x: 50,
+          y: 50,
+          width: 80,
+          height: 14,
+          fontSize: 5,
+          bgmMood: 'elegant',
+          bgmVolume: 70,
+          bgmExtract: false,
+          bgmReplaceMode: 'auto',
+          localBgmName: '',
+          localBgmDataUrl: '',
+          activeModule: 'mask',
+          timeline: {
+            playhead: 0,
+            pendingRangeStart: null,
+            keyframes: {
+              mask: [],
+              bgm: [],
+              speed: []
+            },
+            trackStates: {
+              mask: { visible: true, locked: false },
+              bgm: { visible: true, locked: false },
+              speed: { visible: true, locked: false }
+            }
+          },
+          _renderHash: null,
+          _timelineKeydownHandler: null
+        };
+      }
+      state.videoEditorOpen = true;
+      applyWorkspaceMode();
+      renderVideoEditor();
+      return true;
+    },
+    renderVideoEditor,
+    applyWorkspaceMode,
+    toggleEditorPanel
+  };
+}

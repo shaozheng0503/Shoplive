@@ -58,6 +58,52 @@ def _probe_has_audio(src_path: Path) -> bool:
     return bool((result.stdout or "").strip())
 
 
+def _normalize_track_ranges(points, duration_seconds: float) -> List[Tuple[float, float]]:
+    vals = []
+    for item in (points or []):
+        try:
+            v = float(item)
+        except (TypeError, ValueError):
+            continue
+        if v < 0:
+            continue
+        vals.append(v)
+    vals.sort()
+    ranges: List[Tuple[float, float]] = []
+    max_dur = max(0.001, float(duration_seconds or 0.0))
+    for i in range(0, len(vals) - 1, 2):
+        start = max(0.0, min(vals[i], max_dur))
+        end = max(0.0, min(vals[i + 1], max_dur))
+        if end > start:
+            ranges.append((start, end))
+    return ranges
+
+
+def _build_time_enable_expr(ranges: List[Tuple[float, float]]) -> str:
+    if not ranges:
+        return ""
+    parts = [f"between(t,{_fmt_float(s, 3)},{_fmt_float(e, 3)})" for s, e in ranges]
+    return "+".join(parts)
+
+
+def _resolve_track_mode(edits: Dict, track_id: str, duration_seconds: float) -> Tuple[str, List[Tuple[float, float]]]:
+    timeline = edits.get("timeline") if isinstance(edits.get("timeline"), dict) else {}
+    track_state = timeline.get("trackState") if isinstance(timeline.get("trackState"), dict) else {}
+    keyframes = timeline.get("keyframes") if isinstance(timeline.get("keyframes"), dict) else {}
+    state = track_state.get(track_id) if isinstance(track_state.get(track_id), dict) else {}
+    visible = state.get("visible", True) is not False
+    if not visible:
+        return "off", []
+    points = keyframes.get(track_id) if isinstance(keyframes.get(track_id), list) else []
+    if len(points) < 2:
+        # Backward-compatible default: no ranges configured means global.
+        return "global", []
+    ranges = _normalize_track_ranges(points, duration_seconds)
+    if not ranges:
+        return "off", []
+    return "ranged", ranges
+
+
 def _render_timeline_video(
     *,
     source_video_urls: List[str],
@@ -306,7 +352,6 @@ def register_video_edit_routes(
             )
             drawtext_available = "drawtext" in ((drawtext_check.stdout or "") + (drawtext_check.stderr or ""))
 
-            speed = _clamp_num(edits.get("speed", 1), 0.5, 2.0, 1.0)
             sat_val = _clamp_num(edits.get("sat", 0), -30, 30, 0)
             vibrance_val = _clamp_num(edits.get("vibrance", 0), -30, 30, 0)
             temp_val = _clamp_num(edits.get("temp", 0), -30, 30, 0)
@@ -339,6 +384,26 @@ def register_video_edit_routes(
                 if not input_video.exists() or input_video.stat().st_size == 0:
                     return json_error("原始视频下载失败或内容为空", 400)
 
+                duration_probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(input_video),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                duration_seconds = _clamp_num((duration_probe.stdout or "").strip(), 0.001, 7200, 60)
+
+                motion_mode, motion_ranges = _resolve_track_mode(edits, "motion", duration_seconds)
+                color_mode, color_ranges = _resolve_track_mode(edits, "color", duration_seconds)
+                mask_mode, mask_ranges = _resolve_track_mode(edits, "mask", duration_seconds)
+                bgm_mode, bgm_ranges = _resolve_track_mode(edits, "bgm", duration_seconds)
+
+                speed = _clamp_num(edits.get("speed", 1), 0.5, 2.0, 1.0) if motion_mode != "off" else 1.0
+
                 if bgm_extract and local_bgm_data_url:
                     bgm_b64, bgm_mime = parse_generic_data_url(local_bgm_data_url, "audio")
                     suffix = ".mp3"
@@ -351,14 +416,32 @@ def register_video_edit_routes(
                     bgm_file = tmp_dir_path / f"bgm{suffix}"
                     bgm_file.write_bytes(base64.b64decode(bgm_b64))
 
-                video_filters = [
-                    f"setpts={_fmt_float(1.0 / speed, 4)}*PTS",
-                    f"eq=saturation={_fmt_float(sat)}:brightness={_fmt_float(bright)}:contrast={_fmt_float(contrast)}",
-                    f"hue=h={_fmt_float(hue, 3)}",
-                ]
+                motion_enable_expr = _build_time_enable_expr(motion_ranges)
+                if motion_mode == "ranged" and motion_enable_expr:
+                    motion_pts_expr = motion_enable_expr.replace("between(t,", "between(T,")
+                    video_filters = [
+                        f"setpts='if(gt({motion_pts_expr},0),{_fmt_float(1.0 / speed, 4)}*PTS,PTS)'"
+                    ]
+                else:
+                    video_filters = [f"setpts={_fmt_float(1.0 / speed, 4)}*PTS"]
+                color_enable_expr = _build_time_enable_expr(color_ranges)
+                if color_mode == "off":
+                    video_filters.append("eq=saturation=1:brightness=0:contrast=1")
+                    video_filters.append("hue=h=0")
+                elif color_mode == "ranged" and color_enable_expr:
+                    video_filters.append(
+                        f"eq=saturation={_fmt_float(sat)}:brightness={_fmt_float(bright)}:contrast={_fmt_float(contrast)}:enable='{color_enable_expr}'"
+                    )
+                    video_filters.append(f"hue=h={_fmt_float(hue, 3)}:enable='{color_enable_expr}'")
+                else:
+                    video_filters.append(f"eq=saturation={_fmt_float(sat)}:brightness={_fmt_float(bright)}:contrast={_fmt_float(contrast)}")
+                    video_filters.append(f"hue=h={_fmt_float(hue, 3)}")
                 mask_applied = False
-                if mask_text and drawtext_available:
+                mask_enable_expr = _build_time_enable_expr(mask_ranges)
+                mask_allowed = mask_mode != "off"
+                if mask_text and drawtext_available and mask_allowed:
                     safe_text = escape_drawtext_text(mask_text)
+                    enable_clause = f":enable='{mask_enable_expr}'" if (mask_mode == "ranged" and mask_enable_expr) else ""
                     video_filters.append(
                         "drawtext="
                         f"text='{safe_text}':"
@@ -369,7 +452,7 @@ def register_video_edit_routes(
                         f"y={text_y_expr}:"
                         "box=1:"
                         "boxcolor=black@0.28:"
-                        "boxborderw=14"
+                        f"boxborderw=14{enable_clause}"
                     )
                     mask_applied = True
 
@@ -379,7 +462,7 @@ def register_video_edit_routes(
                     "-i",
                     str(input_video),
                 ]
-                use_bgm = bool(bgm_file and bgm_file.exists())
+                use_bgm = bool(bgm_file and bgm_file.exists() and bgm_mode != "off")
                 if use_bgm:
                     cmd.extend(["-i", str(bgm_file)])
 
@@ -406,13 +489,20 @@ def register_video_edit_routes(
                 if video_filters:
                     filter_parts.append("[0:v]" + ",".join(video_filters) + "[vout]")
 
-                atempo = _build_atempo_chain(speed)
+                audio_speed = speed if motion_mode != "ranged" else 1.0
+                atempo = _build_atempo_chain(audio_speed)
+                bgm_enable_expr = _build_time_enable_expr(bgm_ranges)
+                if bgm_mode == "ranged" and bgm_enable_expr:
+                    bgm_volume_filter = f"volume='if(gt({bgm_enable_expr},0),{_fmt_float(bgm_volume, 3)},0)':eval=frame"
+                else:
+                    bgm_volume_filter = f"volume={_fmt_float(bgm_volume, 3)}"
+
                 if use_bgm and has_input_audio:
                     filter_parts.append(f"[0:a]{atempo}[a0]")
-                    filter_parts.append(f"[1:a]volume={_fmt_float(bgm_volume, 3)},{atempo}[a1]")
+                    filter_parts.append(f"[1:a]{bgm_volume_filter},{atempo}[a1]")
                     filter_parts.append("[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]")
                 elif use_bgm and not has_input_audio:
-                    filter_parts.append(f"[1:a]volume={_fmt_float(bgm_volume, 3)},{atempo}[aout]")
+                    filter_parts.append(f"[1:a]{bgm_volume_filter},{atempo}[aout]")
                 elif has_input_audio:
                     filter_parts.append(f"[0:a]{atempo}[aout]")
 

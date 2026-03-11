@@ -213,6 +213,35 @@ class TestVideoEditExport:
         if not DRAWTEXT_AVAILABLE:
             assert d.get("warning")  # must explain why mask was skipped
 
+    def test_timeline_ranged_edits_combined(self, client, vid_audio, bgm):
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {
+                "speed": 1.5,
+                "sat": 10, "vibrance": 5, "temp": -3, "tint": 2,
+                "maskText": "段落测试",
+                "opacity": 90, "x": 50, "y": 88, "h": 14,
+                "bgmExtract": True, "localBgmDataUrl": bgm, "bgmVolume": 50,
+                "timeline": {
+                    "trackState": {
+                        "mask": {"visible": True, "locked": False},
+                        "color": {"visible": True, "locked": False},
+                        "bgm": {"visible": True, "locked": False},
+                        "motion": {"visible": True, "locked": False},
+                    },
+                    "keyframes": {
+                        "mask": [0.2, 1.0, 2.0, 2.6],
+                        "color": [0.4, 1.8],
+                        "bgm": [0.0, 1.5],
+                        "motion": [0.5, 1.6],
+                    },
+                },
+            },
+        })
+        d = r.get_json()
+        assert r.status_code == 200
+        assert d["ok"] is True
+
     def test_speed_out_of_range_clamped(self, client, vid_silent):
         """speed=5.0 exceeds schema max but edits is Dict[Any] — clamped to 2.0, not rejected."""
         r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"speed": 5.0}})

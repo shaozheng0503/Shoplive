@@ -1543,6 +1543,63 @@ input:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* Agent modal: clearer progress + larger preview cards */
+#agentRefModal #agentRefAiResultGrid {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  min-height: 260px;
+}
+
+#agentRefModal #agentRefAiResultGrid .ref-card-img-btn {
+  height: 220px;
+}
+
+#agentRefModal .ai-loading-wrap {
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 14px;
+  min-height: 280px;
+  padding: 14px 10px 10px;
+}
+
+#agentRefModal .ai-loading-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#agentRefModal .ai-loading-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: rgba(224, 236, 255, 0.88);
+  letter-spacing: 0.02em;
+}
+
+#agentRefModal .ai-progress-bar-wrap {
+  max-width: none;
+}
+
+#agentRefModal .ai-progress-bar-track {
+  height: 9px;
+}
+
+#agentRefModal .ai-progress-label {
+  min-width: 42px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #dcecff;
+}
+
+#agentRefModal .ai-loading-cards {
+  justify-content: flex-start;
+}
+
+#agentRefModal .ai-skeleton-card {
+  width: 170px;
+  height: 220px;
+  border-radius: 14px;
+}
+
 @media (min-width: 1440px) {
   .hero-shell {
     padding: 0 96px 56px;

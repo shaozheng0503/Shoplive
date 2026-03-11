@@ -338,13 +338,6 @@ def register_veo_routes(
                         }
                     )
                 instance["referenceImages"] = refs
-                if image_b64 or image_url:
-                    if not image_b64 and image_url:
-                        image_b64, image_mime_type = fetch_image_as_base64(image_url, proxy)
-                    instance["image"] = {
-                        "bytesBase64Encoded": image_b64,
-                        "mimeType": image_mime_type,
-                    }
             elif veo_mode == "frame":
                 if not image_b64 and not image_url:
                     return json_error(
@@ -662,13 +655,6 @@ def register_veo_routes(
                         }
                     )
                 base_instance["referenceImages"] = refs
-                if image_b64 or image_url:
-                    if not image_b64 and image_url:
-                        image_b64, image_mime_type = fetch_image_as_base64(image_url, proxy)
-                    base_instance["image"] = {
-                        "bytesBase64Encoded": image_b64,
-                        "mimeType": image_mime_type,
-                    }
 
             base_parameters, _, base_effective_duration = _build_common_generation_parameters(
                 base_payload, normalize_duration_seconds=normalize_duration_seconds
@@ -1638,6 +1624,9 @@ def register_veo_routes(
             image_mime_type = (payload.get("image_mime_type") or "image/png").strip()
             image_url = (payload.get("image_url") or "").strip()
             veo_mode = (payload.get("veo_mode") or "text").strip()
+            reference_urls = normalize_reference_urls(payload.get("reference_image_urls"))
+            reference_images_base64 = normalize_reference_images_base64(payload.get("reference_images_base64"))
+            reference_type = (payload.get("reference_type") or "asset").strip()
             if image_b64 and image_b64.startswith("data:image/"):
                 image_b64, image_mime_type = parse_data_url(image_b64)
 
@@ -1649,6 +1638,27 @@ def register_veo_routes(
                         inst["image"] = {"bytesBase64Encoded": ib, "mimeType": im}
                     elif image_b64:
                         inst["image"] = {"bytesBase64Encoded": image_b64, "mimeType": image_mime_type}
+                elif veo_mode == "reference":
+                    refs = []
+                    for ref in reference_images_base64[:3]:
+                        refs.append({
+                            "image": {
+                                "bytesBase64Encoded": ref["base64"],
+                                "mimeType": ref["mime_type"],
+                            },
+                            "referenceType": reference_type,
+                        })
+                    for ref_url in reference_urls[:3]:
+                        ref_b64, ref_mime = fetch_image_as_base64(ref_url, proxy)
+                        refs.append({
+                            "image": {
+                                "bytesBase64Encoded": ref_b64,
+                                "mimeType": ref_mime,
+                            },
+                            "referenceType": reference_type,
+                        })
+                    if refs:
+                        inst["referenceImages"] = refs
                 return inst
 
             base_params: dict = {"sampleCount": 1, "durationSeconds": segment_seconds, "aspectRatio": aspect_ratio}

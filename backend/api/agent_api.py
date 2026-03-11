@@ -711,7 +711,7 @@ def register_agent_routes(
                 "Content-Type": "application/json; charset=utf-8",
             }
             prompt = (
-                "You are a fashion ecommerce product analyst. "
+                "You are an ecommerce product analyst. "
                 f"Given 1-6 product images of the same product (count={len(image_items)}), infer key listing fields for a video-creation form. "
                 "Return JSON only, no markdown, no extra text. "
                 "Schema:\n"
@@ -722,11 +722,22 @@ def register_agent_routes(
                 '  "selling_points": ["point1", "point2"],\n'
                 '  "target_user": "optional short suggestion",\n'
                 '  "sales_region": "optional short suggestion",\n'
-                '  "brand_direction": "optional short suggestion"\n'
+                '  "brand_direction": "optional short suggestion",\n'
+                '  "product_anchors": {\n'
+                '    "category": "specific product subtype",\n'
+                '    "colors": ["main color 1", "main color 2"],\n'
+                '    "materials": ["material 1", "material 2"],\n'
+                '    "silhouette": "shape / outline / cut",\n'
+                '    "key_details": ["detail 1", "detail 2"],\n'
+                '    "keep_elements": ["must-keep feature 1", "must-keep feature 2"],\n'
+                '    "usage_scenarios": ["scenario 1", "scenario 2"],\n'
+                '    "avoid_elements": ["wrong category/material/style to avoid"]\n'
+                '  }\n'
                 "}\n"
                 "Rules: synthesize across all images and prefer consistent attributes; "
                 "keep concise; selling_points 1-4 items; "
-                "if uncertain use conservative defaults for fashion ecommerce.\n"
+                "if uncertain use conservative defaults for ecommerce. "
+                "product_anchors must focus on preserving product identity for later video generation.\n"
                 f"Output language for all human-readable fields: {'Chinese' if language == 'zh' else 'English'}. "
                 "Keep style_template strictly in: clean|lifestyle|premium|social."
             )
@@ -774,6 +785,26 @@ def register_agent_routes(
             if style_template not in {"clean", "lifestyle", "premium", "social"}:
                 style_template = "clean"
 
+            product_anchors = parsed.get("product_anchors", {})
+            if not isinstance(product_anchors, dict):
+                product_anchors = {}
+            def _norm_list(value, limit=6):
+                if isinstance(value, list):
+                    vals = [str(x).strip() for x in value if str(x).strip()]
+                else:
+                    vals = [x.strip() for x in re.split(r"[,\n;；，、]", str(value or "")) if x.strip()]
+                return vals[:limit]
+            product_anchors = {
+                "category": str(product_anchors.get("category") or "").strip(),
+                "colors": _norm_list(product_anchors.get("colors"), 5),
+                "materials": _norm_list(product_anchors.get("materials"), 5),
+                "silhouette": str(product_anchors.get("silhouette") or "").strip(),
+                "key_details": _norm_list(product_anchors.get("key_details"), 6),
+                "keep_elements": _norm_list(product_anchors.get("keep_elements"), 6),
+                "usage_scenarios": _norm_list(product_anchors.get("usage_scenarios"), 4),
+                "avoid_elements": _norm_list(product_anchors.get("avoid_elements"), 4),
+            }
+
             insight = {
                 "product_name": str(parsed.get("product_name") or "").strip(),
                 "main_business": str(parsed.get("main_business") or "").strip(),
@@ -782,6 +813,7 @@ def register_agent_routes(
                 "target_user": str(parsed.get("target_user") or "").strip(),
                 "sales_region": str(parsed.get("sales_region") or "").strip(),
                 "brand_direction": str(parsed.get("brand_direction") or "").strip(),
+                "product_anchors": product_anchors,
             }
 
             _dur_ms = int((time.monotonic() - _t0) * 1000)

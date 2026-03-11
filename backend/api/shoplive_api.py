@@ -65,6 +65,7 @@ def _build_shoplive_video_prompt_via_llm(
     duration = int(normalized.get("duration", 8) or 8)
     need_model = bool(normalized.get("need_model", True))
     script_excerpt = str(script_text or "").strip()
+    product_anchors = normalized.get("product_anchors", {}) if isinstance(normalized.get("product_anchors", {}), dict) else {}
     user_payload = {
         "product_name": normalized.get("product_name", ""),
         "main_category": normalized.get("main_category", ""),
@@ -75,6 +76,8 @@ def _build_shoplive_video_prompt_via_llm(
         "selling_region": normalized.get("sales_region", ""),
         "target_audience": normalized.get("target_user", ""),
         "brand_philosophy": normalized.get("brand_direction", "") or "Shoplive conversion-first ecommerce storytelling",
+        "image_count": int(normalized.get("image_count", 0) or 0),
+        "product_anchors": product_anchors,
         "duration_seconds": duration,
         "aspect_ratio": aspect_ratio,
         "need_model_showcase": need_model,
@@ -84,6 +87,7 @@ def _build_shoplive_video_prompt_via_llm(
             "aspect_ratio_must_be": aspect_ratio,
             "output_language": "zh",
             "output_format": "only final usable video prompt text, no explanation",
+            "must_lock_product_identity": True,
         },
     }
     messages = [
@@ -95,6 +99,7 @@ def _build_shoplive_video_prompt_via_llm(
                 "必须严格遵守输入中的时长与画幅，并充分利用 input_storyboard。"
                 "必须遵循最新规则：聚焦1-2个核心卖点；从4.1~4.6中选1个主框架+1个辅助框架；"
                 "输出应包含可执行镜头、光影、场景、情绪锚点与合规后缀。"
+                "如果提供了 product_anchors，必须锁定商品品类、颜色族、材质、轮廓和关键细节，禁止漂移到其他商品。"
                 "只输出最终可直接用于视频生成的一段提示词，不要解释。\n"
                 + json.dumps(user_payload, ensure_ascii=False, indent=2)
             ),
