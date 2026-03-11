@@ -413,6 +413,13 @@ def extract_tool_calls(response_data: Dict) -> List[Dict]:
     return message.get("tool_calls") or []
 
 
+def _make_retry_context(proxy: str):
+    """Return (proxy_candidates, total_attempt_slots) for retry loops."""
+    candidates = build_proxy_candidates(proxy)
+    slots = max(1, len(candidates) * 2)  # 2 attempts per route
+    return candidates, slots
+
+
 def call_litellm_chat(
     *,
     api_base: str,
@@ -435,9 +442,8 @@ def call_litellm_chat(
         return {"raw": resp.text}
 
     body = _build_litellm_body(model, messages, temperature, max_tokens, top_p, tools=tools)
-    proxy_candidates = build_proxy_candidates(proxy)
+    proxy_candidates, total_attempt_slots = _make_retry_context(proxy)
     max_attempts_per_route = 2
-    total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
     total_attempt = 0
     last_exception: Optional[Exception] = None
     last_retryable_status: Optional[int] = None
@@ -508,9 +514,8 @@ def call_litellm_chat_stream(
         return ""
 
     body = _build_litellm_body(model, messages, temperature, max_tokens, top_p, stream=True)
-    proxy_candidates = build_proxy_candidates(proxy)
+    proxy_candidates, total_attempt_slots = _make_retry_context(proxy)
     max_attempts_per_route = 2
-    total_attempt_slots = max(1, len(proxy_candidates) * max_attempts_per_route)
     total_attempt = 0
     last_exception: Optional[Exception] = None
     last_retryable_status: Optional[int] = None

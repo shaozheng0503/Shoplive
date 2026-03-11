@@ -587,6 +587,7 @@ const state = {
     localBgmName: "",
     localBgmDataUrl: "",
     activeModule: "mask",
+    _renderHash: "",
     timeline: {
       playhead: 0,
       selectedTrack: "mask",
@@ -2074,7 +2075,7 @@ function setupSurfaceFullscreen(surface) {
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     const req = surface.requestFullscreen || surface.webkitRequestFullscreen;
-    if (req) req.call(surface).then(() => applyVideoEditsToPreview()).catch(() => {});
+    if (req) req.call(surface).then(() => applyVideoEditsToPreview()).catch(err => console.debug('[shoplive]', err));
   });
   surface.appendChild(btn);
 
@@ -2242,7 +2243,7 @@ function applyVideoEditsToPreview() {
       }
       if (!video.paused) {
         const p = bgmAudio.play();
-        if (p && typeof p.catch === "function") p.catch(() => {});
+        if (p && typeof p.catch === "function") p.catch(err => console.debug('[shoplive]', err));
       }
     };
     if (!surface.dataset.bgmBound) {
@@ -2268,6 +2269,18 @@ function applyVideoEditsToPreview() {
 function renderVideoEditor() {
   if (!videoEditorPanel) return;
   if (!state.videoEditorOpen) return;
+  const _currentHash = JSON.stringify({
+    speed: state.videoEdit.speed,
+    maskText: state.videoEdit.maskText,
+    maskStyle: state.videoEdit.maskStyle,
+    temp: state.videoEdit.temp,
+    sat: state.videoEdit.sat,
+    bgmMood: state.videoEdit.bgmMood,
+    activeModule: state.videoEdit.activeModule,
+    localBgmName: state.videoEdit.localBgmName,
+  });
+  if (_currentHash === state.videoEdit._renderHash && videoEditorPanel?.innerHTML) return;
+  state.videoEdit._renderHash = _currentHash;
   const fx = state.videoEdit || {};
   ensureTimelineState();
   const tl = state.videoEdit.timeline;
@@ -2930,6 +2943,12 @@ function _renderMd(el, text) {
 
 function typewriter(el, text, speed = 24) {
   const content = String(text || "");
+  // Skip animation for long messages — instant render feels faster
+  if (content.length > 160) {
+    _renderMd(el, content);
+    scrollToBottom();
+    return;
+  }
   let i = 0;
   let accumulated = "";
   const tick = () => {
@@ -4010,7 +4029,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       const nextUrl = sourceCandidates[idx];
       video.src = nextUrl;
       const p = video.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
+      if (p && typeof p.catch === "function") p.catch(err => console.debug('[shoplive]', err));
       return;
     }
     if (!refreshedByOp) {
@@ -4019,7 +4038,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       if (refreshedUrl) {
         video.src = refreshedUrl;
         const p = video.play();
-        if (p && typeof p.catch === "function") p.catch(() => {});
+        if (p && typeof p.catch === "function") p.catch(err => console.debug('[shoplive]', err));
         return;
       }
     }
@@ -5712,7 +5731,7 @@ document.addEventListener("fullscreenchange", () => {
   if (!fsEl || fsEl.tagName !== "VIDEO") return;
   const surface = fsEl.closest(".video-edit-surface");
   if (!surface) return;
-  document.exitFullscreen().then(() => surface.requestFullscreen()).then(() => applyVideoEditsToPreview()).catch(() => {});
+  document.exitFullscreen().then(() => surface.requestFullscreen()).then(() => applyVideoEditsToPreview()).catch(err => console.debug('[shoplive]', err));
 });
 document.addEventListener("webkitfullscreenchange", () => {
   const fsEl = document.webkitFullscreenElement;

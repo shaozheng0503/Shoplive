@@ -1,4 +1,5 @@
 import base64
+import os
 import random
 import tempfile
 import time
@@ -63,13 +64,21 @@ def register_veo_routes(
 
     def _update_chain_job(job_id: str, **kwargs):
         now = time.time()
+        # O(1) update under lock
         with _chain_jobs_lock:
             job = _chain_jobs.get(job_id)
             if job:
                 job.update(kwargs)
                 if kwargs.get("status") in {"done", "failed"}:
                     job["finished_at"] = now
-            # Evict expired terminal jobs
+
+        # O(n) cleanup outside lock — runs occasionally, harmless if concurrent
+        _cleanup_chain_jobs()
+
+    def _cleanup_chain_jobs():
+        """Evict expired and over-limit jobs. Called after each update."""
+        now = time.time()
+        with _chain_jobs_lock:
             expired = [
                 k for k, v in _chain_jobs.items()
                 if v.get("status") in {"done", "failed"}
@@ -77,7 +86,7 @@ def register_veo_routes(
             ]
             for k in expired:
                 del _chain_jobs[k]
-            # Hard cap: evict oldest terminal job if still over limit
+            # Hard cap
             if len(_chain_jobs) > CHAIN_JOB_MAX:
                 terminal = [(k, v.get("finished_at", 0)) for k, v in _chain_jobs.items()
                             if v.get("status") in {"done", "failed"}]
@@ -205,7 +214,7 @@ def register_veo_routes(
         operation_name: str,
         poll_interval_seconds: int = 6,
         max_wait_seconds: int = 720,
-        initial_wait_seconds: int = 20,
+        initial_wait_seconds: int = int(os.environ.get("VEO_POLL_INITIAL_WAIT", "20")),
     ):
         started = time.time()
         last_data = {}

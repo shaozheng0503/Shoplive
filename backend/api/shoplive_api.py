@@ -10,6 +10,8 @@ from shoplive.backend.async_executor import _TTLCache
 # 5-min LLM response cache: key = (input_fingerprint, action, model)
 # Avoids re-calling LLM for identical brief + action within the same session.
 _llm_response_cache = _TTLCache(ttl_seconds=300, max_size=200)
+# Bump this when the LLM prompt template changes to invalidate stale cached responses.
+_LLM_CACHE_VERSION = "v1"
 
 
 def _build_shoplive_script_via_llm(
@@ -228,7 +230,7 @@ def register_shoplive_routes(
                 script_source = "template"
                 llm_error = ""
                 _ab_hash = hashlib.md5(api_base.encode()).hexdigest()[:6]
-                _script_cache_key = f"script:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(user_message.encode()).hexdigest()[:8]}"
+                _script_cache_key = f"script:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(user_message.encode()).hexdigest()[:8]}:{_LLM_CACHE_VERSION}"
                 _cached_script = _llm_response_cache.get(_script_cache_key)
                 if _cached_script:
                     script = _cached_script["script"]
@@ -292,7 +294,7 @@ def register_shoplive_routes(
                 prompt_source = "template_fallback"
                 llm_error = ""
                 _ab_hash = hashlib.md5(api_base.encode()).hexdigest()[:6]
-                _prompt_cache_key = f"prompt:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(script_text.encode()).hexdigest()[:8]}"
+                _prompt_cache_key = f"prompt:{input_fingerprint}:{_ab_hash}:{model}:{hashlib.md5(script_text.encode()).hexdigest()[:8]}:{_LLM_CACHE_VERSION}"
                 _cached_prompt = _llm_response_cache.get(_prompt_cache_key)
                 if _cached_prompt:
                     prompt_text = _cached_prompt["prompt"]

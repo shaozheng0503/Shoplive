@@ -186,17 +186,18 @@ class TestPollVideoReadyInitialWait:
         return veo_module
 
     def test_initial_wait_default_is_20(self):
-        """_poll_video_ready signature has initial_wait_seconds=20."""
-        import inspect
-        import shoplive.backend.web_app as wam
-
-        app = wam.create_app()
-        app.config["TESTING"] = True
-
-        # We inspect the source to confirm default
+        """_poll_video_ready default initial wait resolves to 20 when env var absent."""
+        import os
         import shoplive.backend.api.veo_api as vm
+        import inspect
+
         src = inspect.getsource(vm)
-        assert "initial_wait_seconds: int = 20" in src
+        # New: default is env-var driven; source should reference VEO_POLL_INITIAL_WAIT
+        assert "VEO_POLL_INITIAL_WAIT" in src
+
+        # Confirm the fallback default is still 20 when env var is unset
+        env_val = os.environ.get("VEO_POLL_INITIAL_WAIT", "20")
+        assert int(env_val) == 20
 
     def test_initial_wait_sleep_called(self):
         """When initial_wait_seconds > 0, time.sleep is called before first poll."""

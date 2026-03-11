@@ -8,6 +8,7 @@ from typing import Callable, Dict, Tuple
 
 import requests
 from flask import Response, g, jsonify, request, stream_with_context
+from shoplive.backend.async_executor import get_executor
 
 from shoplive.backend.audit import audit_log
 from shoplive.backend.async_executor import make_cache_key, product_insight_cache
@@ -44,14 +45,14 @@ _TOOL_ENDPOINT_MAP = {
 
 
 def _execute_agent_tool(tool_name: str, arguments: dict, timeout_seconds: float = 30.0,
-                        host_url: str = ""):
+                        host_url: str = "", trace_id: str = ""):
     """Execute a registered tool by name via Flask test_request_context.
 
     Returns (ok: bool, result: dict).
     host_url: if provided, passed as SERVER_NAME so inner views return correct absolute URLs.
     Importable at module level for testing.
     """
-    import concurrent.futures as _cf
+    import concurrent.futures as _cf  # noqa: F401 — kept for TimeoutError / cancel usage below
     if tool_name not in _TOOL_ENDPOINT_MAP:
         return False, {"error": f"Unknown tool: {tool_name}", "error_code": "UNKNOWN_TOOL"}
     view_name, path = _TOOL_ENDPOINT_MAP[tool_name]
@@ -64,6 +65,9 @@ def _execute_agent_tool(tool_name: str, arguments: dict, timeout_seconds: float 
         if host_url:
             _ctx_kwargs["base_url"] = host_url.rstrip("/") + "/"
         with _app.test_request_context(path, method="POST", json=arguments, **_ctx_kwargs):
+            if trace_id:
+                from shoplive.backend.audit import start_trace
+                start_trace(trace_id)
             view_func = _app.view_functions.get(view_name)
             if not view_func:
                 return False, {"error": f"View not registered: {view_name}", "error_code": "VIEW_NOT_FOUND"}
@@ -83,9 +87,7 @@ def _execute_agent_tool(tool_name: str, arguments: dict, timeout_seconds: float 
                 result.setdefault("error_code", "TOOL_SERVER_ERROR")
             return status < 400, result
 
-    _ex = _cf.ThreadPoolExecutor(max_workers=1)
-    future = _ex.submit(_run)
-    _ex.shutdown(wait=False)  # don't block; let thread run independently
+    future = get_executor().submit(_run)
     try:
         return future.result(timeout=timeout_seconds)
     except _cf.TimeoutError:
@@ -1199,7 +1201,8 @@ def register_agent_routes(
                             ok = False
                             result = {"error": f"Invalid tool arguments JSON: {parse_error}", "error_code": "ARGS_PARSE_ERROR"}
                         else:
-                            ok, result = _execute_agent_tool(tool_name, args, host_url=_host_url)
+                            _trace_id = getattr(g, "trace_id", "") or ""
+                            ok, result = _execute_agent_tool(tool_name, args, host_url=_host_url, trace_id=_trace_id)
                         tool_calls_made += 1
 
                         # Extract video_url for convenience
