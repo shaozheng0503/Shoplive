@@ -1615,8 +1615,18 @@ body {
   grid-auto-rows: minmax(0, 1fr);
 }
 
+/* workspace in mode-chat: single column, chat-shell fills full height */
 .workspace.mode-chat {
   grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  height: 100%;
+}
+
+.workspace.mode-chat .chat-shell {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .workspace.mode-two-video {
@@ -1861,7 +1871,7 @@ body {
 .workspace {
   flex: 1;
   min-height: 0;
-  height: auto;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -1906,6 +1916,27 @@ body {
   position: relative;
   isolation: isolate;
   overflow: hidden;
+  /* Always flex-column so chat-list can grow and scroll */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* chat-list must fill remaining space and be scrollable in ALL modes */
+.workspace .chat-list {
+  flex: 1 1 0;
+  min-height: 120px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/* composer must not shrink, always stays at bottom of chat-shell */
+.workspace .composer.composer-compact {
+  flex-shrink: 0;
+  position: relative !important;
+  bottom: auto !important;
+  margin: 0 0 0 !important;
 }
 
 .workspace .chat-shell::before {
@@ -3241,7 +3272,7 @@ body {
   box-shadow:
     0 14px 28px rgba(45, 72, 120, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .workspace .chat-list .video-msg .msg-card-meta {
@@ -3343,12 +3374,21 @@ body {
 
 .workspace .chat-list .video-msg video {
   width: min(392px, 100%);
-  max-height: 228px;
+  max-height: 280px;
+  min-height: 100px;
   display: block;
   border-radius: 14px;
   border: 1px solid #d4e0f3;
   background: #000;
   box-shadow: 0 10px 22px rgba(42, 68, 119, 0.14);
+}
+
+/* ensure video-edit-surface inside chat card doesn't collapse */
+.workspace .chat-list .video-msg .video-edit-surface {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  position: relative;
 }
 
 .workspace .chat-list .video-msg .video-actions {
@@ -3385,6 +3425,7 @@ body {
   background: linear-gradient(180deg, #edf5ff, #deebff);
 }
 
+/* video-edit-surface inside chat list: let video determine height */
 .video-edit-surface {
   position: relative;
   width: 100%;
@@ -3500,8 +3541,8 @@ body {
 
 .composer.composer-compact #chatInput {
   width: 100%;
-  min-height: 110px;
-  max-height: 48vh;
+  min-height: 64px !important;
+  max-height: 30vh;
   resize: vertical;
   overflow: auto;
   padding: 12px;
@@ -3530,10 +3571,82 @@ body {
 .composer.composer-compact #sendBtn {
   margin-left: auto;
   min-width: 116px;
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.32);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+}
+
+.composer.composer-compact #sendBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 20px rgba(37, 99, 235, 0.42);
+  filter: brightness(1.07);
+}
+
+.composer.composer-compact #sendBtn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.28);
+}
+
+.composer.composer-compact #sendBtn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.composer.composer-compact #sendBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.28), 0 6px 16px rgba(37, 99, 235, 0.28);
 }
 
 .composer.composer-compact #enhancePromptBtn {
-  min-width: 104px;
+  min-width: 100px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 182, 239, 0.88);
+  background: linear-gradient(180deg, #f5f9ff, #e8f2ff);
+  color: #2952a3;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 10px rgba(51, 90, 170, 0.1);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.composer.composer-compact #enhancePromptBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(100, 148, 220, 0.92);
+  background: linear-gradient(180deg, #edf5ff, #ddeaff);
+  box-shadow: 0 7px 14px rgba(51, 90, 170, 0.16);
+}
+
+.composer.composer-compact #enhancePromptBtn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(51, 90, 170, 0.12);
+}
+
+.composer.composer-compact #enhancePromptBtn:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.composer.composer-compact #enhancePromptBtn:focus-visible {
+  outline: none;
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.22);
 }
 
 .composer.composer-compact .compact-link-row {
@@ -3781,16 +3894,12 @@ body {
   max-height: 100% !important;
 }
 
+/* has-editors: override to grid layout for three-column mode */
 .workspace.has-editors .chat-shell {
   overflow: hidden;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
   min-height: 0 !important;
-}
-
-.workspace.has-editors .chat-shell,
-.workspace.has-editors .editor-panel {
-  margin-top: 0 !important;
 }
 
 .workspace.has-editors .chat-list {

@@ -273,7 +273,7 @@ const i18n = {
     agentReplyLabel: "Agent",
     agentReplyStatus: "回应",
     agentGuideStatus: "指引",
-    agentUpdateStatus: "状态更新",
+    agentUpdateStatus: "进度",
     cardStatusPending: "待确认",
     cardStatusReady: "可继续",
     cardStatusFilled: "已填写",
@@ -540,7 +540,7 @@ const i18n = {
     agentReplyLabel: "Agent",
     agentReplyStatus: "Reply",
     agentGuideStatus: "Guide",
-    agentUpdateStatus: "Status",
+    agentUpdateStatus: "Progress",
     cardStatusPending: "Pending",
     cardStatusReady: "Ready",
     cardStatusFilled: "Filled",
@@ -943,10 +943,24 @@ function clearCompletedTasks() {
 
 function scrollToTaskResult(taskId = "") {
   const task = state.taskMap?.[taskId];
-  if (!task?.resultCardId) return;
-  const card = chatList?.querySelector(`[data-task-card-id="${task.resultCardId}"]`);
-  if (!card || !chatList) return;
-  state.activeVideoCardId = String(task.resultCardId);
+  if (!task || !chatList) return;
+  let cardId = String(task.resultCardId || "");
+  let card = cardId ? chatList.querySelector(`[data-task-card-id="${cardId}"]`) : null;
+
+  // Recovery path: if card is missing but task has a playable result, rebuild
+  // the chat preview card so "View" always works.
+  if (!card) {
+    const recoverUrl = String(task.resultVideoUrl || state.lastVideoUrl || "").trim();
+    const recoverGcs = String(task.resultGcsUri || "").trim();
+    const recoverOp = String(task.resultOperationName || "").trim();
+    if (recoverUrl) {
+      const rebuiltId = renderGeneratedVideoCard(recoverUrl, recoverGcs, recoverOp, taskId);
+      cardId = String(rebuiltId || "");
+      card = cardId ? chatList.querySelector(`[data-task-card-id="${cardId}"]`) : null;
+    }
+  }
+  if (!card) return;
+  state.activeVideoCardId = cardId;
   updateActiveVideoCardState();
   const hostRect = chatList.getBoundingClientRect();
   const cardRect = card.getBoundingClientRect();
@@ -979,6 +993,7 @@ const smartOptionCache = {
   loading: null,
 };
 const CHAT_TAIL_LIMIT_WHEN_SPLIT = 3;
+let hasOpenEditors = false;
 
 function t(key, vars = {}) {
   const str = i18n[currentLang]?.[key] ?? i18n.zh[key] ?? key;
@@ -2004,7 +2019,7 @@ async function hydrateWorkflowTexts(force = false) {
 
 function applyWorkspaceMode() {
   if (!workspaceEl) return;
-  const hasOpenEditors = Boolean(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
+  hasOpenEditors = Boolean(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
   workspaceEl.classList.toggle("has-editors", hasOpenEditors);
   updateWorkspaceToolbarVisibility();
   workspaceEl.classList.toggle("entry-focus", Boolean(state.entryFocusMode && !state.canUseEditors));
@@ -2056,7 +2071,8 @@ function updateWorkspaceTabs() {
 
 function updateWorkspaceToolbarVisibility() {
   if (!workspaceToolbar) return;
-  workspaceToolbar.hidden = !(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
+  hasOpenEditors = Boolean(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
+  workspaceToolbar.hidden = !hasOpenEditors;
 }
 
 function updateToolbarIndicator() {
@@ -5132,6 +5148,12 @@ function renderChainSummary(chainResp) {
 }
 
 function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "") {
+  // Always return to chat-first preview mode after a new video is produced.
+  // Editors should open only when user clicks action buttons on the video card.
+  state.videoEditorOpen = false;
+  state.scriptEditorOpen = false;
+  applyWorkspaceMode();
+
   const sourceCandidates = buildVideoSourceCandidates(videoUrl, gcsUri);
   const finalPlayableUrl = sourceCandidates[0] || "";
   state.lastVideoUrl = finalPlayableUrl;
@@ -5172,11 +5194,13 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
 
   const surface = document.createElement("div");
   surface.className = "video-edit-surface";
+  surface.style.cssText = "display:block;width:100%;position:relative;";
 
   const video = document.createElement("video");
   video.controls = true;
   video.preload = "metadata";
   video.playsInline = true;
+  video.style.cssText = "display:block;width:100%;max-height:280px;border-radius:14px;background:#000;";
   // Disable native video fullscreen so the surface-level fullscreen (which
   // keeps overlays, color filter and BGM visible) is used instead.
   video.controlsList?.add?.("nofullscreen");
@@ -5257,13 +5281,29 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   card.querySelector(".openVideoEditorBtn")?.addEventListener("click", () => openCardEditors(false));
   card.querySelector(".openScriptEditorBtn")?.addEventListener("click", () => openCardEditors(true));
   if (taskId && state.taskMap?.[taskId]) {
-    updateVideoTask(taskId, { resultCardId: cardId });
+    updateVideoTask(taskId, {
+      resultCardId: cardId,
+      resultVideoUrl: finalPlayableUrl,
+      resultGcsUri: String(gcsUri || ""),
+      resultOperationName: String(operationName || ""),
+    });
   }
   applyWorkspaceMode();
   renderVideoEditor();
   renderScriptEditor();
   applyVideoEditsToPreview();
-  scrollToBottom();
+  // Video results should always be visible in chat immediately, even if the
+  // user previously scrolled up while waiting for polling/task updates.
+  _userScrolledUp = false;
+  _unreadCount = 0;
+  const badge = document.getElementById("scrollBotBadge");
+  if (badge) {
+    badge.hidden = true;
+    badge.textContent = "0";
+  }
+  if (chatList) {
+    chatList.scrollTo({ top: chatList.scrollHeight, behavior: "smooth" });
+  }
   return cardId;
 }
 
@@ -5627,6 +5667,13 @@ async function generateVideo(promptOverride = "") {
   if (!canStartVideoJob()) {
     pushSystemStateMsg(t("tooManyJobs"), "blocked");
     return;
+  }
+  // New generation should not keep old split-panel state.
+  // Keep chat list as the primary surface while task is running.
+  if (state.videoEditorOpen || state.scriptEditorOpen) {
+    state.videoEditorOpen = false;
+    state.scriptEditorOpen = false;
+    applyWorkspaceMode();
   }
   acquireVideoJobSlot();
   let slotReleased = false;
@@ -6955,8 +7002,10 @@ updateDurationOptions();
 updateGenerationGateUI();
 applyWorkspaceMode();
 consumeLandingParams();
-pushSystemGuideMsg(t("welcome"), { typewriter: true });
-if (state._landingHint) pushSystemGuideMsg(state._landingHint, { typewriter: true });
+const mergedWelcomeGuide = state._landingHint
+  ? `${t("welcome")} ${state._landingHint}`
+  : t("welcome");
+pushSystemGuideMsg(mergedWelcomeGuide, { typewriter: true });
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
 
 // ── Scroll-to-bottom FAB setup ──────────────────────────────────────────────
