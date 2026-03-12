@@ -458,6 +458,34 @@ def register_video_edit_routes(
                     )
                     mask_applied = True
 
+                # Batch ASR subtitles — each item: {text, start, end}
+                raw_subtitles = edits.get("subtitles") if isinstance(edits.get("subtitles"), list) else []
+                if raw_subtitles and drawtext_available:
+                    for sub in raw_subtitles[:30]:
+                        sub_text = str(sub.get("text") or "").strip() if isinstance(sub, dict) else ""
+                        if not sub_text:
+                            continue
+                        try:
+                            sub_start = max(0.0, float(sub.get("start") or 0))
+                            sub_end = max(sub_start + 0.05, float(sub.get("end") or sub_start + 2))
+                        except (TypeError, ValueError):
+                            continue
+                        safe_sub = escape_drawtext_text(sub_text)
+                        video_filters.append(
+                            "drawtext="
+                            f"text='{safe_sub}':"
+                            f"fontsize={text_size}:"
+                            f"fontcolor={mask_color}:"
+                            f"alpha={_fmt_float(mask_opacity, 3)}:"
+                            f"x={text_x_expr}:"
+                            f"y={text_y_expr}:"
+                            "box=1:"
+                            "boxcolor=black@0.28:"
+                            f"boxborderw=14:"
+                            f"enable='between(t,{_fmt_float(sub_start, 3)},{_fmt_float(sub_end, 3)})'"
+                        )
+                        mask_applied = True
+
                 cmd = [
                     "ffmpeg",
                     "-y",
