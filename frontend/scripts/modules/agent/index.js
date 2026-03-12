@@ -2126,6 +2126,7 @@ function applyWorkspaceMode() {
   updateWorkspaceTabs();
   updateChatTailWindow();
   updateActiveVideoCardState();
+  _updateEditCmdsBar();
 }
 
 function updateWorkspaceTabs() {
@@ -5013,6 +5014,21 @@ function extractVideoEditIntent(raw = "") {
     return { type: "asr" };
   }
 
+  // ── 0a-cover. overlay product image on video ──────────────────────────────
+  if (/(换封面|替换封面|叠加图|覆盖图|产品图.*叠|商品图.*放|把.*图.*放|图片.*覆盖|cover.*replace|overlay.*image|image.*overlay)/i.test(str)) {
+    // Parse scale: "缩小到20%" / "放大到60%" / "占视频40%"
+    const scaleM = str.match(/(\d+)\s*[%％]/);
+    const scale = scaleM ? Math.max(5, Math.min(100, parseInt(scaleM[1]))) / 100 : 0.35;
+    // Parse position
+    let position = "top-right";
+    if (/(左上|top.left)/i.test(str)) position = "top-left";
+    else if (/(右上|top.right)/i.test(str)) position = "top-right";
+    else if (/(左下|bottom.left)/i.test(str)) position = "bottom-left";
+    else if (/(右下|bottom.right)/i.test(str)) position = "bottom-right";
+    else if (/(居中|中间|中央|center)/i.test(str)) position = "center";
+    return { type: "coverReplace", scale, position };
+  }
+
   // ── 0b-multi. multi-segment keep: "保留1-3s和7-10s" ──────────────────────
   if (/(保留|裁剪|截取|trim|keep)/.test(str) && /(和|与|及|and|\+)/.test(str)) {
     const SEG_PAT = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/gi;
@@ -5183,6 +5199,9 @@ async function _dispatchSingleIntent(intent) {
       return true;
     case "asr":
       await applyAsrSubtitlesToCurrentVideo();
+      return true;
+    case "coverReplace":
+      await applyImageOverlayToCurrentVideo(intent);
       return true;
     case "multiTrim":
       await applyMultiTrimToCurrentVideo(intent);
@@ -5718,6 +5737,80 @@ async function applyAsrSubtitlesToCurrentVideo() {
   } catch (e) {
     const bodyEl = bubble?.querySelector("[data-msg-body]");
     if (bodyEl) bodyEl.textContent = zh ? `❌ 识别失败: ${e?.message || ""}` : `❌ Failed: ${e?.message || ""}`;
+    bubble?.classList.replace("status-tone-progress", "status-tone-blocked");
+  }
+}
+
+/**
+ * Overlay the first uploaded product image onto the current video using ffmpeg.
+ * Calls /api/video/overlay-image. Image source: state.images[0] (data-URL or {base64, mime}).
+ */
+async function applyImageOverlayToCurrentVideo({ scale = 0.35, position = "top-right" } = {}) {
+  const zh = currentLang === "zh";
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(zh ? "请先加载一段视频" : "Please load a video first", "blocked");
+    return;
+  }
+  // Find the first uploaded image
+  const imgs = Array.isArray(state.images) ? state.images : [];
+  if (!imgs.length) {
+    pushSystemStateMsg(
+      zh ? "未找到商品图，请先在工作区上传一张商品图" : "No product image found. Please upload one first.",
+      "blocked"
+    );
+    return;
+  }
+  const img = imgs[0];
+  // image can be a data URL string or an object with base64/mime
+  let imageBase64 = "";
+  let imageMime = "image/jpeg";
+  if (typeof img === "string" && img.startsWith("data:")) {
+    const comma = img.indexOf(",");
+    const header = img.slice(0, comma);
+    imageMime = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
+    imageBase64 = img.slice(comma + 1);
+  } else if (img && typeof img === "object") {
+    imageBase64 = String(img.base64 || "").replace(/^data:[^,]+,/, "");
+    imageMime = String(img.mime_type || img.mime || "image/jpeg");
+  }
+  if (!imageBase64) {
+    pushSystemStateMsg(zh ? "图片数据无效" : "Image data invalid", "blocked");
+    return;
+  }
+
+  const posLabel = { "top-left": "左上", "top-right": "右上", "center": "居中", "bottom-left": "左下", "bottom-right": "右下" };
+  const bubble = pushSystemStateMsg(
+    zh ? `🖼️ 叠加商品图（${posLabel[position] || position}，${Math.round(scale * 100)}%）…` : `🖼️ Overlaying product image…`,
+    "progress"
+  );
+  pushVideoUrlToHistory();
+  try {
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/overlay-image`,
+      {
+        video_url: state.lastVideoUrl,
+        image_base64: imageBase64,
+        image_mime_type: imageMime,
+        overlay_scale: scale,
+        overlay_position: position,
+      },
+      120000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? "✅ 商品图已叠加到视频" : "✅ Image overlaid on video";
+    bubble?.classList.replace("status-tone-progress", "status-tone-done");
+  } catch (_e) {
+    state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1);
+    _saveVideoHistory();
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? `❌ 叠加失败: ${_e?.message || ""}` : `❌ Overlay failed: ${_e?.message || ""}`;
     bubble?.classList.replace("status-tone-progress", "status-tone-blocked");
   }
 }
@@ -8040,12 +8133,68 @@ document.addEventListener("webkitfullscreenchange", () => {
   applyVideoEditsToPreview();
 });
 
+// ── Quick-edit command chips bar ─────────────────────────────────────────────
+let _editCmdsBar = null;
+
+const _EDIT_CMDS_ZH = [
+  { label: "✂️ 裁剪片段", cmd: "只保留第3到10秒" },
+  { label: "⚡ 加速1.5x", cmd: "整体加速1.5倍" },
+  { label: "🎨 提亮", cmd: "画面提亮一些" },
+  { label: "📝 自动字幕", cmd: "自动生成字幕" },
+  { label: "🖼️ 换封面", cmd: "换封面" },
+  { label: "↩️ 撤销", cmd: "撤销" },
+];
+const _EDIT_CMDS_EN = [
+  { label: "✂️ Trim", cmd: "keep 3s to 10s" },
+  { label: "⚡ 1.5x speed", cmd: "speed up 1.5x" },
+  { label: "🎨 Brighten", cmd: "brighten the video" },
+  { label: "📝 Auto subtitles", cmd: "auto subtitle" },
+  { label: "🖼️ Cover", cmd: "replace cover" },
+  { label: "↩️ Undo", cmd: "undo" },
+];
+
+function _initEditCmdsBar() {
+  if (!chatInput) return;
+  const bar = document.createElement("div");
+  bar.id = "editCmdsBar";
+  bar.className = "edit-cmds-bar";
+  bar.hidden = true;
+  chatInput.parentNode.insertBefore(bar, chatInput.nextSibling);
+  _editCmdsBar = bar;
+  _renderEditCmdsBar();
+}
+
+function _renderEditCmdsBar() {
+  if (!_editCmdsBar) return;
+  const cmds = currentLang === "zh" ? _EDIT_CMDS_ZH : _EDIT_CMDS_EN;
+  _editCmdsBar.innerHTML = cmds.map((c) =>
+    `<button class="edit-cmd-chip" data-cmd="${c.cmd}" type="button">${c.label}</button>`
+  ).join("");
+  _editCmdsBar.querySelectorAll(".edit-cmd-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (chatInput) {
+        chatInput.value = btn.dataset.cmd;
+        chatInput.focus();
+      }
+    });
+  });
+}
+
+function _updateEditCmdsBar() {
+  if (!_editCmdsBar) return;
+  const show = Boolean(state.lastVideoUrl) && SIMPLE_AGENT_MODE;
+  _editCmdsBar.hidden = !show;
+  // Re-render when language changes
+  _renderEditCmdsBar();
+}
+
 applyLang();
 syncSimpleControlsFromState();
 updateDurationOptions();
 updateGenerationGateUI();
 applyWorkspaceMode();
 _loadVideoHistory(); // restore undo stack from localStorage
+_initEditCmdsBar();  // quick-edit chips below chat input
 consumeLandingParams();
 const mergedWelcomeGuide = state._landingHint
   ? `${t("welcome")} ${state._landingHint}`

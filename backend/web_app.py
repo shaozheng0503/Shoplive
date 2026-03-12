@@ -676,7 +676,23 @@ def add_cors_headers(resp):
     return resp
 
 
-def create_app():
+def create_app(config=None):  # type: ignore[assignment]  # dict | None, Python 3.9 compat
+    """Return the Flask application, optionally applying config overrides.
+
+    Accepts a ``config`` dict whose keys are Flask config names, e.g.::
+
+        create_app({"TESTING": True, "SECRET_KEY": "test-secret"})
+
+    This enables proper test isolation: each test suite can call
+    ``create_app({"TESTING": True})`` and get a correctly configured
+    test client without modifying the global app state.
+
+    All routes and middleware are already registered at import time (module
+    level).  This function is the canonical public entry-point so that
+    ``gunicorn``, ``pytest``, and ``run.py`` all use the same factory.
+    """
+    if config:
+        app.config.update(config)
     return app
 
 

@@ -4584,3 +4584,36 @@ body {
     animation: none;
   }
 }
+
+/* ── Quick-edit command chips bar ──────────────────────────────────────────── */
+.edit-cmds-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 2px 2px;
+  margin-top: 4px;
+}
+.edit-cmds-bar[hidden] { display: none; }
+
+.edit-cmd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 10px;
+  border: 1px solid rgba(95, 140, 255, 0.35);
+  border-radius: 20px;
+  background: rgba(95, 140, 255, 0.08);
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+.edit-cmd-chip:hover {
+  background: rgba(95, 140, 255, 0.18);
+  border-color: rgba(95, 140, 255, 0.6);
+  transform: translateY(-1px);
+}
+.edit-cmd-chip:active {
+  transform: translateY(0);
+}

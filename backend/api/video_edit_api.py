@@ -864,3 +864,124 @@ def register_video_edit_routes(
             from shoplive.backend.common.helpers import json_error
             return json_error(f"ASR 失败: {exc}", 500, error_code="ASR_FAILED")
 
+    @app.post("/api/video/overlay-image")
+    def api_video_overlay_image():
+        """Overlay a product image on top of a video using ffmpeg.
+
+        Request JSON:
+            video_url       str   — source video URL (required)
+            image_base64    str   — base64-encoded image (PNG/JPEG, optional)
+            image_url       str   — image HTTP URL (optional if image_base64 not given)
+            image_mime_type str   — "image/png" | "image/jpeg" (default "image/png")
+            overlay_scale   float — overlay width as fraction of video width 0.05-1.0 (default 0.35)
+            overlay_position str  — "top-left"|"top-right"|"center"|"bottom-left"|"bottom-right" (default "top-right")
+            overlay_duration float — seconds to show overlay; 0 = entire video (default 0)
+            padding         int   — edge padding in pixels (default 20)
+            proxy           str   — optional proxy URL
+
+        Response JSON:
+            ok, video_url, file_name
+        """
+        from shoplive.backend.common.helpers import json_error, download_video_to_file
+        from shoplive.backend.infra import build_proxies, parse_common_payload
+        import requests as _req
+
+        payload = request.get_json(silent=True) or {}
+        video_url = str(payload.get("video_url") or "").strip()
+        if not video_url:
+            return json_error("video_url 不能为空", error_code="MISSING_VIDEO_URL")
+
+        image_b64 = str(payload.get("image_base64") or "").strip()
+        image_url_src = str(payload.get("image_url") or "").strip()
+        image_mime = str(payload.get("image_mime_type") or "image/png").strip()
+        if image_mime not in {"image/png", "image/jpeg"}:
+            image_mime = "image/png"
+
+        try:
+            overlay_scale = max(0.05, min(1.0, float(payload.get("overlay_scale") or 0.35)))
+        except Exception:
+            overlay_scale = 0.35
+        overlay_position = str(payload.get("overlay_position") or "top-right").strip()
+        try:
+            overlay_duration = max(0.0, float(payload.get("overlay_duration") or 0))
+        except Exception:
+            overlay_duration = 0.0
+        try:
+            padding = max(0, int(payload.get("padding") or 20))
+        except Exception:
+            padding = 20
+
+        proxy = str(payload.get("proxy") or "").strip()
+        proxies = build_proxies(proxy)
+
+        POSITION_MAP = {
+            "top-left":     f"{padding}:{padding}",
+            "top-right":    f"W-w-{padding}:{padding}",
+            "center":       "(W-w)/2:(H-h)/2",
+            "bottom-left":  f"{padding}:H-h-{padding}",
+            "bottom-right": f"W-w-{padding}:H-h-{padding}",
+        }
+        pos_expr = POSITION_MAP.get(overlay_position, POSITION_MAP["top-right"])
+
+        try:
+            # Resolve image data
+            if not image_b64 and image_url_src:
+                from shoplive.backend.common.helpers import fetch_image_as_base64
+                image_b64, image_mime = fetch_image_as_base64(image_url_src, proxy)
+            if not image_b64:
+                return json_error("image_base64 或 image_url 至少提供一个", error_code="MISSING_IMAGE")
+
+            # Decode base64 header if present
+            if "," in image_b64:
+                image_b64 = image_b64.split(",", 1)[1]
+            img_bytes = base64.b64decode(image_b64)
+            img_ext = "png" if "png" in image_mime else "jpg"
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp = Path(tmp_dir)
+                video_path = tmp / "input.mp4"
+                img_path = tmp / f"overlay.{img_ext}"
+
+                download_video_to_file(video_url, video_path, proxies=proxies)
+                img_path.write_bytes(img_bytes)
+
+                output_name = f"overlay-{uuid.uuid4().hex}.mp4"
+                output_path = video_edit_export_dir / output_name
+
+                scale_filter = f"[1:v]scale=iw*{overlay_scale:.3f}:-1[img]"
+                enable_expr = (
+                    f":enable='between(t,0,{overlay_duration:.3f})'"
+                    if overlay_duration > 0
+                    else ""
+                )
+                overlay_filter = f"[0:v][img]overlay={pos_expr}{enable_expr}[out]"
+                filter_complex = f"{scale_filter};{overlay_filter}"
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-i", str(img_path),
+                    "-filter_complex", filter_complex,
+                    "-map", "[out]",
+                    "-map", "0:a?",
+                    "-c:a", "copy",
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-movflags", "+faststart",
+                    str(output_path),
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if result.returncode != 0:
+                    return json_error(f"ffmpeg overlay 失败: {result.stderr[-300:]}", 500, error_code="FFMPEG_OVERLAY_FAILED")
+
+            base_url = request.host_url.rstrip("/")
+            return jsonify({
+                "ok": True,
+                "video_url": f"{base_url}/video-edits/{output_name}",
+                "file_name": output_name,
+            })
+
+        except Exception as exc:
+            return json_error(f"overlay 失败: {exc}", 500, error_code="OVERLAY_FAILED")
+
