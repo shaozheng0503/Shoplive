@@ -33,19 +33,23 @@
         <header class="topbar">
           <div class="brand">
             <img class="brand-logo" src="/assets/image.png" alt="Shoplive logo" />
-            <div class="brand-text">
-              <strong>SHOPLIVE</strong>
-              <span>STUDIO</span>
+            <div class="brand-signature">
+              <div class="brand-text">
+                <strong>SHOPLIVE</strong>
+                <span>STUDIO</span>
+              </div>
+              <span class="brand-badge" data-i18n="brandBadge">AI 视频工作台</span>
             </div>
           </div>
           <nav class="nav">
-            <a href="#" data-i18n="navFeatures">Features</a>
-            <a href="#" data-i18n="navSolutions">Solutions</a>
-            <a href="#" data-i18n="navResources">Resources</a>
-            <a href="#" data-i18n="navPricing">Pricing</a>
-            <a href="#" data-i18n="navCommunity">Community</a>
+            <a href="#" class="nav-link is-active" data-i18n="navFeatures">Features</a>
+            <a href="#" class="nav-link" data-i18n="navSolutions">Solutions</a>
+            <a href="#" class="nav-link" data-i18n="navResources">Resources</a>
+            <a href="#" class="nav-link" data-i18n="navPricing">Pricing</a>
+            <a href="#" class="nav-link" data-i18n="navCommunity">Community</a>
           </nav>
           <div class="top-actions">
+            <span class="nav-status-pill" data-i18n="navStatus">Product experience</span>
             <button id="langToggleBtn" class="lang-btn">
               <span class="lang-globe" aria-hidden="true">◉</span>
               <span class="lang-label">EN</span>
@@ -56,8 +60,17 @@
 
         <div class="hero-panel">
           <div class="left-copy">
-            <h1 data-i18n="line1">让创作回归简单：</h1>
+            <div class="hero-kicker" data-i18n="heroKicker">面向电商团队的 AI 视频工作台</div>
+            <h1 class="hero-title">
+              <span class="hero-line" data-i18n="heroLine1">上传商品图或链接，</span>
+              <span class="hero-line hero-line-strong" data-i18n="heroLine2">把想法直接变成视频。</span>
+            </h1>
             <p class="desc" data-i18n="desc">无需剪辑技能，Shoplive 自动化分析商品卖点，几分钟内直接产出专业级可用视频。</p>
+            <div class="hero-subpoints" aria-label="Hero capabilities">
+              <span data-i18n="heroPoint1">商品图驱动</span>
+              <span data-i18n="heroPoint2">商品链接解析</span>
+              <span data-i18n="heroPoint3">提示词增强生成</span>
+            </div>
           </div>
           <div class="right-cards">
             <article class="mini-card card-video">
@@ -106,6 +119,13 @@
         </div>
 
         <div class="input-row input-row-smart">
+          <div class="command-bar-head">
+            <div class="command-bar-kicker" data-i18n="commandBarKicker">从参考图、商品链接或一句提示词开始</div>
+            <div class="command-bar-status">
+              <span class="command-status-chip" data-i18n="commandStatus1">自动识别商品</span>
+              <span class="command-status-chip" data-i18n="commandStatus2">自动路由模型</span>
+            </div>
+          </div>
           <div class="input-main">
             <button id="openRefPanelBtn" class="ref-trigger" type="button">
               <span class="ref-icon" aria-hidden="true"></span>
@@ -135,6 +155,23 @@
               </label>
               <button id="enhancePromptBtn" class="secondary-btn" data-i18n="enhancePrompt">提示词增强</button>
             </div>
+          </div>
+          <div class="command-template-grid" aria-label="Quick prompt templates">
+            <button type="button" class="command-template-card is-active" data-fill-zh="为女装上新做一条 9:16 的短视频，突出版型、垂感和通勤氛围。" data-fill-en="Create a 9:16 launch video for women's apparel, highlighting silhouette, drape, and commuter mood." data-ratio="9:16" data-duration="8">
+              <span class="command-template-tag" data-i18n="commandTemplateTag1">模板 01</span>
+              <strong data-i18n="commandTemplateTitle1">女装上新 9:16</strong>
+              <small data-i18n="commandTemplateDesc1">适合新品发布、通勤穿搭和面料氛围表达</small>
+            </button>
+            <button type="button" class="command-template-card" data-fill-zh="为黑色跑鞋做一条材质细节特写视频，突出鞋底科技感和脚感支撑。" data-fill-en="Create a material-detail video for black running shoes, focusing on sole tech and support." data-ratio="16:9" data-duration="8">
+              <span class="command-template-tag" data-i18n="commandTemplateTag2">模板 02</span>
+              <strong data-i18n="commandTemplateTitle2">黑色跑鞋细节</strong>
+              <small data-i18n="commandTemplateDesc2">适合材质展示、鞋底科技感和镜头推进</small>
+            </button>
+            <button type="button" class="command-template-card" data-fill-zh="生成一条适合社媒投放的商品短视频，镜头节奏快，突出卖点和价格记忆点。" data-fill-en="Generate a social-ready product short video with fast pacing, clear selling points, and price recall." data-ratio="9:16" data-duration="6">
+              <span class="command-template-tag" data-i18n="commandTemplateTag3">模板 03</span>
+              <strong data-i18n="commandTemplateTitle3">社媒投放短视频</strong>
+              <small data-i18n="commandTemplateDesc3">适合快节奏转化、卖点记忆和广告投放</small>
+            </button>
           </div>
         </div>
         <p class="landing-note" data-i18n="uploadHint">上传商品图，描述你的商品信息和想要的视频风格…</p>

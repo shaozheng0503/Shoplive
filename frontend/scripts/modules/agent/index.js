@@ -114,6 +114,9 @@ const i18n = {
     taskClearDone: "清理已完成",
     taskCancel: "取消",
     taskCancelled: "已取消",
+    actionStateProgress: "进行中",
+    actionStateDone: "完成",
+    actionStateBlocked: "失败",
     enhanceWorking: "正在进行提示词增强，请稍候...",
     enhanceDone: "提示词增强完成，已更新输入框。",
     enhanceFail: "提示词增强失败，已保留原文。",
@@ -267,6 +270,27 @@ const i18n = {
     videoExportFail: "视频编辑导出失败，请稍后重试。",
     videoMaskUnsupported: "已完成导出，但当前环境不支持文字蒙版写入（drawtext 不可用）。",
     closePanel: "收起",
+    agentReplyLabel: "Agent",
+    agentReplyStatus: "回应",
+    agentGuideStatus: "指引",
+    agentUpdateStatus: "状态更新",
+    cardStatusPending: "待确认",
+    cardStatusReady: "可继续",
+    cardStatusFilled: "已填写",
+    cardDurationShort: "时长",
+    cardRatioShort: "比例",
+    flowStep: "步骤 {n}",
+    cardRecentResult: "最近结果",
+    cardCurrentContext: "当前上下文",
+    cardSwitchContext: "可切换编辑",
+    cardScriptBound: "已绑定脚本",
+    cardScriptNameShort: "脚本",
+    cardEditModeShort: "模式",
+    cardEditModeVideo: "视频编辑",
+    cardEditModeScript: "脚本编辑",
+    cardEditModeHybrid: "脚本 + 视频",
+    cardVideoEditorOpen: "视频编辑已绑定",
+    cardScriptEditorOpen: "脚本编辑已绑定",
     alreadySubmitted: "任务已提交，请等待生成完成；如需再次生成，请使用编辑面板里的“重新生成”。",
     tabScript: "分镜脚本",
     tabVideo: "视频编辑",
@@ -357,6 +381,9 @@ const i18n = {
     taskClearDone: "Clear done",
     taskCancel: "Cancel",
     taskCancelled: "Cancelled",
+    actionStateProgress: "In progress",
+    actionStateDone: "Done",
+    actionStateBlocked: "Failed",
     enhanceWorking: "Enhancing prompt, please wait...",
     enhanceDone: "Prompt enhancement completed and applied.",
     enhanceFail: "Prompt enhancement failed. Original prompt kept.",
@@ -510,6 +537,27 @@ const i18n = {
     videoExportFail: "Video edit export failed. Please try again.",
     videoMaskUnsupported: "Export succeeded, but text mask was skipped (drawtext unavailable).",
     closePanel: "Close",
+    agentReplyLabel: "Agent",
+    agentReplyStatus: "Reply",
+    agentGuideStatus: "Guide",
+    agentUpdateStatus: "Status",
+    cardStatusPending: "Pending",
+    cardStatusReady: "Ready",
+    cardStatusFilled: "Filled",
+    cardDurationShort: "Duration",
+    cardRatioShort: "Ratio",
+    flowStep: "Step {n}",
+    cardRecentResult: "Latest result",
+    cardCurrentContext: "Current context",
+    cardSwitchContext: "Switchable",
+    cardScriptBound: "Script bound",
+    cardScriptNameShort: "Script",
+    cardEditModeShort: "Mode",
+    cardEditModeVideo: "Video editor",
+    cardEditModeScript: "Script editor",
+    cardEditModeHybrid: "Script + Video",
+    cardVideoEditorOpen: "Video editor bound",
+    cardScriptEditorOpen: "Script editor bound",
     alreadySubmitted: "Task already submitted. Wait for completion, then use regenerate in editor panels if needed.",
     tabScript: "Storyboard",
     tabVideo: "Video Editor",
@@ -726,7 +774,7 @@ function openProductAssetPicker() {
 }
 
 function showProductAssetRequiredMessage(reason = "generate") {
-  pushMsg("system", reason === "enhance" ? t("assetRequiredEnhance") : t("assetRequiredGenerate"), { typewriter: false, error: true });
+  pushSystemStateMsg(reason === "enhance" ? t("assetRequiredEnhance") : t("assetRequiredGenerate"), "blocked");
   showUploadRefQuickAction();
 }
 
@@ -752,6 +800,8 @@ function renderTaskQueue() {
   if (!taskQueuePanel || !taskQueueList) return;
   const items = Object.values(state.taskMap || {}).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const doneCount = items.filter((item) => item.status === "done").length;
+  const runningCount = items.filter((item) => item.status === "running" || item.status === "queued").length;
+  const blockedCount = items.filter((item) => item.status === "failed" || item.status === "cancelled").length;
   if (!items.length) {
     taskQueuePanel.hidden = true;
     taskQueueList.innerHTML = "";
@@ -759,7 +809,15 @@ function renderTaskQueue() {
     return;
   }
   taskQueuePanel.hidden = false;
-  if (taskQueueTitle) taskQueueTitle.textContent = t("taskQueueTitle");
+  if (taskQueueTitle) {
+    const summaryTone = runningCount > 0 ? "status-dot-progress" : blockedCount > 0 ? "status-dot-blocked" : "status-dot-done";
+    const summaryText = runningCount > 0
+      ? `${runningCount} ${t("taskRunning")}`
+      : blockedCount > 0
+        ? `${blockedCount} ${t("taskFailed")}`
+        : `${doneCount} ${t("taskDone")}`;
+    taskQueueTitle.innerHTML = `<span>${t("taskQueueTitle")}</span><span class="task-state-badge ${summaryTone}">${sanitizeInputValue(summaryText)}</span>`;
+  }
   if (taskQueueClearBtn) {
     taskQueueClearBtn.textContent = t("taskClearDone");
     taskQueueClearBtn.disabled = doneCount <= 0;
@@ -779,6 +837,7 @@ function renderTaskQueue() {
 
       const stateText = isDone ? t("taskDone")
         : isFailed  ? t("taskFailed")
+          : item.status === "cancelled" ? t("taskCancelled")
           : isQueued  ? t("taskQueued")
             : t("taskRunning");
 
@@ -790,14 +849,26 @@ function renderTaskQueue() {
       const safeTitle = sanitizeInputValue(item.title || "Task");
       const canView   = Boolean(item.resultCardId);
       const canCancel = !isFinished && item.status !== "cancelled";
-      const viewBtn   = canView   ? `<button class="task-view-btn"   type="button" data-task-action="view"   data-task-id="${item.id}">${t("taskView")}</button>`   : "";
-      const cancelBtn = canCancel ? `<button class="task-cancel-btn" type="button" data-task-action="cancel" data-task-id="${item.id}">${t("taskCancel")}</button>` : "";
+      const viewBtn   = canView   ? `<button class="task-view-btn action-chip-btn action-chip-view"   type="button" data-task-action="view"   data-task-id="${item.id}">${t("taskView")}</button>`   : "";
+      const cancelBtn = canCancel ? `<button class="task-cancel-btn action-chip-btn action-chip-danger" type="button" data-task-action="cancel" data-task-id="${item.id}">${t("taskCancel")}</button>` : "";
 
       const timeStr  = finalSec !== null ? ` · ${finalSec}s` : "";
       const stageStr = safeStage ? ` · ${safeStage}` : "";
+      const stateTone = item.status === "done"
+        ? "status-dot-done"
+        : item.status === "failed" || item.status === "cancelled"
+          ? "status-dot-blocked"
+          : item.status === "queued"
+            ? "status-dot-info"
+            : "status-dot-progress";
 
       const statusCls = item.status === "cancelled" ? "failed" : (item.status || "running");
-      return `<div class="task-item ${statusCls}"><strong>${safeTitle}</strong><small>${stateText}${timeStr}${stageStr}${viewBtn}${cancelBtn}</small></div>`;
+      return `<div class="task-item ${statusCls}">
+        <strong>${safeTitle}</strong>
+        <small>
+          <span class="task-state-badge ${stateTone}">${stateText}</span>${timeStr}${stageStr}${viewBtn}${cancelBtn}
+        </small>
+      </div>`;
     })
     .join("");
 }
@@ -805,9 +876,14 @@ function renderTaskQueue() {
 function createVideoTask(durationLabel = "8s") {
   state.taskSeq = Number(state.taskSeq || 0) + 1;
   const id = `video-task-${Date.now()}-${state.taskSeq}`;
+  const provider = getModelProvider();
+  const sourceLabel = currentLang === "zh"
+    ? (provider === "veo" ? "Veo 图生视频" : "Grok 文生视频")
+    : (provider === "veo" ? "Veo image-to-video" : "Grok text-to-video");
   state.taskMap[id] = {
     id,
     title: `#${state.taskSeq} · ${durationLabel}`,
+    sourceLabel,
     status: "queued",
     stage: "",
     createdAt: Date.now(),
@@ -868,9 +944,18 @@ function clearCompletedTasks() {
 function scrollToTaskResult(taskId = "") {
   const task = state.taskMap?.[taskId];
   if (!task?.resultCardId) return;
-  const card = document.querySelector(`[data-task-card-id="${task.resultCardId}"]`);
-  if (!card) return;
-  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  const card = chatList?.querySelector(`[data-task-card-id="${task.resultCardId}"]`);
+  if (!card || !chatList) return;
+  state.activeVideoCardId = String(task.resultCardId);
+  updateActiveVideoCardState();
+  const hostRect = chatList.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const currentTop = chatList.scrollTop;
+  const targetTop = currentTop + (cardRect.top - hostRect.top) - ((hostRect.height - cardRect.height) / 2);
+  chatList.scrollTo({
+    top: Math.max(0, targetTop),
+    behavior: "smooth",
+  });
 }
 
 function canStartVideoJob() {
@@ -957,7 +1042,7 @@ function startLinkParseProgress() {
   ];
   const startedAt = Date.now();
   let stepIdx = 0;
-  const bubble = pushMsg("system", steps[0], { typewriter: false });
+  const bubble = pushSystemStateMsg(steps[0], "progress");
   const timer = setInterval(() => {
     const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
     if (sec < 20) {
@@ -981,7 +1066,7 @@ function renderWorkspaceTab(el, label, kind) {
     kind === "script"
       ? "<svg viewBox='0 0 24 24' aria-hidden='true'><rect x='5' y='3.5' width='14' height='17' rx='3'/><rect x='8' y='8' width='8' height='1.8' fill='white'/><rect x='8' y='12' width='8' height='1.8' fill='white'/><rect x='8' y='16' width='6' height='1.8' fill='white'/></svg>"
       : "<svg viewBox='0 0 24 24' aria-hidden='true'><rect x='3.5' y='5' width='12.5' height='14' rx='3'/><polygon points='10.5,9 10.5,15 14.8,12' fill='white'/><path d='M16 9 L20.5 6.5 V17.5 L16 15 Z'/></svg>";
-  el.innerHTML = `<span class="tab-icon">${iconSvg}</span><span class="tab-label">${safeLabel}</span>`;
+  el.innerHTML = `<span class="tab-icon">${iconSvg}</span><span class="tab-label">${safeLabel}</span><span class="tab-state-dot" aria-hidden="true"></span>`;
 }
 
 function applyLang() {
@@ -1308,7 +1393,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
   const startLabel = clips === 1
     ? (zh ? `⏳ Grok Video 生成中（约6s），请稍候…` : `⏳ Grok Video generating (~6s), please wait…`)
     : (zh ? `⏳ Grok Video：AI 拆分分镜中，分${clips}段生成…` : `⏳ Grok Video: splitting into ${clips} scenes with AI…`);
-  const pollBubble = pushMsg("system", startLabel, { typewriter: false });
+  const pollBubble = pushSystemStateMsg(startLabel, "progress");
   updateVideoTask(taskId, { status: "running", stage: zh ? "Grok 生成中" : "Grok generating" });
 
   try {
@@ -1355,9 +1440,9 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
         finalUrl = merged.url;
       } else {
         concatFailed = true;
-        pushMsg("system", zh
+        pushSystemStateMsg(zh
           ? `⚠️ 第${i}+${i + 1}段拼接失败（${merged.error}），已保留前 ${i * 6}s 视频。`
-          : `⚠️ Concat clip ${i}+${i + 1} failed (${merged.error}), keeping first ${i * 6}s.`);
+          : `⚠️ Concat clip ${i}+${i + 1} failed (${merged.error}), keeping first ${i * 6}s.`, "blocked");
         break;
       }
     }
@@ -1365,20 +1450,20 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
     const approxSec = clips * 6;
     if (pollBubble.parentNode) pollBubble.remove();
     if (clips === 1) {
-      pushMsg("system", zh ? `Grok Video 生成完成（约6s）。` : `Grok Video complete (~6s).`);
+      pushSystemStateMsg(zh ? `Grok Video 生成完成（约6s）。` : `Grok Video complete (~6s).`, "done");
     } else if (concatFailed) {
       // partial success already messaged inline above
     } else {
-      pushMsg("system", zh
+      pushSystemStateMsg(zh
         ? `Grok Video ${clips}段拼接完成（约${approxSec}s）。`
-        : `Grok Video ${clips}-clip concat done (~${approxSec}s).`);
+        : `Grok Video ${clips}-clip concat done (~${approxSec}s).`, "done");
     }
     updateVideoTask(taskId, { status: "done", stage: zh ? "完成" : "Done" });
     renderGeneratedVideoCard(finalUrl, "", "", taskId);
   } catch (e) {
     if (pollBubble.parentNode) pollBubble.remove();
     if (String(e?.message || "") === "CANCELLED" || state.taskMap?.[taskId]?.cancelRequested) return;
-    pushMsg("system", String(e?.message || "") || t("genFail"), { error: true });
+    pushSystemStateMsg(String(e?.message || "") || t("genFail"), "blocked");
     updateVideoTask(taskId, { status: "failed", stage: zh ? "失败" : "Failed" });
     throw e;
   }
@@ -1432,8 +1517,24 @@ function getActiveVideoCard() {
 function updateActiveVideoCardState() {
   if (!chatList) return;
   chatList.querySelectorAll(".video-msg.is-active").forEach((el) => el.classList.remove("is-active"));
-  const activeCard = getActiveVideoCard();
-  if (activeCard) activeCard.classList.add("is-active");
+  chatList.querySelectorAll(".video-msg").forEach((card) => {
+    const isActive = String(card.getAttribute("data-task-card-id") || "") === String(state.activeVideoCardId || "");
+    card.classList.toggle("is-active", isActive);
+    const ctxActive = card.querySelector(".card-status-active");
+    const ctxIdle = card.querySelector(".card-status-idle");
+    const bindVideo = card.querySelector(".card-binding-video-editor");
+    const bindScript = card.querySelector(".card-binding-script-editor");
+    const editMode = card.querySelector(".card-binding-edit-mode");
+    if (ctxActive) ctxActive.hidden = !isActive;
+    if (ctxIdle) ctxIdle.hidden = isActive;
+    if (bindVideo) bindVideo.hidden = !(isActive && state.videoEditorOpen);
+    if (bindScript) bindScript.hidden = !(isActive && state.scriptEditorOpen);
+    if (editMode) {
+      const label = getCurrentEditModeLabel();
+      editMode.hidden = !(isActive && label);
+      if (label) editMode.textContent = `${t("cardEditModeShort")} · ${label}`;
+    }
+  });
 }
 
 function focusActiveVideoCard(behavior = "smooth", block = "center") {
@@ -1903,6 +2004,8 @@ async function hydrateWorkflowTexts(force = false) {
 
 function applyWorkspaceMode() {
   if (!workspaceEl) return;
+  const hasOpenEditors = Boolean(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
+  workspaceEl.classList.toggle("has-editors", hasOpenEditors);
   updateWorkspaceToolbarVisibility();
   workspaceEl.classList.toggle("entry-focus", Boolean(state.entryFocusMode && !state.canUseEditors));
   if (!state.canUseEditors) {
@@ -1917,7 +2020,6 @@ function applyWorkspaceMode() {
     updateChatTailWindow();
     return;
   }
-  workspaceEl.classList.add("has-editors");
   const mode = state.videoEditorOpen && state.scriptEditorOpen
     ? "mode-three"
     : state.videoEditorOpen
@@ -1938,12 +2040,14 @@ function updateWorkspaceTabs() {
   if (toggleScriptTab) {
     const active = Boolean(state.scriptEditorOpen);
     toggleScriptTab.classList.toggle("is-active", active);
+    toggleScriptTab.dataset.state = active ? "progress" : "idle";
     toggleScriptTab.setAttribute("aria-pressed", active ? "true" : "false");
     toggleScriptTab.title = active ? `${t("tabScript")} · ${t("tabHideHint")}` : `${t("tabScript")} · ${t("tabShowHint")}`;
   }
   if (toggleVideoTab) {
     const active = Boolean(state.videoEditorOpen);
     toggleVideoTab.classList.toggle("is-active", active);
+    toggleVideoTab.dataset.state = active ? "progress" : "idle";
     toggleVideoTab.setAttribute("aria-pressed", active ? "true" : "false");
     toggleVideoTab.title = active ? `${t("tabVideo")} · ${t("tabHideHint")}` : `${t("tabVideo")} · ${t("tabShowHint")}`;
   }
@@ -1952,7 +2056,7 @@ function updateWorkspaceTabs() {
 
 function updateWorkspaceToolbarVisibility() {
   if (!workspaceToolbar) return;
-  workspaceToolbar.hidden = !state.canUseEditors;
+  workspaceToolbar.hidden = !(state.canUseEditors && (state.videoEditorOpen || state.scriptEditorOpen));
 }
 
 function updateToolbarIndicator() {
@@ -2029,6 +2133,26 @@ function parseStoryboardSegments(storyboardText = "") {
   return parts;
 }
 
+function getBoundScriptSummary(storyboardText = "") {
+  const parts = parseStoryboardSegments(storyboardText);
+  if (parts.length > 1) {
+    return currentLang === "zh" ? `${parts.length} 段分镜` : `${parts.length} scenes`;
+  }
+  const raw = String((parts[0] || storyboardText || "")).trim();
+  const firstLine = raw.split("\n").map((s) => s.trim()).find(Boolean) || "";
+  if (!firstLine) {
+    return currentLang === "zh" ? "单段脚本" : "single scene";
+  }
+  return firstLine.length > 20 ? `${firstLine.slice(0, 20)}…` : firstLine;
+}
+
+function getCurrentEditModeLabel() {
+  if (state.videoEditorOpen && state.scriptEditorOpen) return t("cardEditModeHybrid");
+  if (state.videoEditorOpen) return t("cardEditModeVideo");
+  if (state.scriptEditorOpen) return t("cardEditModeScript");
+  return "";
+}
+
 function renderScriptEditor() {
   if (!scriptEditorPanel) return;
   if (!state.scriptEditorOpen) return;
@@ -2073,7 +2197,7 @@ function renderScriptEditor() {
     <label class="editor-label">${t("promptLabel")}</label>
     <textarea id="promptTextarea" class="editor-textarea" rows="10">${sanitizeInputValue(state.lastPrompt || buildPrompt())}</textarea>
     <div class="editor-actions">
-      <button id="regenFromScriptBtn">${t("storyboardRegenerate")}</button>
+      <button id="regenFromScriptBtn" class="action-chip-btn action-chip-primary">${t("storyboardRegenerate")}</button>
     </div>
   `;
 
@@ -2090,6 +2214,8 @@ function renderScriptEditor() {
   });
 
   scriptEditorPanel.querySelector("#regenFromScriptBtn")?.addEventListener("click", async () => {
+    const btn = scriptEditorPanel.querySelector("#regenFromScriptBtn");
+    setActionButtonState(btn, "progress", t("storyboardRegenerate"));
     const currentSegCount = Number(state.duration || 8) >= 16 ? Math.floor(Number(state.duration) / 8) : 1;
     const segs = [];
     for (let i = 0; i < currentSegCount; i++) {
@@ -2105,7 +2231,15 @@ function renderScriptEditor() {
       state.lastStoryboard = segs[0] || "";
     }
     state.lastPrompt = scriptEditorPanel.querySelector("#promptTextarea")?.value?.trim() || buildPrompt();
-    await generateVideo(state.lastPrompt);
+    try {
+      await generateVideo(state.lastPrompt);
+      setActionButtonState(btn, "done", t("storyboardRegenerate"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
+    } catch (_e) {
+      setActionButtonState(btn, "blocked", t("storyboardRegenerate"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1800);
+      throw _e;
+    }
   });
 }
 
@@ -2694,9 +2828,9 @@ function renderVideoEditor() {
       </section>
     </div>
     <div class="editor-actions">
-      <button id="downloadVideoBtn" class="editor-btn-primary">${t("videoDownload")}</button>
-      <button id="regenFromVideoEditorBtn">${t("videoRegenerate")}</button>
-      <button id="resetVideoEditorBtn">${currentLang === "zh" ? "重置后处理" : "Reset post-edits"}</button>
+      <button id="downloadVideoBtn" class="action-chip-btn action-chip-primary">${t("videoDownload")}</button>
+      <button id="regenFromVideoEditorBtn" class="action-chip-btn action-chip-secondary">${t("videoRegenerate")}</button>
+      <button id="resetVideoEditorBtn" class="action-chip-btn action-chip-danger">${currentLang === "zh" ? "重置后处理" : "Reset post-edits"}</button>
     </div>
   `;
   const speedSelect = videoEditorPanel.querySelector("#videoEditSpeed");
@@ -2868,14 +3002,16 @@ function renderVideoEditor() {
     if (playheadLine) playheadLine.style.left = `${Math.max(0, Math.min(100, (sec / maxSec) * 100))}%`;
     syncVideoFromPlayhead();
   };
-  const updatePendingTip = (msg = "") => {
+  const updatePendingTip = (msg = "", tone = "info") => {
     if (!pendingTip) return;
     pendingTip.textContent = String(msg || "").trim() || t("timelinePendingIdle");
+    pendingTip.dataset.state = tone;
   };
-  const flashTimelineToast = (msg = "") => {
+  const flashTimelineToast = (msg = "", tone = "info") => {
     if (!miniToast) return;
     miniToast.textContent = String(msg || "").trim();
     if (!miniToast.textContent) return;
+    miniToast.dataset.state = tone;
     miniToast.classList.add("is-show");
     if (state.videoEdit._timelineToastTimer) {
       clearTimeout(state.videoEdit._timelineToastTimer);
@@ -2888,7 +3024,9 @@ function renderVideoEditor() {
   const pendingToastText = String(state.videoEdit._timelineToastNext || "").trim();
   if (pendingToastText) {
     state.videoEdit._timelineToastNext = "";
-    setTimeout(() => flashTimelineToast(pendingToastText), 0);
+    const pendingTone = String(state.videoEdit._timelineToastTone || "info");
+    state.videoEdit._timelineToastTone = "";
+    setTimeout(() => flashTimelineToast(pendingToastText, pendingTone), 0);
   }
   const updatePendingPreview = (trackEl, track, hoverSec) => {
     if (!trackEl) return;
@@ -2981,7 +3119,7 @@ function renderVideoEditor() {
       updatePlayheadUI();
       state.videoEdit.timeline.pendingRangeStart = { track, sec: startSec };
       state.videoEdit.timeline.pendingRangeHoverSec = startSec;
-      updatePendingTip(t("timelinePendingArmed", { time: fmtSec(startSec) }));
+        updatePendingTip(t("timelinePendingArmed", { time: fmtSec(startSec) }), "progress");
       updatePendingPreview(trackNode, track, startSec);
       trackNode.classList.add("is-drag-creating");
       const onMove = (moveEv) => {
@@ -3001,8 +3139,10 @@ function renderVideoEditor() {
         const committed = commitPendingRange(track, sec);
         if (committed) {
           state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+          state.videoEdit._timelineToastTone = "done";
         } else {
           state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+          state.videoEdit._timelineToastTone = "blocked";
         }
         renderVideoEditor();
       };
@@ -3053,13 +3193,14 @@ function renderVideoEditor() {
       if (!pending || pending.track !== track) {
         state.videoEdit.timeline.pendingRangeStart = { track, sec };
         state.videoEdit.timeline.pendingRangeHoverSec = null;
-        updatePendingTip(t("timelinePendingArmed", { time: fmtSec(sec) }));
+        updatePendingTip(t("timelinePendingArmed", { time: fmtSec(sec) }), "progress");
         renderVideoEditor();
         return;
       }
       const committed = commitPendingRange(track, sec);
       if (committed) {
         state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+        state.videoEdit._timelineToastTone = "done";
       }
       renderVideoEditor();
     });
@@ -3073,6 +3214,7 @@ function renderVideoEditor() {
       state.videoEdit.timeline.pendingRangeStart = null;
       state.videoEdit.timeline.pendingRangeHoverSec = null;
       state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+      state.videoEdit._timelineToastTone = "blocked";
       renderVideoEditor();
       return;
     }
@@ -3083,6 +3225,7 @@ function renderVideoEditor() {
         state.videoEdit.timeline.pendingRangeStart = null;
         state.videoEdit.timeline.pendingRangeHoverSec = null;
         state.videoEdit._timelineToastNext = t("timelinePendingCancelled");
+        state.videoEdit._timelineToastTone = "blocked";
         renderVideoEditor();
         return;
       }
@@ -3092,6 +3235,7 @@ function renderVideoEditor() {
       const committed = commitPendingRange(track, endSec);
       if (committed) {
         state.videoEdit._timelineToastNext = t("timelinePendingCommitted", { start: fmtSec(committed.start), end: fmtSec(committed.end) });
+        state.videoEdit._timelineToastTone = "done";
       }
       renderVideoEditor();
     }
@@ -3312,8 +3456,13 @@ function renderVideoEditor() {
     applyWorkspaceMode();
   });
   videoEditorPanel.querySelector("#downloadVideoBtn")?.addEventListener("click", async () => {
+    const btn = videoEditorPanel.querySelector("#downloadVideoBtn");
+    setActionButtonState(btn, "progress", t("videoDownload"));
     const url = state.lastVideoUrl;
-    if (!url) return;
+    if (!url) {
+      setActionButtonState(btn, "idle");
+      return;
+    }
     try {
       // Fetch as blob so the browser triggers a real download instead of navigation
       const resp = await fetch(url);
@@ -3326,12 +3475,17 @@ function renderVideoEditor() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      setActionButtonState(btn, "done", t("videoDownload"));
     } catch (_e) {
       // Fallback: open in new tab
       window.open(url, "_blank", "noopener");
+      setActionButtonState(btn, "blocked", t("videoDownload"));
     }
+    setTimeout(() => setActionButtonState(btn, "idle"), 1400);
   });
   videoEditorPanel.querySelector("#regenFromVideoEditorBtn")?.addEventListener("click", async () => {
+    const btn = videoEditorPanel.querySelector("#regenFromVideoEditorBtn");
+    setActionButtonState(btn, "progress", t("videoRegenerate"));
     const pickValue = (selector, fallback) => {
       const el = videoEditorPanel.querySelector(selector);
       return el ? el.value : fallback;
@@ -3368,10 +3522,12 @@ function renderVideoEditor() {
     };
     if (!state.lastVideoUrl) {
       applyVideoEditsToPreview();
-      pushMsg("system", t("videoApplyDone"));
+      pushSystemStateMsg(t("videoApplyDone"), "done");
+      setActionButtonState(btn, "done", t("videoRegenerate"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
-    pushMsg("system", t("videoExporting"));
+    pushSystemStateMsg(t("videoExporting"), "progress");
     try {
       const base = getApiBase();
       const resp = await postJson(
@@ -3390,14 +3546,17 @@ function renderVideoEditor() {
       });
       renderVideoEditor();
       applyVideoEditsToPreview();
-      pushMsg("system", t("videoApplyDone"));
+      pushSystemStateMsg(t("videoApplyDone"), "done");
       if (state.videoEdit.maskText && resp?.mask_applied === false) {
-        pushMsg("system", t("videoMaskUnsupported"));
+      pushSystemStateMsg(t("videoMaskUnsupported"), "blocked");
       }
+      setActionButtonState(btn, "done", t("videoRegenerate"));
     } catch (_e) {
       applyVideoEditsToPreview();
-      pushMsg("system", t("videoExportFail"), { error: true });
+      pushSystemStateMsg(t("videoExportFail"), "blocked");
+      setActionButtonState(btn, "blocked", t("videoRegenerate"));
     }
+    setTimeout(() => setActionButtonState(btn, "idle"), 1600);
   });
   videoEditorPanel.querySelector("#resetVideoEditorBtn")?.addEventListener("click", () => {
     revokeLocalObjectUrl(state.videoEdit.localBgmUrl || "");
@@ -3521,6 +3680,17 @@ function pushStreamingMsg(role) {
   const el = document.createElement("article");
   el.className = `msg ${role} is-streaming`;
   _attachHoverBar(el, role);
+  let body = el;
+  if (role === "system") {
+    const inferred = inferSystemCardMeta("", { cardKind: "status" });
+    const meta = createSystemCardMeta(inferred.label, inferred.status, inferred.kind, inferred.tone);
+    body = document.createElement("div");
+    body.className = "msg-body";
+    body.setAttribute("data-msg-body", "1");
+    el.classList.add("has-card-meta");
+    el.appendChild(meta);
+    el.appendChild(body);
+  }
   chatList.appendChild(el);
   _applyGroupRadius();
   scrollToBottom();
@@ -3529,7 +3699,7 @@ function pushStreamingMsg(role) {
     el,
     append(delta) {
       accumulated += delta;
-      _renderMd(el, accumulated);
+      _renderMd(body, accumulated);
       scrollToBottom();
     },
     finish() {
@@ -3577,7 +3747,8 @@ function _attachHoverBar(el, role) {
   `;
   bar.querySelector('[data-action="copy"]')?.addEventListener("click", async (e) => {
     e.stopPropagation();
-    const content = (el.innerText || el.textContent || "").trim();
+    const bodyNode = el.querySelector("[data-msg-body]");
+    const content = ((bodyNode?.innerText || bodyNode?.textContent || el.innerText || el.textContent || "")).trim();
     try {
       await navigator.clipboard.writeText(content);
     } catch (_) {
@@ -3610,6 +3781,102 @@ function _attachHoverBar(el, role) {
   el.appendChild(bar);
 }
 
+function createSystemCardMeta(label = "", status = "", kind = "reply", tone = "neutral") {
+  const meta = document.createElement("div");
+  meta.className = `msg-card-meta msg-card-meta-${kind} status-tone-${tone}`;
+  const safeLabel = String(label || "").trim();
+  const safeStatus = String(status || "").trim();
+  meta.innerHTML = `
+    <span class="msg-card-label">${safeLabel}</span>
+    ${safeStatus ? `<span class="msg-card-status">${safeStatus}</span>` : ""}
+  `;
+  return meta;
+}
+
+function inferSystemCardMeta(text = "", opts = {}) {
+  if (opts.cardKind === "guide") {
+    return { label: t("agentReplyLabel"), status: t("agentGuideStatus"), kind: "guide", tone: "neutral" };
+  }
+  if (opts.cardKind === "status") {
+    return { label: t("agentReplyLabel"), status: t("agentUpdateStatus"), kind: "status", tone: String(opts.tone || "progress") };
+  }
+  if (opts.cardKind === "reply") {
+    return { label: t("agentReplyLabel"), status: "", kind: "reply", tone: "neutral" };
+  }
+  const raw = String(text || "").trim();
+  if (/失败|超时|异常|取消|权限|缺少|阻塞|重试|failed|timeout|error|cancel|retry|blocked|permission/i.test(raw)) {
+    return { label: t("agentReplyLabel"), status: t("agentUpdateStatus"), kind: "status", tone: "blocked" };
+  }
+  if (/已完成|完成|已应用|已提交|已收到|done|completed|applied|submitted|received/i.test(raw)) {
+    return { label: t("agentReplyLabel"), status: t("agentUpdateStatus"), kind: "status", tone: "done" };
+  }
+  if (/正在|进行中|已开始|已完成|完成|失败|导出|轮询|识别|解析|生成中|处理中|等待|提交|重试|polling|generating|processing|completed|failed|exporting|submitted|retry/i.test(raw)) {
+    return { label: t("agentReplyLabel"), status: t("agentUpdateStatus"), kind: "status", tone: "progress" };
+  }
+  if (/请|点击|选择|上传|补充|继续|确认|输入|告诉我|先|下一步|立即|click|choose|upload|confirm|continue|provide|tell me|next/i.test(raw)) {
+    return { label: t("agentReplyLabel"), status: t("agentGuideStatus"), kind: "guide", tone: "neutral" };
+  }
+  return { label: t("agentReplyLabel"), status: "", kind: "reply", tone: "neutral" };
+}
+
+function pushSystemStateMsg(text, tone = "progress", extra = {}) {
+  return pushMsg("system", text, {
+    typewriter: false,
+    cardKind: "status",
+    tone,
+    ...extra,
+  });
+}
+
+function pushSystemGuideMsg(text, extra = {}) {
+  return pushMsg("system", text, {
+    typewriter: false,
+    cardKind: "guide",
+    ...extra,
+  });
+}
+
+function pushSystemReplyMsg(text, extra = {}) {
+  return pushMsg("system", text, {
+    typewriter: false,
+    cardKind: "reply",
+    ...extra,
+  });
+}
+
+function setActionButtonState(btn, state = "idle", label = "") {
+  if (!btn) return;
+  const nextState = ["idle", "loading", "progress", "done", "blocked"].includes(String(state))
+    ? String(state)
+    : "idle";
+  const baseLabel = btn.dataset.baseLabel || btn.textContent || "";
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = baseLabel;
+  btn.classList.add("action-chip-btn");
+  btn.dataset.actionState = nextState;
+  if (nextState === "idle") {
+    btn.disabled = false;
+    btn.removeAttribute("aria-busy");
+    btn.dataset.loading = "false";
+    btn.textContent = btn.dataset.baseLabel;
+    return;
+  }
+  const isLoading = nextState === "loading" || nextState === "progress";
+  btn.disabled = isLoading;
+  if (isLoading) {
+    btn.setAttribute("aria-busy", "true");
+    btn.dataset.loading = "true";
+  } else {
+    btn.removeAttribute("aria-busy");
+    btn.dataset.loading = "false";
+  }
+  const stateLabel = nextState === "done"
+    ? t("actionStateDone")
+    : nextState === "blocked"
+      ? t("actionStateBlocked")
+      : t("actionStateProgress");
+  btn.textContent = `${label || btn.dataset.baseLabel} · ${stateLabel}`;
+}
+
 function pushMsg(role, text, opts = {}) {
   if (state.entryFocusMode) {
     state.entryFocusMode = false;
@@ -3624,20 +3891,43 @@ function pushMsg(role, text, opts = {}) {
 
   if (opts.error) {
     // Error bubble: icon + text, no typewriter
+    const meta = createSystemCardMeta(t("agentReplyLabel"), t("agentUpdateStatus"), "status", "blocked");
+    el.classList.add("has-card-meta", "status-tone-blocked", "msg-kind-status");
+    const body = document.createElement("div");
+    body.className = "msg-error-body";
     const icon = document.createElement("span");
     icon.className = "msg-error-icon";
     icon.textContent = "⚠️";
     const textNode = document.createElement("span");
     textNode.textContent = text;
-    el.appendChild(icon);
-    el.appendChild(textNode);
+    body.appendChild(icon);
+    body.appendChild(textNode);
+    el.classList.add("has-card-meta");
+    el.appendChild(meta);
+    el.appendChild(body);
     return el;
   }
 
   if (role === "system" && opts.typewriter !== false) {
-    typewriter(el, text, opts.speed || 22);
+    const inferred = inferSystemCardMeta(text, opts);
+    const meta = createSystemCardMeta(inferred.label, inferred.status, inferred.kind, inferred.tone);
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.setAttribute("data-msg-body", "1");
+    el.classList.add("has-card-meta", `status-tone-${inferred.tone}`, `msg-kind-${inferred.kind}`);
+    el.appendChild(meta);
+    el.appendChild(body);
+    typewriter(body, text, opts.speed || 22);
   } else if (role === "system") {
-    _renderMd(el, text);
+    const inferred = inferSystemCardMeta(text, opts);
+    const meta = createSystemCardMeta(inferred.label, inferred.status, inferred.kind, inferred.tone);
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.setAttribute("data-msg-body", "1");
+    el.classList.add("has-card-meta", `status-tone-${inferred.tone}`, `msg-kind-${inferred.kind}`);
+    el.appendChild(meta);
+    el.appendChild(body);
+    _renderMd(body, text);
   } else {
     el.textContent = text;
   }
@@ -3737,7 +4027,7 @@ function showImagePreview(src, name) {
 }
 
 function showUploadRefQuickAction() {
-  const box = pushMsg("system", "", { typewriter: false });
+  const box = pushSystemGuideMsg("");
   renderOptions(box, [
     {
       title: t("uploadNow"),
@@ -3748,16 +4038,14 @@ function showUploadRefQuickAction() {
 }
 
 function showUploadScreenshotGuide() {
-  pushMsg(
-    "system",
+  pushSystemGuideMsg(
     [
       t("uploadGuideTitle"),
       `- ${t("uploadGuideItem1")}`,
       `- ${t("uploadGuideItem2")}`,
       `- ${t("uploadGuideItem3")}`,
       `- ${t("uploadGuideItem4")}`,
-    ].join("\n"),
-    { typewriter: false }
+    ].join("\n")
   );
 }
 
@@ -3898,7 +4186,7 @@ function applyInsightToState(insight = {}) {
 
 function startInsightProgress() {
   const startedAt = Date.now();
-  const bubble = pushMsg("system", nextInsightPulseLine(), { typewriter: false });
+  const bubble = pushSystemStateMsg(nextInsightPulseLine(), "progress");
   let warned = false;
   const timer = setInterval(() => {
     const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
@@ -3939,7 +4227,7 @@ async function analyzeImageInsight(imageItems = []) {
 
 function askRegion() {
   state.stage = "awaitRegion";
-  const box = pushMsg("system", t("pickRegion"), { typewriter: false });
+  const box = pushSystemGuideMsg(t("pickRegion"));
   const picker = document.createElement("div");
   picker.className = "region-picker";
   const search = document.createElement("input");
@@ -3985,7 +4273,7 @@ function askRegion() {
         });
         state.salesRegion = title;
         pushMsg("user", `${item.flag} ${title}`, { typewriter: false });
-        pushMsg("system", withLead(t("regionAck", { value: title }), "region"));
+        pushSystemReplyMsg(withLead(t("regionAck", { value: title }), "region"));
         askTarget();
       });
       list.appendChild(btn);
@@ -4009,7 +4297,7 @@ function askRegion() {
 
 async function askTarget() {
   state.stage = "awaitTarget";
-  const box = pushMsg("system", t("pickTarget"), { typewriter: false });
+  const box = pushSystemGuideMsg(t("pickTarget"));
   const smartPools = await ensureSmartOptionPools();
   const targetSource = smartPools?.targetPool?.length
     ? pickOptionBatch(smartPools.targetPool, state.targetBatchIdx, 3)
@@ -4021,7 +4309,7 @@ async function askTarget() {
       if (state.stage !== "awaitTarget") return;
       state.targetUser = opt.title;
       pushMsg("user", opt.title, { typewriter: false });
-      pushMsg("system", withLead(t("targetAck", { value: opt.title }), "target"));
+      pushSystemReplyMsg(withLead(t("targetAck", { value: opt.title }), "target"));
       askBrand();
     },
   }));
@@ -4038,7 +4326,7 @@ async function askTarget() {
 
 async function askBrand() {
   state.stage = "awaitBrand";
-  const box = pushMsg("system", t("pickBrand"), { typewriter: false });
+  const box = pushSystemGuideMsg(t("pickBrand"));
   const smartPools = await ensureSmartOptionPools();
   const brandSource = smartPools?.brandPool?.length
     ? pickOptionBatch(smartPools.brandPool, state.brandBatchIdx, 3)
@@ -4050,7 +4338,7 @@ async function askBrand() {
       if (state.stage !== "awaitBrand") return;
       state.brandInfo = opt.title;
       pushMsg("user", opt.title, { typewriter: false });
-      pushMsg("system", withLead(t("brandAck", { value: opt.title }), "brand"));
+      pushSystemReplyMsg(withLead(t("brandAck", { value: opt.title }), "brand"));
       askForPointsOrSummary();
     },
   }));
@@ -4067,7 +4355,7 @@ async function askBrand() {
     desc: t("skipDesc"),
     onClick: () => {
       pushMsg("user", t("skip"), { typewriter: false });
-      pushMsg("system", withLead(t("skipBrand"), "general"));
+      pushSystemReplyMsg(withLead(t("skipBrand"), "general"));
       askForPointsOrSummary();
     },
   });
@@ -4081,14 +4369,14 @@ function askForPointsOrSummary() {
     return;
   }
   if (!state.sellingPoints) {
-    pushMsg("system", t("askPoints"));
+    pushSystemGuideMsg(t("askPoints"));
     return;
   }
   showSummaryCard();
 }
 
 function showContinueAfterSkipStep() {
-  const box = pushMsg("system", t("continueChatPrompt"), { typewriter: false });
+  const box = pushSystemGuideMsg(t("continueChatPrompt"));
   renderOptions(box, [
     {
       title: t("continueChatBtn"),
@@ -4096,7 +4384,7 @@ function showContinueAfterSkipStep() {
       onClick: () => {
         pushMsg("user", t("continueChatAck"), { typewriter: false });
         state.stage = "awaitPoints";
-        if (!state.sellingPoints) pushMsg("system", t("askPoints"));
+        if (!state.sellingPoints) pushSystemGuideMsg(t("askPoints"));
         else if (!state.summaryShown) showSummaryCard();
         else showQuickGenerateButton();
         chatInput?.focus();
@@ -4106,7 +4394,7 @@ function showContinueAfterSkipStep() {
 }
 
 function showUploadOptionalStep() {
-  const box = pushMsg("system", t("askUploadOptional"), { typewriter: false });
+  const box = pushSystemGuideMsg(t("askUploadOptional"));
   renderOptions(box, [
     {
       title: t("uploadNow"),
@@ -4119,7 +4407,7 @@ function showUploadOptionalStep() {
       onClick: () => {
         state.skipImageConfirmed = true;
         pushMsg("user", t("skipUploadNow"), { typewriter: false });
-        pushMsg("system", t("skipUploadAck"));
+        pushSystemStateMsg(t("skipUploadAck"), "done");
         showContinueAfterSkipStep();
       },
     },
@@ -4132,6 +4420,14 @@ function showSummaryCard() {
   const wrap = document.createElement("article");
   wrap.className = "msg system form-card summary-flow-card";
   wrap.innerHTML = `
+    <div class="msg-card-meta msg-card-meta-form">
+      <span class="msg-card-label">${t("agentReplyLabel")}</span>
+      <div class="msg-card-meta-right">
+        <span class="msg-card-step">${t("flowStep", { n: 2 })}</span>
+        <span class="msg-card-status">${t("cardStatusPending")}</span>
+        <span class="msg-card-status">${t("cardStatusReady")}</span>
+      </div>
+    </div>
     <div>${t("summaryTitle")}</div>
     <div class="summary-card">
       <div class="info-grid">
@@ -4147,7 +4443,7 @@ function showSummaryCard() {
         <div class="info-item"><div class="info-icon">🧍</div><div class="info-main"><div class="info-title">${t("fModel")}</div><label><input id="fNeedModel" type="checkbox" checked /> ${t("on")}</label></div></div>
       </div>
       <p class="table-hint">${t("hint")}</p>
-      <div class="summary-actions"><button id="confirmGenerateBtn">${t("confirm")}</button></div>
+      <div class="summary-actions"><button id="confirmGenerateBtn" class="action-chip-btn action-chip-primary">${t("confirm")}</button></div>
     </div>
   `;
   chatList.appendChild(wrap);
@@ -4161,10 +4457,12 @@ function showSummaryCard() {
     const btn = wrap.querySelector("#confirmGenerateBtn");
     if (btn.disabled) return;
     if (state.primarySubmitLocked) {
-      pushMsg("system", t("alreadySubmitted"));
+      pushSystemStateMsg(t("alreadySubmitted"), "blocked");
+      setActionButtonState(btn, "blocked", t("confirm"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
-    btn.disabled = true;
+    setActionButtonState(btn, "progress", t("confirm"));
     state.productName = wrap.querySelector("#fProductName").value.trim();
     state.sellingPoints = wrap.querySelector("#fSellingPoints").value.trim();
     state.targetUser = wrap.querySelector("#fTargetUser").value.trim();
@@ -4175,18 +4473,21 @@ function showSummaryCard() {
     state.needModel = wrap.querySelector("#fNeedModel").checked;
     state.workflowHydrated = false;
     if (!state.productName) {
-      pushMsg("system", t("askProduct"));
-      btn.disabled = false;
+      pushSystemGuideMsg(t("askProduct"));
+      setActionButtonState(btn, "blocked", t("confirm"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
     state.primarySubmitLocked = true;
     try {
       await generateVideo();
+      setActionButtonState(btn, "done", t("confirm"));
+    } catch (_e) {
+      setActionButtonState(btn, "blocked", t("confirm"));
     } finally {
       state.primarySubmitLocked = false;
-      btn.disabled = false;
+      setTimeout(() => setActionButtonState(btn, "idle"), 1500);
     }
-    btn.textContent = currentLang === "zh" ? "已提交" : "Submitted";
   });
 }
 
@@ -4212,7 +4513,7 @@ function continueAfterInsightConfirm() {
   }
   if (!state.sellingPoints) {
     state.stage = "awaitPoints";
-    pushMsg("system", t("askPoints"));
+    pushSystemGuideMsg(t("askPoints"));
     return;
   }
   if (!state.summaryShown) {
@@ -4226,6 +4527,14 @@ function showInsightEditCard() {
   const wrap = document.createElement("article");
   wrap.className = "msg system form-card insight-flow-card";
   wrap.innerHTML = `
+    <div class="msg-card-meta msg-card-meta-form">
+      <span class="msg-card-label">${t("agentReplyLabel")}</span>
+      <div class="msg-card-meta-right">
+        <span class="msg-card-step">${t("flowStep", { n: 1 })}</span>
+        <span class="msg-card-status">${t("cardStatusFilled")}</span>
+        <span class="msg-card-status">${t("cardStatusReady")}</span>
+      </div>
+    </div>
     <div>${t("insightEditTitle")}</div>
     <div class="summary-card">
       <div class="info-grid">
@@ -4233,7 +4542,7 @@ function showInsightEditCard() {
         <div class="info-item"><div class="info-icon">🧭</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "主营方向" : "Business focus"}</div><input id="insightBusiness" value="${sanitizeInputValue(state.mainBusiness)}" /></div></div>
         <div class="info-item"><div class="info-icon">🎨</div><div class="info-main"><div class="info-title">${t("fTpl")}</div><select id="insightTemplate"><option value="clean">clean</option><option value="lifestyle">lifestyle</option><option value="premium">premium</option><option value="social">social</option></select></div></div>
       </div>
-      <div class="summary-actions"><button id="insightConfirmBtn">${t("insightConfirmBtn")}</button></div>
+      <div class="summary-actions"><button id="insightConfirmBtn" class="action-chip-btn action-chip-primary">${t("insightConfirmBtn")}</button></div>
     </div>
   `;
   chatList.appendChild(wrap);
@@ -4243,55 +4552,77 @@ function showInsightEditCard() {
   wrap.querySelector("#insightConfirmBtn").addEventListener("click", () => {
     const btn = wrap.querySelector("#insightConfirmBtn");
     if (btn.disabled) return;
-    btn.disabled = true;
+    setActionButtonState(btn, "progress", t("insightConfirmBtn"));
     state.productName = wrap.querySelector("#insightProductName").value.trim();
     state.mainBusiness = wrap.querySelector("#insightBusiness").value.trim();
     state.template = templateEl.value || "clean";
     pushMsg("user", t("insightConfirmUser"), { typewriter: false });
     if (!state.productName) {
-      pushMsg("system", t("askProduct"));
-      btn.disabled = false;
+      pushSystemGuideMsg(t("askProduct"));
+      setActionButtonState(btn, "blocked", t("insightConfirmBtn"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
     if (state.stage === "awaitMain") {
       state.stage = "awaitRegion";
       askRegion();
-      btn.disabled = false;
+      setActionButtonState(btn, "done", t("insightConfirmBtn"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1200);
       return;
     }
     continueAfterInsightConfirm();
-    btn.disabled = false;
+    setActionButtonState(btn, "done", t("insightConfirmBtn"));
+    setTimeout(() => setActionButtonState(btn, "idle"), 1200);
   });
 }
 
 function showQuickGenerateButton() {
   const wrap = document.createElement("article");
-  wrap.className = "msg system";
+  wrap.className = "msg system form-card quick-action-card";
   wrap.innerHTML = `
+    <div class="msg-card-meta msg-card-meta-form">
+      <span class="msg-card-label">${t("agentReplyLabel")}</span>
+      <div class="msg-card-meta-right">
+        <span class="msg-card-step">${t("flowStep", { n: 3 })}</span>
+        <span class="msg-card-status">${t("cardStatusReady")}</span>
+      </div>
+    </div>
     <div class="summary-actions">
-      <button id="quickGenerateBtn">${t("quickGen")}</button>
+      <button id="quickGenerateBtn" class="action-chip-btn action-chip-primary">${t("quickGen")}</button>
     </div>
   `;
   chatList.appendChild(wrap);
   scrollToBottom();
   wrap.querySelector("#quickGenerateBtn").addEventListener("click", async () => {
+    const btn = wrap.querySelector("#quickGenerateBtn");
     if (state.primarySubmitLocked) {
-      pushMsg("system", t("alreadySubmitted"));
+      pushSystemStateMsg(t("alreadySubmitted"), "blocked");
+      setActionButtonState(btn, "blocked", t("quickGen"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
     if (!state.productName) {
-      pushMsg("system", t("askProduct"));
+      pushSystemGuideMsg(t("askProduct"));
+      setActionButtonState(btn, "blocked", t("quickGen"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1400);
       return;
     }
     if (!state.salesRegion || !state.targetUser || !state.sellingPoints) {
       showSummaryCard();
+      setActionButtonState(btn, "blocked", t("quickGen"));
+      setTimeout(() => setActionButtonState(btn, "idle"), 1000);
       return;
     }
     state.primarySubmitLocked = true;
+    setActionButtonState(btn, "progress", t("quickGen"));
     try {
       await generateVideo();
+      setActionButtonState(btn, "done", t("quickGen"));
+    } catch (_e) {
+      setActionButtonState(btn, "blocked", t("quickGen"));
     } finally {
       state.primarySubmitLocked = false;
+      setTimeout(() => setActionButtonState(btn, "idle"), 1500);
     }
   });
 }
@@ -4444,7 +4775,7 @@ async function submitSimplePromptGeneration(finalText = "") {
   const text = String(finalText || "").trim();
   if (!text) return;
   if (!canStartVideoJob()) {
-    pushMsg("system", t("tooManyJobs"));
+    pushSystemStateMsg(t("tooManyJobs"), "blocked");
     return;
   }
   if (chatInput) chatInput.value = "";
@@ -4475,7 +4806,7 @@ function showPromptConfigConfirmBubble(finalText = "") {
   }
   lines.push(t("detectedConfigAsk"));
 
-  const box = pushMsg("system", lines.join("\n"), { typewriter: false });
+  const box = pushSystemGuideMsg(lines.join("\n"));
   renderOptions(box, [
     {
       title: t("detectedConfigConfirm"),
@@ -4491,7 +4822,7 @@ function showPromptConfigConfirmBubble(finalText = "") {
       desc: t("detectedConfigEditDesc"),
       onClick: () => {
         applyDetectedVideoSettings({ ratio: detectedRatio, duration: recommendedDuration });
-        pushMsg("system", t("detectedConfigApplied"), { typewriter: false });
+        pushSystemStateMsg(t("detectedConfigApplied"), "done");
       },
     },
   ]);
@@ -4511,7 +4842,7 @@ function extractPlaybackSpeedIntent(raw = "") {
 async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
   const normalized = Math.max(0.5, Math.min(2, Number(speed) || 1));
   if (!state.lastVideoUrl) {
-    pushMsg("system", t("speedIntentNoVideo"), { error: true });
+    pushSystemStateMsg(t("speedIntentNoVideo"), "blocked");
     return;
   }
   state.videoEdit = {
@@ -4521,7 +4852,7 @@ async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
   const speedSelect = videoEditorPanel?.querySelector("#videoEditSpeed");
   if (speedSelect) speedSelect.value = String(normalized);
   applyVideoEditsToPreview();
-  pushMsg("system", t("speedIntentApplying", { speed: normalized.toFixed(2).replace(/\.00$/, "") }));
+  pushSystemStateMsg(t("speedIntentApplying", { speed: normalized.toFixed(2).replace(/\.00$/, "") }), "progress");
   try {
     const base = getApiBase();
     const resp = await postJson(
@@ -4540,10 +4871,10 @@ async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     });
     renderVideoEditor();
     applyVideoEditsToPreview();
-    pushMsg("system", t("speedIntentApplied", { speed: normalized.toFixed(2).replace(/\.00$/, "") }));
+    pushSystemStateMsg(t("speedIntentApplied", { speed: normalized.toFixed(2).replace(/\.00$/, "") }), "done");
   } catch (_e) {
     applyVideoEditsToPreview();
-    pushMsg("system", t("speedIntentFailed"), { error: true });
+    pushSystemStateMsg(t("speedIntentFailed"), "blocked");
   }
 }
 
@@ -4797,7 +5128,7 @@ function renderChainSummary(chainResp) {
       );
     }
   }
-  pushMsg("system", lines.join("\n"), { speed: 20 });
+  pushSystemReplyMsg(lines.join("\n"), { typewriter: true, speed: 20 });
 }
 
 function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "") {
@@ -4809,11 +5140,33 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const cardVideoUrl = finalPlayableUrl;
   const cardPrompt = state.lastPrompt;
   const cardStoryboard = state.lastStoryboard;
+  const cardDuration = String(state.duration || "8");
+  const cardAspectRatio = String(state.aspectRatio || "16:9");
+  const taskSourceLabel = String(state.taskMap?.[taskId]?.sourceLabel || "").trim();
+  const taskRunLabel = String(state.taskMap?.[taskId]?.title || "").trim();
   const card = document.createElement("article");
   card.className = "msg system video-msg";
   const cardId = `task-card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   card.dataset.taskCardId = cardId;
   state.activeVideoCardId = cardId;
+  const meta = document.createElement("div");
+  meta.className = "msg-card-meta msg-card-meta-video";
+  const boundScriptSummary = getBoundScriptSummary(cardStoryboard);
+  meta.innerHTML = `
+    <span class="msg-card-label">${t("cardRecentResult")}</span>
+    <div class="msg-card-meta-right">
+      ${taskRunLabel ? `<span class="msg-card-status card-source-run status-dot-info">${sanitizeInputValue(taskRunLabel)}</span>` : ""}
+      ${taskSourceLabel ? `<span class="msg-card-status card-source-route status-dot-info">${sanitizeInputValue(taskSourceLabel)}</span>` : ""}
+      <span class="msg-card-status status-dot-info">${t("cardDurationShort")} · ${sanitizeInputValue(cardDuration)}s</span>
+      <span class="msg-card-status status-dot-info">${t("cardRatioShort")} · ${sanitizeInputValue(cardAspectRatio)}</span>
+      <span class="msg-card-status card-binding-script-name status-dot-done">${t("cardScriptNameShort")} · ${sanitizeInputValue(boundScriptSummary)}</span>
+      <span class="msg-card-status card-binding-video-editor status-dot-done" hidden>${t("cardVideoEditorOpen")}</span>
+      <span class="msg-card-status card-binding-script-editor status-dot-done" hidden>${t("cardScriptEditorOpen")}</span>
+      <span class="msg-card-status card-binding-edit-mode status-dot-progress" hidden></span>
+      <span class="msg-card-status card-status-active status-dot-progress" hidden>${t("cardCurrentContext")}</span>
+      <span class="msg-card-status card-status-idle status-dot-info">${t("cardSwitchContext")}</span>
+    </div>
+  `;
   const title = document.createElement("div");
   title.textContent = t("done");
 
@@ -4851,16 +5204,20 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     }
     const hasGcsSource = String(gcsUri || "").startsWith("gs://");
     if (hasGcsSource) {
-      pushMsg(
-        "system",
+      pushSystemStateMsg(
         currentLang === "zh"
           ? "视频播放失败：当前账号缺少 GCS 对象读取权限（storage.objects.get）。请联系管理员授权后重试，或重新生成（不指定 storage_uri）。"
           : "Video playback failed: current account lacks GCS object read permission (storage.objects.get). Grant permission and retry, or regenerate without storage_uri.",
+        "blocked",
         { error: true }
       );
       return;
     }
-    pushMsg("system", currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.", { error: true });
+    pushSystemStateMsg(
+      currentLang === "zh" ? "视频播放失败：地址无效或已过期，请重新生成。" : "Video playback failed: URL invalid or expired. Please regenerate.",
+      "blocked",
+      { error: true }
+    );
   });
   surface.appendChild(video);
   setupSurfaceFullscreen(surface);
@@ -4868,10 +5225,11 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const actions = document.createElement("div");
   actions.className = "video-actions";
   actions.innerHTML = `
-    <button class="openVideoEditorBtn">${t("editVideo")}</button>
-    <button class="openScriptEditorBtn">${t("editScript")}</button>
+    <button class="openVideoEditorBtn action-chip-btn action-chip-primary">${t("editVideo")}</button>
+    <button class="openScriptEditorBtn action-chip-btn action-chip-secondary">${t("editScript")}</button>
   `;
 
+  card.appendChild(meta);
   card.appendChild(title);
   card.appendChild(surface);
   card.appendChild(actions);
@@ -4992,7 +5350,7 @@ async function postSse(url, body, onEvent, timeout = 90000) {
 
 async function generate16sWithProgress(base, startBody, finalPrompt, workflowStartedAt = Date.now(), taskId = "") {
   const zh = currentLang === "zh";
-  const statusBubble = pushMsg("system", zh ? "⏳ 步骤 1/4：正在用 AI 拆分提示词为前后两段…" : "Step 1/4: Splitting prompt into two segments…", { typewriter: false });
+  const statusBubble = pushSystemStateMsg(zh ? "⏳ 步骤 1/4：正在用 AI 拆分提示词为前后两段…" : "Step 1/4: Splitting prompt into two segments…", "progress");
   updateVideoTask(taskId, { status: "running", stage: zh ? "步骤1/5 拆分提示词" : "Step 1/5 split prompt" });
 
   let promptA = "";
@@ -5096,7 +5454,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
           const retryAttempts = Math.max(0, Number(st?.retry_attempts || 0));
           const waitMs = transientBackoff.apply(retryAttempts);
           if (transientBackoff.shouldNotify()) {
-            pushMsg("system", t("pollTransient", { retry: retryAttempts }));
+            pushSystemStateMsg(t("pollTransient", { retry: retryAttempts }), "progress");
           }
           updateVideoTask(taskId, { status: "running", stage: zh ? `步骤 ${label} 退避重试` : `Step ${label} backoff retry` });
           await new Promise((r) => setTimeout(r, waitMs));
@@ -5114,7 +5472,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       const elapsedMs = Date.now() - start;
       if (elapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
         lastContinueNoticeAt = Date.now();
-        pushMsg("system", t("pollContinue", { sec: totalElapsed }));
+        pushSystemStateMsg(t("pollContinue", { sec: totalElapsed }), "progress");
         nextSoftTimeoutAt += SOFT_TIMEOUT_STEP_MS;
         updateVideoTask(taskId, { status: "running", stage: zh ? `步骤 ${label} 自动续轮询` : `Step ${label} auto-continue polling` });
       }
@@ -5235,14 +5593,14 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
         const concatResp = await postJson(`${base}/api/veo/concat-segments`, concatBody, 120000);
         concatUrl = String(concatResp?.video_url || concatResp?.video_data_url || "").trim();
         if (!concatUrl) {
-          pushMsg("system", zh
+          pushSystemStateMsg(zh
             ? "⚠️ 拼接接口返回为空，已降级展示第一段视频。"
-            : "⚠️ Concat returned empty, showing segment 1 only.");
+            : "⚠️ Concat returned empty, showing segment 1 only.", "blocked");
         }
       } catch (concatErr) {
-        pushMsg("system", zh
+        pushSystemStateMsg(zh
           ? `⚠️ 视频拼接失败（${String(concatErr?.message || "unknown")}），已降级展示第一段视频。`
-          : `⚠️ Concat failed (${String(concatErr?.message || "unknown")}), showing segment 1 only.`);
+          : `⚠️ Concat failed (${String(concatErr?.message || "unknown")}), showing segment 1 only.`, "blocked");
       }
     }
   } catch (_outerErr) {}
@@ -5258,16 +5616,16 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   if (statusBubble.parentNode) statusBubble.remove();
   if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
 
-  pushMsg("system", zh
+  pushSystemStateMsg(zh
     ? `16 秒视频生成完成（2 段串行衔接）。${concatUrl ? "" : "⚠️ 拼接未完成，暂展示第一段。"}`
-    : `16s video ready (2 segments, frame-bridged).${concatUrl ? "" : " Concat incomplete, showing first segment."}`);
+    : `16s video ready (2 segments, frame-bridged).${concatUrl ? "" : " Concat incomplete, showing first segment."}`, "done");
   updateVideoTask(taskId, { status: "done", stage: zh ? "16秒任务完成" : "16s completed" });
   renderGeneratedVideoCard(playable, resA.gcs || resB.gcs || "", opA || "", taskId);
 }
 
 async function generateVideo(promptOverride = "") {
   if (!canStartVideoJob()) {
-    pushMsg("system", t("tooManyJobs"));
+    pushSystemStateMsg(t("tooManyJobs"), "blocked");
     return;
   }
   acquireVideoJobSlot();
@@ -5295,7 +5653,7 @@ async function generateVideo(promptOverride = "") {
     }
     state.lastPrompt = finalPrompt;
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
-    pushMsg("system", t("submit"));
+    pushSystemStateMsg(t("submit"), "progress");
     updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提交任务中" : "Submitting job" });
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const base = getApiBase();
@@ -5350,7 +5708,7 @@ async function generateVideo(promptOverride = "") {
       operationName,
     });
     const zh = currentLang === "zh";
-    const pollBubble = pushMsg("system", zh ? "视频生成中（Fast 模式），预计 60-90 秒…" : "Generating video (Fast mode), ~60-90s…", { typewriter: false });
+    const pollBubble = pushSystemStateMsg(zh ? "视频生成中（Fast 模式），预计 60-90 秒…" : "Generating video (Fast mode), ~60-90s…", "progress");
     const pollStartedAt = Date.now();
     const POLL_SOFT_TIMEOUT_MS = 300000;
     const POLL_SOFT_STEP_MS = 180000;
@@ -5377,15 +5735,15 @@ async function generateVideo(promptOverride = "") {
 
       if (elapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
         lastContinueNoticeAt = Date.now();
-        pushMsg("system", t("pollContinue", { sec: elapsedSec }));
+        pushSystemStateMsg(t("pollContinue", { sec: elapsedSec }), "progress");
         nextSoftTimeoutAt += POLL_SOFT_STEP_MS;
       }
       if (elapsedMs > POLL_HARD_TIMEOUT_MS) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        pushMsg("system", zh
+        pushSystemStateMsg(zh
           ? `视频生成超时（总计 ${elapsedSec}s）。请稍后重试或简化提示词。`
-          : `Video generation timed out (${elapsedSec}s total). Retry later or simplify the prompt.`);
+          : `Video generation timed out (${elapsedSec}s total). Retry later or simplify the prompt.`, "blocked");
         finishVideoTask(taskId, false, zh ? "超时" : "Timeout");
         releaseSlotOnce();
         return;
@@ -5410,7 +5768,7 @@ async function generateVideo(promptOverride = "") {
           const retryAttempts = Math.max(0, Number(status?.retry_attempts || 0));
           const waitMs = transientBackoff.apply(retryAttempts);
           if (transientBackoff.shouldNotify()) {
-            pushMsg("system", t("pollTransient", { retry: retryAttempts }));
+            pushSystemStateMsg(t("pollTransient", { retry: retryAttempts }), "progress");
           }
           scheduleNext(waitMs);
           return;
@@ -5419,9 +5777,9 @@ async function generateVideo(promptOverride = "") {
         if (status?.response?.done && opError) {
           if (isVeoRetryableLoadError(opError) && submitAttempts < 2) {
             submitAttempts += 1;
-            pushMsg("system", zh
+            pushSystemStateMsg(zh
               ? "Veo 上游当前负载较高，已自动重新提交一次任务…"
-              : "Veo upstream is under high load. Retrying submission once automatically…");
+              : "Veo upstream is under high load. Retrying submission once automatically…", "progress");
             const retryStart = await postJson(`${base}/api/veo/start`, startBody);
             const retryOp = retryStart?.operation_name;
             if (retryOp) {
@@ -5438,12 +5796,11 @@ async function generateVideo(promptOverride = "") {
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
           if (isVeoSafetyRejection(opError)) {
-            pushMsg("system", zh
+            pushSystemStateMsg(zh
               ? `视频生成被安全策略拦截：${opError.slice(0, 120)}。请简化提示词后重试。`
-              : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`,
-              { error: true });
+              : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`, "blocked");
           } else {
-            pushMsg("system", t("genFail"), { error: true });
+            pushSystemStateMsg(t("genFail"), "blocked");
           }
           finishVideoTask(taskId, false, zh ? "失败" : "Failed");
           releaseSlotOnce();
@@ -5462,7 +5819,7 @@ async function generateVideo(promptOverride = "") {
       } catch (_e) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        pushMsg("system", t("pollFail"), { error: true });
+        pushSystemStateMsg(t("pollFail"), "blocked");
         finishVideoTask(taskId, false, zh ? "轮询异常" : "Polling error");
         releaseSlotOnce();
         return;
@@ -5481,7 +5838,7 @@ async function generateVideo(promptOverride = "") {
     const detail = /aborted|abort/i.test(detailRaw)
       ? currentLang === "zh" ? "请求超时，请重试" : "request timeout, please retry"
       : detailRaw;
-    pushMsg("system", detail ? `${t("genFail")} (${detail})` : t("genFail"), { error: true });
+    pushSystemStateMsg(detail ? `${t("genFail")} (${detail})` : t("genFail"), "blocked");
     finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
     releaseSlotOnce();
   }
@@ -5492,7 +5849,7 @@ async function onUpload(files) {
     .filter((f) => /^image\/(png|jpeg)$/.test(f.type))
     .slice(0, 6);
   if (!picked.length) {
-    pushMsg("system", t("invalidType"));
+    pushSystemStateMsg(t("invalidType"), "blocked");
     return;
   }
   const images = await Promise.all(
@@ -5529,7 +5886,7 @@ async function onUpload(files) {
   }
   stopProgress();
   if (usedFallback) {
-    pushMsg("system", withLead(t("parseFallback"), "general"));
+    pushSystemReplyMsg(withLead(t("parseFallback"), "general"));
   }
   if (SIMPLE_AGENT_MODE) {
     chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
@@ -5540,24 +5897,23 @@ async function onUpload(files) {
     } catch (_e) {}
     if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
     syncSimpleControlsFromState();
-    pushMsg(
-      "system",
+    pushSystemStateMsg(
       t("parseDone", {
         product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
         business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
         style: state.template || "clean",
-      })
+      }),
+      "done"
     );
     return;
   }
-  pushMsg("system", t("insightRecapTitle"));
+  pushSystemReplyMsg(t("insightRecapTitle"));
   state.lastStoryboard = buildStoryboardText();
   state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
   try {
     await hydrateWorkflowTexts(true);
   } catch (_e) {}
-  pushMsg(
-    "system",
+  pushSystemReplyMsg(
     [
       `- ${t("insightRecapProduct", { value: state.productName || (currentLang === "zh" ? "未识别商品" : "Unknown product") })}`,
       `- ${t("insightRecapBusiness", { value: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "Fashion & accessories") })}`,
@@ -5567,9 +5923,9 @@ async function onUpload(files) {
   );
   showInsightEditCard();
   if (state.stage === "awaitMain") {
-    pushMsg("system", currentLang === "zh" ? "已预填完成。可直接在上方编辑后点击“确认这些信息”。" : "Prefill complete. Edit above and click \"Confirm these fields\".");
+    pushSystemStateMsg(currentLang === "zh" ? "已预填完成。可直接在上方编辑后点击“确认这些信息”。" : "Prefill complete. Edit above and click \"Confirm these fields\".", "done");
   } else if (!state.sellingPoints) {
-    pushMsg("system", t("askPoints"));
+    pushSystemGuideMsg(t("askPoints"));
   }
 }
 
@@ -5618,19 +5974,19 @@ async function onSend() {
 
   if (state.stage === "awaitRegion") {
     state.salesRegion = text;
-    pushMsg("system", withLead(t("regionAck", { value: text }), "region"));
+    pushSystemReplyMsg(withLead(t("regionAck", { value: text }), "region"));
     askTarget();
     return;
   }
   if (state.stage === "awaitTarget") {
     state.targetUser = text;
-    pushMsg("system", withLead(t("targetAck", { value: text }), "target"));
+    pushSystemReplyMsg(withLead(t("targetAck", { value: text }), "target"));
     askBrand();
     return;
   }
   if (state.stage === "awaitBrand") {
     state.brandInfo = text;
-    pushMsg("system", withLead(t("brandAck", { value: text }), "brand"));
+    pushSystemReplyMsg(withLead(t("brandAck", { value: text }), "brand"));
     askForPointsOrSummary();
     return;
   }
@@ -5638,7 +5994,7 @@ async function onSend() {
   if (!state.images.length && !state.skipImageConfirmed) {
     if (/^(跳过上传|跳过|skip upload|skip)$/i.test(text)) {
       state.skipImageConfirmed = true;
-      pushMsg("system", t("skipUploadAck"));
+      pushSystemStateMsg(t("skipUploadAck"), "done");
       showContinueAfterSkipStep();
     } else {
       showUploadOptionalStep();
@@ -5656,7 +6012,7 @@ async function onSend() {
       showSummaryCard();
       return;
     }
-    pushMsg("system", t("gotMore"));
+    pushSystemStateMsg(t("gotMore"), "done");
     showQuickGenerateButton();
     return;
   }
@@ -5672,7 +6028,7 @@ async function onSend() {
   } else if (!state.salesRegion) {
     state.salesRegion = text;
   } else {
-    pushMsg("system", t("gotMore"));
+    pushSystemStateMsg(t("gotMore"), "done");
     showQuickGenerateButton();
     return;
   }
@@ -5680,7 +6036,7 @@ async function onSend() {
   if (state.salesRegion && state.targetUser && state.sellingPoints) {
     if (!state.summaryShown) showSummaryCard();
     else {
-      pushMsg("system", t("gotMore"));
+      pushSystemStateMsg(t("gotMore"), "done");
       showQuickGenerateButton();
     }
   } else if (!state.salesRegion) {
@@ -5690,7 +6046,7 @@ async function onSend() {
     state.stage = "awaitTarget";
     askTarget();
   } else if (!state.sellingPoints) {
-    pushMsg("system", t("askPoints"));
+    pushSystemGuideMsg(t("askPoints"));
   }
 }
 
@@ -5725,7 +6081,7 @@ async function enhancePromptByAgent() {
     .join("\n");
   const base = getApiBase();
   try {
-    pushMsg("system", t("enhanceWorking"));
+    pushSystemStateMsg(t("enhanceWorking"), "progress");
     const fallbackTemplate =
       currentLang === "zh"
         ? [
@@ -5814,7 +6170,7 @@ async function enhancePromptByAgent() {
     const cleaned = sanitizePromptForUser(optimized);
     chatInput.value = cleaned;
     state.lastPrompt = cleaned;
-    pushMsg("system", t("enhanceDone"));
+    pushSystemStateMsg(t("enhanceDone"), "done");
   } catch (e) {
     const detailRaw = String(e?.message || "").trim();
     const detail = /aborted|abort/i.test(detailRaw)
@@ -5822,7 +6178,7 @@ async function enhancePromptByAgent() {
         ? "请求超时，请重试"
         : "request timeout, please retry"
       : detailRaw;
-    const box = pushMsg("system", detail ? `${t("enhanceFail")} (${detail})` : t("enhanceFail"), { typewriter: false, error: true });
+    const box = pushSystemStateMsg(detail ? `${t("enhanceFail")} (${detail})` : t("enhanceFail"), "blocked");
     renderOptions(box, [
       {
         title: t("enhanceRetry"),
@@ -5939,7 +6295,7 @@ async function parseShopProductByUrl(inputUrl = "") {
           state.lastPrompt = draft;
         }
       }
-      pushMsg("system", t("parseLinkWeak"));
+      pushSystemGuideMsg(t("parseLinkWeak"));
       showUploadScreenshotGuide();
       showUploadRefQuickAction();
       return;
@@ -5964,7 +6320,7 @@ async function parseShopProductByUrl(inputUrl = "") {
       state.skipImageConfirmed = false;
       pushImageMsg(state.images);
     } else if (!state.images.length) {
-      pushMsg("system", t("parseLinkWeakInfo"));
+      pushSystemGuideMsg(t("parseLinkWeakInfo"));
       showUploadScreenshotGuide();
       showUploadRefQuickAction();
     }
@@ -5985,34 +6341,33 @@ async function parseShopProductByUrl(inputUrl = "") {
     }
     const refillOk = Boolean(state.productName && state.mainBusiness && state.template);
     if (!refillOk) {
-      pushMsg(
-        "system",
+      pushSystemStateMsg(
         currentLang === "zh"
           ? "解析已完成，但关键信息回填不完整。请补充商品名称后重试解析，或上传商品图辅助识别。"
-          : "Parsing finished, but key fields are not fully backfilled. Please add product name and retry, or upload product images."
+          : "Parsing finished, but key fields are not fully backfilled. Please add product name and retry, or upload product images.",
+        "blocked"
       );
     }
     if (fetchConfidence === "low") {
-      pushMsg(
-        "system",
+      pushSystemStateMsg(
         currentLang === "zh"
           ? "链接解析结果可信度较低，建议补充商品截图或手动补充卖点。"
           : "Parsed result confidence is low. Add product screenshots or fill selling points manually.",
+        "blocked"
       );
     }
-    pushMsg("system", t("parseLinkDone"));
-    pushMsg(
-      "system",
+    pushSystemStateMsg(t("parseLinkDone"), "done");
+    pushSystemStateMsg(
       t("parseDone", {
         product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
         business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
         style: state.template || "clean",
       }),
-      { typewriter: false }
+      "done"
     );
   } catch (_e) {
     stopParseProgress();
-    pushMsg("system", t("parseLinkFail"), { error: true });
+    pushSystemStateMsg(t("parseLinkFail"), "blocked");
   }
 }
 
@@ -6085,11 +6440,11 @@ function consumeLandingParams() {
           try { await hydrateWorkflowTexts(true); } catch (_) {}
           if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
           syncSimpleControlsFromState();
-          pushMsg("system", t("parseDone", {
+          pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
             style: state.template || "clean",
-          }));
+          }), "done");
         }, 600);
       }
     } catch (_e) {}
@@ -6123,11 +6478,11 @@ function consumeLandingParams() {
           try { await hydrateWorkflowTexts(true); } catch (_) {}
           if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
           syncSimpleControlsFromState();
-          pushMsg("system", t("parseDone", {
+          pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
             style: state.template || "clean",
-          }));
+          }), "done");
         }, 600);
       }
     } catch (_e) {}
@@ -6243,11 +6598,11 @@ function scheduleLandingPrefillAfterWelcome() {
         try { await hydrateWorkflowTexts(true); } catch (_) {}
         if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
         syncSimpleControlsFromState();
-        pushMsg("system", t("parseDone", {
+        pushSystemStateMsg(t("parseDone", {
           product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
           business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
           style: state.template || "clean",
-        }));
+        }), "done");
       });
       card.appendChild(imgBtn);
       container.appendChild(card);
@@ -6508,11 +6863,14 @@ if (aiGenerateFramesBtn) {
         renderFrameSlot(lastFrameDrop, state.lastFrame, lastFrameInput, "lastFrame");
       }
       state.frameMode = Boolean(state.firstFrame && state.lastFrame);
-      pushMsg("system", zh
-        ? `AI 已生成首尾帧${state.frameMode ? "，可直接用于视频生成。" : "（部分生成失败，请手动上传）。"}`
-        : `AI generated frames${state.frameMode ? ". Ready for video generation." : " (partial failure, please upload manually)."}`);
+      pushSystemStateMsg(
+        zh
+          ? `AI 已生成首尾帧${state.frameMode ? "，可直接用于视频生成。" : "（部分生成失败，请手动上传）。"}`
+          : `AI generated frames${state.frameMode ? ". Ready for video generation." : " (partial failure, please upload manually)."}`,
+        state.frameMode ? "done" : "blocked"
+      );
     } catch (e) {
-      pushMsg("system", zh ? `首尾帧生成失败: ${e.message}` : `Frame generation failed: ${e.message}`, { error: true });
+      pushSystemStateMsg(zh ? `首尾帧生成失败: ${e.message}` : `Frame generation failed: ${e.message}`, "blocked", { error: true });
     } finally {
       aiGenerateFramesBtn.disabled = false;
       aiGenerateFramesBtn.textContent = zh ? "AI 自动生成" : "AI Generate";
@@ -6597,8 +6955,8 @@ updateDurationOptions();
 updateGenerationGateUI();
 applyWorkspaceMode();
 consumeLandingParams();
-pushMsg("system", t("welcome"));
-if (state._landingHint) pushMsg("system", state._landingHint);
+pushSystemGuideMsg(t("welcome"), { typewriter: true });
+if (state._landingHint) pushSystemGuideMsg(state._landingHint, { typewriter: true });
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
 
 // ── Scroll-to-bottom FAB setup ──────────────────────────────────────────────

@@ -25,16 +25,23 @@ const enhancePromptBtn = document.getElementById("enhancePromptBtn");
 
 const i18n = {
   en: {
+    brandBadge: "AI video workspace",
     navFeatures: "Features",
     navSolutions: "Solutions",
     navResources: "Resources",
     navPricing: "Pricing",
     navCommunity: "Community",
+    navStatus: "Product experience",
     cardVideoClips: "HD assets",
     cardProductLinks: "Product links",
     cardVideoScript: "Video Script",
-    line1: "Create faster, with less friction:",
-    desc: "No editing skills needed. Shoplive analyzes product highlights and outputs production-ready videos in minutes.",
+    heroKicker: "AI video workspace for ecommerce teams",
+    heroLine1: "Upload product images or links,",
+    heroLine2: "turn ideas into videos in minutes.",
+    desc: "No editing skills needed. Shoplive extracts product highlights, plans the story, and outputs production-ready videos with a workflow your team can operate directly.",
+    heroPoint1: "Reference-image driven",
+    heroPoint2: "Product link parsing",
+    heroPoint3: "Prompt enhancement",
     cta: "Start generating",
     uploadRef: "Reference image",
     uploadHint: "Upload product images and describe your product and video style.",
@@ -43,6 +50,18 @@ const i18n = {
     enhancePrompt: "Enhance prompt",
     start: "Get started",
     creatorUsage: "10,000+ creators are using Shoplive",
+    commandBarKicker: "Start with a reference image, a product link, or a single prompt",
+    commandStatus1: "Auto-detect product",
+    commandStatus2: "Auto-route model",
+    commandTemplateTag1: "Template 01",
+    commandTemplateTitle1: "Women's launch 9:16",
+    commandTemplateDesc1: "For new arrivals, commuter styling, and fabric mood direction",
+    commandTemplateTag2: "Template 02",
+    commandTemplateTitle2: "Black running shoe details",
+    commandTemplateDesc2: "For material close-ups, sole tech, and progressive camera moves",
+    commandTemplateTag3: "Template 03",
+    commandTemplateTitle3: "Social campaign short video",
+    commandTemplateDesc3: "For fast conversion pacing, selling-point recall, and paid social",
     placeholders: [
       "Describe your product and desired video style",
       "Paste a product URL to parse details automatically",
@@ -70,16 +89,23 @@ const i18n = {
     aiChipsStyle: ["Luxury minimal", "Streetwear", "French elegance", "Japanese fresh"],
   },
   zh: {
+    brandBadge: "AI 视频工作台",
     navFeatures: "功能",
     navSolutions: "解决方案",
     navResources: "资源",
     navPricing: "价格",
     navCommunity: "社区",
+    navStatus: "产品体验",
     cardVideoClips: "高清素材",
     cardProductLinks: "商品链接",
     cardVideoScript: "视频脚本",
-    line1: "让创作回归简单：",
-    desc: "无需剪辑技能，Shoplive 自动化分析商品卖点，几分钟内直接产出专业级可用视频。",
+    heroKicker: "面向电商团队的 AI 视频工作台",
+    heroLine1: "上传商品图或链接，",
+    heroLine2: "把想法直接变成视频。",
+    desc: "无需剪辑技能，Shoplive 会自动识别商品卖点、组织镜头表达，并以团队可直接使用的工作流，在几分钟内产出可投放的视频内容。",
+    heroPoint1: "商品图驱动",
+    heroPoint2: "商品链接解析",
+    heroPoint3: "提示词增强生成",
     cta: "开始生成",
     uploadRef: "参考图",
     uploadHint: "上传商品图，描述你的商品信息和想要的视频风格…",
@@ -88,6 +114,18 @@ const i18n = {
     enhancePrompt: "提示词增强",
     start: "开始使用",
     creatorUsage: "超过 10,000+ 创作者正在使用",
+    commandBarKicker: "从参考图、商品链接或一句提示词开始",
+    commandStatus1: "自动识别商品",
+    commandStatus2: "自动路由模型",
+    commandTemplateTag1: "模板 01",
+    commandTemplateTitle1: "女装上新 9:16",
+    commandTemplateDesc1: "适合新品发布、通勤穿搭和面料氛围表达",
+    commandTemplateTag2: "模板 02",
+    commandTemplateTitle2: "黑色跑鞋细节",
+    commandTemplateDesc2: "适合材质展示、鞋底科技感和镜头推进",
+    commandTemplateTag3: "模板 03",
+    commandTemplateTitle3: "社媒投放短视频",
+    commandTemplateDesc3: "适合快节奏转化、卖点记忆和广告投放",
     placeholders: ["上传商品图，描述你的商品信息和想要的视频风格…", "告诉 Shoplive 你想生成什么视频，或粘贴商品链接", "输入视频卖点、受众、风格等关键信息"],
     refPanelTitle: "选择参考图",
     refUploadLocal: "从本地上传",
@@ -576,3 +614,21 @@ renderRefGrid(refAiResultGrid, aiAssets, { showVideoBtn: true });
 setActiveRefTab("upload");
 applyLanguage(currentLang);
 updateRefTriggerPreview();
+
+document.querySelectorAll(".command-template-card").forEach((card) => {
+  card.addEventListener("click", () => {
+    document.querySelectorAll(".command-template-card").forEach((el) => el.classList.remove("is-active"));
+    card.classList.add("is-active");
+    if (promptInput) {
+      const fill = currentLang === "zh"
+        ? (card.getAttribute("data-fill-zh") || "")
+        : (card.getAttribute("data-fill-en") || "");
+      if (fill) promptInput.value = fill;
+      promptInput.focus();
+    }
+    const ratio = card.getAttribute("data-ratio") || "";
+    const duration = card.getAttribute("data-duration") || "";
+    if (ratio && aspectRatioSelect) aspectRatioSelect.value = ratio;
+    if (duration && durationSelect) durationSelect.value = duration;
+  });
+});
