@@ -358,6 +358,8 @@ def register_video_edit_routes(
             tint_val = _clamp_num(edits.get("tint", 0), -30, 30, 0)
             mask_text = str(edits.get("maskText") or "").strip()
             mask_opacity = _clamp_num(edits.get("opacity", 90), 0, 100, 90) / 100.0
+            _raw_color = str(edits.get("maskColor") or "#ffffff").strip()
+            mask_color = _raw_color if _raw_color else "#ffffff"
             x_pct = _clamp_num(edits.get("x", 50), 0, 100, 50)
             y_pct = _clamp_num(edits.get("y", 88), 0, 100, 88)
             h_pct = _clamp_num(edits.get("h", 14), 6, 60, 14)
@@ -446,7 +448,7 @@ def register_video_edit_routes(
                         "drawtext="
                         f"text='{safe_text}':"
                         f"fontsize={text_size}:"
-                        "fontcolor=white:"
+                        f"fontcolor={mask_color}:"
                         f"alpha={_fmt_float(mask_opacity, 3)}:"
                         f"x={text_x_expr}:"
                         f"y={text_y_expr}:"

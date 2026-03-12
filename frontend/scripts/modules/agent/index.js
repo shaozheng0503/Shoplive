@@ -100,6 +100,19 @@ const i18n = {
     speedIntentApplying: "已识别为视频速度调整：{speed}x。正在基于当前视频重新导出…",
     speedIntentApplied: "已完成：当前视频已更新为 {speed}x。",
     speedIntentFailed: "视频倍速调整失败，请稍后重试。",
+    speedRangeApplying: "已识别分段倍速：{start}s–{end}s 调整为 {speed}x。正在导出…",
+    speedRangeApplied: "已完成：{start}s–{end}s 已更新为 {speed}x。",
+    colorIntentApplying: "已识别调色指令，正在导出…",
+    colorIntentApplied: "调色已完成，预览已更新。",
+    colorIntentFailed: "调色失败，请稍后重试。",
+    bgmIntentApplying: "已识别音乐指令，正在导出…",
+    bgmIntentApplied: "背景音乐已更新。",
+    bgmIntentFailed: "背景音乐调整失败，请稍后重试。",
+    editIntentUnknown: "未能识别具体的编辑指令，请尝试描述更清晰，如"1~3s加字幕：你好"、"整体亮一点"、"去掉背景音乐"等。",
+    subtitleIntentNoVideo: "当前没有可编辑的视频，请先生成或选中一个视频结果。",
+    subtitleIntentApplying: "已识别字幕指令：{start}s–{end}s 添加"{text}"。正在基于当前视频导出…",
+    subtitleIntentApplied: "已完成：字幕已添加至 {start}s–{end}s。",
+    subtitleIntentFailed: "字幕添加失败，请稍后重试。",
     assetRequiredGenerate: "生成视频前，请先准备商品图。你可以上传商品图、解析商品链接回填图片，或先用 AI 生成商品图。",
     assetRequiredEnhance: "提示词增强前，请先准备商品图。你可以上传商品图、解析商品链接回填图片，或先用 AI 生成商品图。",
     uploadHintLocked: "未检测到商品图：将按纯文字走 Grok 文生视频；上传商品图后会自动切到 Veo 图生视频。",
@@ -291,7 +304,21 @@ const i18n = {
     cardEditModeHybrid: "脚本 + 视频",
     cardVideoEditorOpen: "视频编辑已绑定",
     cardScriptEditorOpen: "脚本编辑已绑定",
-    alreadySubmitted: "任务已提交，请等待生成完成；如需再次生成，请使用编辑面板里的“重新生成”。",
+    alreadySubmitted: “任务已提交，请等待生成完成；如需再次生成，请使用编辑面板里的”重新生成”。”,
+    undoNoHistory: “暂无可撤销的编辑历史。”,
+    undoApplied: “已撤销，已恢复至上一个版本。”,
+    trimIntentNoVideo: “当前没有可编辑的视频，请先生成或选中一个视频结果。”,
+    trimIntentApplying: “已识别裁剪指令：保留 {start}s–{end}s，正在导出…”,
+    trimIntentApplied: “已完成：视频已裁剪保留 {start}s–{end}s。”,
+    trimIntentFailed: “视频裁剪失败，请稍后重试。”,
+    subtitleStyleApplied: “字幕样式预览已更新（即时生效）。导出后样式将永久写入成片。”,
+    subtitleStyleConfirmBtn: “确认导出”,
+    subtitleStyleCancelBtn: “取消”,
+    subtitleStyleExportDone: “字幕样式已导出并写入成片。”,
+    subtitleStyleExportFail: “字幕样式导出失败，请稍后重试。”,
+    subtitleStyleCancelled: “已取消导出，预览状态保留。”,
+    batchEditApplying: “已识别 {count} 条编辑指令，正在依次执行…”,
+    batchEditApplied: “全部 {count} 条编辑已完成。”,
     tabScript: "分镜脚本",
     tabVideo: "视频编辑",
     tabShowHint: "点击展开",
@@ -367,6 +394,19 @@ const i18n = {
     speedIntentApplying: "Detected video speed edit: {speed}x. Re-exporting from current video…",
     speedIntentApplied: "Done: current video updated to {speed}x.",
     speedIntentFailed: "Failed to update video speed. Please retry later.",
+    speedRangeApplying: "Detected range speed: {start}s–{end}s at {speed}x. Exporting…",
+    speedRangeApplied: "Done: {start}s–{end}s updated to {speed}x.",
+    colorIntentApplying: "Detected color grading intent. Exporting…",
+    colorIntentApplied: "Color grading applied. Preview updated.",
+    colorIntentFailed: "Color grading failed. Please retry later.",
+    bgmIntentApplying: "Detected BGM intent. Exporting…",
+    bgmIntentApplied: "Background music updated.",
+    bgmIntentFailed: "BGM update failed. Please retry later.",
+    editIntentUnknown: "Could not parse edit intent. Try clearer phrasing like \"add subtitle 'hello' at 1~3s\", \"brighten the video\", or \"remove background music\".",
+    subtitleIntentNoVideo: "No editable video found. Please generate/select a video first.",
+    subtitleIntentApplying: "Detected subtitle: \"{text}\" at {start}s–{end}s. Re-exporting…",
+    subtitleIntentApplied: "Done: subtitle added at {start}s–{end}s.",
+    subtitleIntentFailed: "Failed to add subtitle. Please retry later.",
     assetRequiredGenerate: "Before generating video, please prepare product images first. You can upload product images, parse a product URL with images, or generate product images with AI first.",
     assetRequiredEnhance: "Before enhancing the prompt, please prepare product images first. You can upload product images, parse a product URL with images, or generate product images with AI first.",
     uploadHintLocked: "No product images detected: text-only generation will use Grok. Upload product images to switch to Veo image-to-video.",
@@ -559,6 +599,20 @@ const i18n = {
     cardVideoEditorOpen: "Video editor bound",
     cardScriptEditorOpen: "Script editor bound",
     alreadySubmitted: "Task already submitted. Wait for completion, then use regenerate in editor panels if needed.",
+    undoNoHistory: "No edit history to undo.",
+    undoApplied: "Undo successful — restored to previous version.",
+    trimIntentNoVideo: "No editable video found. Please generate/select a video first.",
+    trimIntentApplying: "Detected trim: keep {start}s–{end}s. Exporting…",
+    trimIntentApplied: "Done: video trimmed to {start}s–{end}s.",
+    trimIntentFailed: "Trim failed. Please retry later.",
+    subtitleStyleApplied: "Subtitle style preview updated. Export to write it permanently.",
+    subtitleStyleConfirmBtn: "Confirm export",
+    subtitleStyleCancelBtn: "Cancel",
+    subtitleStyleExportDone: "Subtitle style exported and applied.",
+    subtitleStyleExportFail: "Export failed. Please retry.",
+    subtitleStyleCancelled: "Export cancelled. Preview state retained.",
+    batchEditApplying: "Detected {count} edit instructions, applying sequentially…",
+    batchEditApplied: "All {count} edits completed.",
     tabScript: "Storyboard",
     tabVideo: "Video Editor",
     tabShowHint: "Click to open",
@@ -658,6 +712,8 @@ const state = {
   entryFocusMode: false,
   lastModelAdviceKey: "",
   activeVideoCardId: "",
+  videoUrlHistory: [],    // max-10 undo stack — push before each export
+  pendingEditExport: null, // stored async fn for preview-confirm flow
   videoEdit: {
     maskText: "",
     maskStyle: "elegant",
@@ -796,6 +852,23 @@ function formatElapsedSec(ms) {
   return Math.max(0, Math.floor((Number(ms) || 0) / 1000));
 }
 
+// Auto-refresh timer for running tasks (shows live elapsed time)
+let _taskQueueRefreshTimer = null;
+function _startTaskQueueRefresh() {
+  if (_taskQueueRefreshTimer) return;
+  _taskQueueRefreshTimer = setInterval(() => {
+    const hasRunning = Object.values(state.taskMap || {}).some(
+      (item) => item.status === "running" || item.status === "queued"
+    );
+    if (hasRunning) {
+      renderTaskQueue();
+    } else {
+      clearInterval(_taskQueueRefreshTimer);
+      _taskQueueRefreshTimer = null;
+    }
+  }, 1000);
+}
+
 function renderTaskQueue() {
   if (!taskQueuePanel || !taskQueueList) return;
   const items = Object.values(state.taskMap || {}).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -830,10 +903,12 @@ function renderTaskQueue() {
       const isQueued  = item.status === "queued";
       const isFinished = isDone || isFailed;
 
-      // 已完成/失败：显示冻结的最终耗时；进行中/排队：不单独显示秒数（stage 里已有）
+      // 已完成/失败：显示冻结的最终耗时；进行中/排队：显示已用时（实时）
       const finalSec = isFinished
         ? formatElapsedSec((item.finishedAt || Date.now()) - (item.startedAt || item.createdAt || Date.now()))
-        : null;
+        : item.status === "running" || item.status === "queued"
+          ? formatElapsedSec(Date.now() - (item.startedAt || item.createdAt || Date.now()))
+          : null;
 
       const stateText = isDone ? t("taskDone")
         : isFailed  ? t("taskFailed")
@@ -871,6 +946,8 @@ function renderTaskQueue() {
       </div>`;
     })
     .join("");
+  // Start live refresh when there are running tasks
+  if (runningCount > 0) _startTaskQueueRefresh();
 }
 
 function createVideoTask(durationLabel = "8s") {
@@ -2581,6 +2658,31 @@ function applyVideoEditsToPreview() {
   surfaces.forEach((surface) => {
     const video = surface.querySelector("video");
     if (!video) return;
+
+    // Determine whether this surface belongs to the active card or the editor panel.
+    // Only those should have edits applied — all other chat-card surfaces get reset.
+    const parentCard = surface.closest("[data-task-card-id]");
+    const isActiveCard = parentCard
+      ? String(parentCard.getAttribute("data-task-card-id")) === String(state.activeVideoCardId || "")
+      : true; // surfaces not inside a card (i.e. editor panel) are always active
+    const isEditorPanel = Boolean(surface.closest("#videoEditorPanel"));
+    const shouldApplyEdits = isActiveCard || isEditorPanel;
+
+    if (!shouldApplyEdits) {
+      // Reset this non-active card's video to neutral state
+      video.playbackRate = 1;
+      video.volume = 1;
+      video.style.filter = "";
+      surface.querySelector(".video-subtitle-overlay")?.remove();
+      const staleAudio = surface.querySelector(".video-bgm-audio");
+      if (staleAudio) {
+        staleAudio.pause();
+        staleAudio.removeAttribute("src");
+        try { staleAudio.load(); } catch (_e) {}
+      }
+      return;
+    }
+
     const sec = Number(video.currentTime || 0);
     const motionActive = isTrackActiveAtTime("motion", sec, timeline);
     const colorActive = isTrackActiveAtTime("color", sec, timeline);
@@ -2707,6 +2809,9 @@ function renderVideoEditor() {
     bgmMood: state.videoEdit.bgmMood,
     activeModule: state.videoEdit.activeModule,
     localBgmName: state.videoEdit.localBgmName,
+    // Include active card context so switching cards always forces a re-render
+    lastVideoUrl: state.lastVideoUrl,
+    activeVideoCardId: state.activeVideoCardId,
   });
   if (_currentHash === state.videoEdit._renderHash && videoEditorPanel?.innerHTML) return;
   state.videoEdit._renderHash = _currentHash;
@@ -2988,7 +3093,8 @@ function renderVideoEditor() {
   let syncingFromTimeline = false;
   const syncVideoFromPlayhead = () => {
     if (!previewVideo || syncingFromVideo) return;
-    const sec = clampNum(Number(playheadRange?.value || 0), 0, maxSec);
+    const actualMax = Number(playheadRange?.max || maxSec);
+    const sec = clampNum(Number(playheadRange?.value || 0), 0, actualMax);
     if (!Number.isFinite(sec)) return;
     if (Math.abs((previewVideo.currentTime || 0) - sec) < 0.05) return;
     syncingFromTimeline = true;
@@ -3001,7 +3107,8 @@ function renderVideoEditor() {
   };
   const syncPlayheadFromVideo = () => {
     if (!playheadRange || !previewVideo || syncingFromTimeline) return;
-    const sec = clampNum(Number(previewVideo.currentTime || 0), 0, maxSec);
+    const actualMax = Number(playheadRange.max || maxSec);
+    const sec = clampNum(Number(previewVideo.currentTime || 0), 0, actualMax);
     if (!Number.isFinite(sec)) return;
     const curr = Number(playheadRange.value || 0);
     if (Math.abs(curr - sec) < 0.05) return;
@@ -3014,8 +3121,9 @@ function renderVideoEditor() {
   };
   const updatePlayheadUI = () => {
     const sec = Number(playheadRange?.value || 0);
+    const actualMax = Number(playheadRange?.max || maxSec);
     if (playheadVal) playheadVal.textContent = fmtSec(sec);
-    if (playheadLine) playheadLine.style.left = `${Math.max(0, Math.min(100, (sec / maxSec) * 100))}%`;
+    if (playheadLine) playheadLine.style.left = `${Math.max(0, Math.min(100, (sec / (actualMax || 1)) * 100))}%`;
     syncVideoFromPlayhead();
   };
   const updatePendingTip = (msg = "", tone = "info") => {
@@ -3098,7 +3206,30 @@ function renderVideoEditor() {
   if (previewVideo && !previewVideo.dataset.timelineSyncBound) {
     previewVideo.addEventListener("timeupdate", syncPlayheadFromVideo);
     previewVideo.addEventListener("seeked", syncPlayheadFromVideo);
-    previewVideo.addEventListener("loadedmetadata", syncPlayheadFromVideo);
+    previewVideo.addEventListener("loadedmetadata", () => {
+      // Update timeline max from actual video duration
+      const actualDur = Number(previewVideo.duration || 0);
+      if (actualDur > 0 && Number.isFinite(actualDur)) {
+        const newMax = Math.ceil(actualDur * 10) / 10;
+        if (playheadRange) {
+          playheadRange.max = String(newMax);
+          playheadRange.step = "0.1";
+        }
+        // Update ruler labels
+        const ruler = videoEditorPanel.querySelector(".kf-ruler");
+        if (ruler) {
+          const spans = ruler.querySelectorAll("span");
+          if (spans[0]) spans[0].textContent = "0:00";
+          if (spans[1]) spans[1].textContent = fmtSec(Math.round(newMax / 2));
+          if (spans[2]) spans[2].textContent = fmtSec(Math.round(newMax));
+        }
+        // Update all kf-track data-max attributes
+        videoEditorPanel.querySelectorAll(".kf-track[data-max]").forEach((el) => {
+          el.dataset.max = String(newMax);
+        });
+      }
+      syncPlayheadFromVideo();
+    });
     previewVideo.dataset.timelineSyncBound = "1";
   }
   videoEditorPanel.querySelectorAll(".kf-row .kf-label").forEach((labelNode) => {
@@ -4845,14 +4976,553 @@ function showPromptConfigConfirmBubble(finalText = "") {
   return true;
 }
 
+/**
+ * Unified video-edit intent parser.
+ * Returns { type, ...params } or null.
+ *
+ * Supported types:
+ *   speed       – global speed:  { speed: number }
+ *   speedRange  – ranged speed:  { start, end, speed }
+ *   subtitle    – text overlay:  { start, end, text }
+ *   color       – color grading: { bright?, sat?, contrast?, hue? }
+ *   bgm         – background music: { action: 'remove'|'lower'|'raise', volume?: number }
+ */
+function extractVideoEditIntent(raw = "") {
+  const str = String(raw || "").trim();
+  if (!str) return null;
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+  // Time range: "1~3s" / "1秒到3秒" / "1s to 3s" / "第1到第3秒"
+  const TIME_RANGE = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/i;
+  const parseTimeRange = (s) => {
+    const m = TIME_RANGE.exec(s);
+    if (!m) return null;
+    const a = parseFloat(m[1]);
+    const b = parseFloat(m[2]);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return null;
+    return { start: Math.max(0, a), end: b };
+  };
+
+  // ── 0a. undo ──────────────────────────────────────────────────────────────
+  if (/(撤销|undo|回退|上一步|还原)/i.test(str)) {
+    return { type: "undo" };
+  }
+
+  // ── 0b. trim / keep range ─────────────────────────────────────────────────
+  if (/(裁剪|截取|只保留|保留第|保留.*[秒s]|trim|crop|剪切)/i.test(str)) {
+    const range = parseTimeRange(str);
+    if (range) return { type: "trim", start: range.start, end: range.end };
+  }
+
+  // ── 0c. subtitle style (color / position) ─────────────────────────────────
+  if (/(字幕.*颜色|字体颜色|文字.*颜色|把.*字幕.*改|改成.*色.*字幕|红色字幕|蓝色字幕|黄色字幕|字幕.*居中|subtitle.*color|text.*color)/i.test(str)) {
+    const COLOR_MAP = { 红: "#ff3b3b", 蓝: "#3b6fff", 黄: "#ffe933", 绿: "#33ff57", 白: "#ffffff", 黑: "#111111", 橙: "#ff8c00", 粉: "#ff69b4" };
+    let color = null;
+    for (const [k, v] of Object.entries(COLOR_MAP)) {
+      if (str.includes(k)) { color = v; break; }
+    }
+    const posCenter = /(居中|中间|中央|center)/i.test(str);
+    if (color || posCenter) return { type: "subtitleStyle", color, position: posCenter ? "center" : null };
+  }
+
+  // ── 1. ranged speed ────────────────────────────────────────────────────────
+  // Must have time range + speed keyword + multiplier
+  if (/(倍速|加速|减速|speed|playback|慢速|快速)/i.test(str)) {
+    const speedM = str.match(/([0-2](?:\.\d+)?)\s*[xX倍速]/);
+    const speed = speedM ? Math.max(0.5, Math.min(2, parseFloat(speedM[1]))) : 0;
+    const range = parseTimeRange(str);
+    if (speed > 0 && range) {
+      return { type: "speedRange", start: range.start, end: range.end, speed };
+    }
+    // Global speed (no range)
+    if (speed > 0) {
+      return { type: "speed", speed };
+    }
+    // Descriptive speed: "加速" "快一倍" "慢一半"
+    if (/加速|speed\s*up|fast/i.test(str)) return { type: "speed", speed: 1.5 };
+    if (/减速|slow\s*down|慢/i.test(str)) return { type: "speed", speed: 0.75 };
+  }
+
+  // ── 2. subtitle / text overlay ─────────────────────────────────────────────
+  if (/(字幕|caption|subtitle|文字|文案|加字|叠字)/i.test(str)) {
+    const range = parseTimeRange(str);
+    // Single time point: "在第2秒加字幕"
+    let start = 0;
+    let end = 0;
+    if (range) {
+      start = range.start;
+      end = range.end;
+    } else {
+      const sp = /第?(\d+(?:\.\d+)?)\s*[秒s]/i.exec(str);
+      if (sp) { start = parseFloat(sp[1]); end = start + 3; }
+    }
+    // Extract caption text
+    let captionText = "";
+    const quotedM = str.match(/[：:"'「『]\s*([^」』"'：:"]{1,80}?)\s*[」』"']|[：:]\s*(.{1,80}?)(?:\s*$)/);
+    if (quotedM) {
+      captionText = (quotedM[1] || quotedM[2] || "").trim();
+    } else {
+      captionText = str
+        .replace(TIME_RANGE, "")
+        .replace(/(?:给|在|为|对|add|insert|put|字幕|caption|subtitle|文字|文案|第|秒|s\b|[~～：:])+/gi, " ")
+        .replace(/\s+/g, " ").trim().slice(0, 60);
+    }
+    if (captionText && end > start) {
+      return { type: "subtitle", start, end, text: captionText };
+    }
+  }
+
+  // ── 3. color grading ───────────────────────────────────────────────────────
+  if (/(调色|亮|暗|饱和|色调|对比|暖色|冷色|偏黄|偏蓝|偏绿|偏红|color|bright|dark|saturate|warm|cool|hue|contrast|vivid|cinematic|vintage|黑白|灰度|tint)/i.test(str)) {
+    const color = {};
+    // Brightness
+    if (/(亮一点|亮度|提亮|brighter|lighten|增加亮度)/i.test(str)) color.bright = 18;
+    else if (/(暗一点|降暗|darker|darken|减少亮度)/i.test(str)) color.bright = -18;
+    // Saturation
+    if (/(饱和|鲜艳|vivid|saturate)/i.test(str)) color.sat = 20;
+    else if (/(去饱和|淡|desaturate|faded|pale)/i.test(str)) color.sat = -20;
+    // Warmth/hue
+    if (/(暖色|偏黄|偏橙|warm|golden)/i.test(str)) color.hue = 15;
+    else if (/(冷色|偏蓝|cool|cooler)/i.test(str)) color.hue = -15;
+    // Contrast
+    if (/(对比|cinematic|contrast)/i.test(str)) color.contrast = 20;
+    // Vintage/film look
+    if (/(vintage|胶片|film|电影感)/i.test(str)) { color.sat = 15; color.hue = 8; color.contrast = 15; }
+    // Black & white
+    if (/(黑白|灰度|grayscale|black.*white)/i.test(str)) { color.sat = -100; }
+    if (Object.keys(color).length > 0) {
+      return { type: "color", ...color };
+    }
+  }
+
+  // ── 4. BGM ─────────────────────────────────────────────────────────────────
+  if (/(bgm|背景音乐|音乐|配乐|background music|music|音效)/i.test(str)) {
+    if (/(去掉|删除|移除|关闭|静音|remove|delete|mute|off|no music)/i.test(str)) {
+      return { type: "bgm", action: "remove" };
+    }
+    if (/(小声|降低|低一点|quieter|lower|reduce)/i.test(str)) {
+      const volM = str.match(/(\d+)\s*[%％]/);
+      return { type: "bgm", action: "lower", volume: volM ? parseInt(volM[1]) : 30 };
+    }
+    if (/(大声|提高|高一点|louder|raise|increase)/i.test(str)) {
+      const volM = str.match(/(\d+)\s*[%％]/);
+      return { type: "bgm", action: "raise", volume: volM ? parseInt(volM[1]) : 80 };
+    }
+  }
+
+  return null;
+}
+
+// Keep old simple extractor for backward compat
 function extractPlaybackSpeedIntent(raw = "") {
-  const text = String(raw || "").trim();
-  if (!text) return 0;
-  if (!/(视频|video|播放|playback|倍速|加速|减速|speed)/i.test(text)) return 0;
-  const m = text.match(/([0-2](?:\.\d+)?)\s*(?:x|X|倍速)/);
-  const n = Number(m?.[1] || 0);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.max(0.5, Math.min(2, Math.round(n * 100) / 100));
+  const r = extractVideoEditIntent(raw);
+  if (r?.type === "speed") return r.speed;
+  return 0;
+}
+
+function extractSubtitleIntent(raw = "") {
+  const r = extractVideoEditIntent(raw);
+  if (r?.type === "subtitle") return r;
+  return null;
+}
+
+/**
+ * Dispatch any recognized video-edit intent to the appropriate handler.
+ * Supports batch: "1~3s字幕：你好，整体加速1.2x" splits into sequential intents.
+ * Returns true if intent was handled.
+ */
+async function dispatchVideoEditIntent(raw = "") {
+  // Batch: split by full-width/half-width comma or semicolon and try each part
+  const parts = raw.split(/[，；;,]\s*/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1) {
+    const intents = parts.map((p) => extractVideoEditIntent(p)).filter(Boolean);
+    if (intents.length > 1) {
+      if (!state.lastVideoUrl && intents.some((i) => i.type !== "undo")) {
+        pushSystemStateMsg(t("speedIntentNoVideo"), "blocked");
+        return true;
+      }
+      pushSystemStateMsg(t("batchEditApplying", { count: intents.length }), "progress");
+      for (const intent of intents) {
+        await _dispatchSingleIntent(intent);
+      }
+      pushSystemStateMsg(t("batchEditApplied", { count: intents.length }), "done");
+      return true;
+    }
+  }
+
+  const intent = extractVideoEditIntent(raw);
+  if (!intent) return false;
+  return _dispatchSingleIntent(intent);
+}
+
+async function _dispatchSingleIntent(intent) {
+  if (intent.type !== "undo" && !state.lastVideoUrl) {
+    pushSystemStateMsg(t("speedIntentNoVideo"), "blocked");
+    return true;
+  }
+  switch (intent.type) {
+    case "undo":
+      await applyUndoLastEdit();
+      return true;
+    case "trim":
+      await applyTrimToCurrentVideo(intent);
+      return true;
+    case "subtitleStyle":
+      applySubtitleStyleToCurrentVideo(intent);
+      return true;
+    case "speed":
+      await applyPlaybackSpeedToCurrentVideo(intent.speed);
+      return true;
+    case "speedRange":
+      await applyRangedSpeedToCurrentVideo(intent);
+      return true;
+    case "subtitle":
+      await applySubtitleToCurrentVideo(intent);
+      return true;
+    case "color":
+      await applyColorGradingToCurrentVideo(intent);
+      return true;
+    case "bgm":
+      await applyBgmEditToCurrentVideo(intent);
+      return true;
+    default:
+      return false;
+  }
+}
+
+async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
+  const startSec = Math.max(0, Number(start) || 0);
+  const endSec = Math.max(startSec + 0.5, Number(end) || startSec + 3);
+  const spd = Math.max(0.5, Math.min(2, Number(speed) || 1));
+
+  state.videoEdit = {
+    ...state.videoEdit,
+    speed: String(spd),
+    timeline: {
+      ...(state.videoEdit?.timeline || {}),
+      keyframes: {
+        ...(state.videoEdit?.timeline?.keyframes || { mask: [], color: [], bgm: [], motion: [] }),
+        motion: [startSec, endSec],
+      },
+      selectedTrack: "motion",
+      playhead: startSec,
+    },
+    activeModule: "motion",
+  };
+  applyVideoEditsToPreview();
+  pushSystemStateMsg(t("speedRangeApplying", { start: startSec.toFixed(1), end: endSec.toFixed(1), speed: spd }), "progress");
+  try {
+    const base = getApiBase();
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory();
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("speedRangeApplied", { start: startSec.toFixed(1), end: endSec.toFixed(1) }), "done");
+  } catch (_e) {
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("speedIntentFailed"), "blocked");
+  }
+}
+
+async function applyColorGradingToCurrentVideo({ bright = 0, sat = 0, hue = 0, contrast = 0 }) {
+  state.videoEdit = {
+    ...state.videoEdit,
+    temp: Number(state.videoEdit?.temp || 0) + (Number(hue) || 0),
+    sat: Number(state.videoEdit?.sat || 0) + (Number(sat) || 0),
+    vibrance: Number(state.videoEdit?.vibrance || 0) + (Number(bright) || 0),
+  };
+  applyVideoEditsToPreview();
+  pushSystemStateMsg(t("colorIntentApplying"), "progress");
+  try {
+    const base = getApiBase();
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory();
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("colorIntentApplied"), "done");
+  } catch (_e) {
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("colorIntentFailed"), "blocked");
+  }
+}
+
+async function applyBgmEditToCurrentVideo({ action, volume }) {
+  if (action === "remove") {
+    state.videoEdit = { ...state.videoEdit, bgmExtract: false, bgmVolume: 0 };
+  } else if (action === "lower") {
+    state.videoEdit = { ...state.videoEdit, bgmVolume: Math.max(0, Number(volume) || 30) };
+  } else if (action === "raise") {
+    state.videoEdit = { ...state.videoEdit, bgmVolume: Math.min(100, Number(volume) || 80) };
+  }
+  applyVideoEditsToPreview();
+  pushSystemStateMsg(t("bgmIntentApplying"), "progress");
+  try {
+    const base = getApiBase();
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory();
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("bgmIntentApplied"), "done");
+  } catch (_e) {
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("bgmIntentFailed"), "blocked");
+  }
+}
+
+// ── New edit helpers ────────────────────────────────────────────────────────
+
+/** Push current video URL onto the undo stack (max 10). */
+function pushVideoUrlToHistory() {
+  if (!state.lastVideoUrl) return;
+  state.videoUrlHistory = [...(state.videoUrlHistory || []), state.lastVideoUrl].slice(-10);
+}
+
+/** Trim video to [start, end] seconds via timeline render. */
+async function applyTrimToCurrentVideo({ start, end }) {
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(t("trimIntentNoVideo"), "blocked");
+    return;
+  }
+  const s = Math.max(0, Number(start) || 0);
+  const e = Math.max(s + 0.1, Number(end) || s + 3);
+  pushSystemStateMsg(t("trimIntentApplying", { start: s.toFixed(1), end: e.toFixed(1) }), "progress");
+  pushVideoUrlToHistory();
+  try {
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/timeline/render`,
+      {
+        source_video_url: state.lastVideoUrl,
+        tracks: [{
+          label: "Video", track_type: "video", enabled: true, muted: false, order: 0,
+          segments: [{ left: 0, width: 100, start_seconds: s, end_seconds: e, source_index: 0 }],
+        }],
+      },
+      240000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("trimIntentApplied", { start: s.toFixed(1), end: e.toFixed(1) }), "done");
+  } catch (_e) {
+    state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1); // rollback on fail
+    pushSystemStateMsg(t("trimIntentFailed"), "blocked");
+  }
+}
+
+/**
+ * Apply subtitle style (color / position) as an instant CSS preview.
+ * Shows a confirm prompt in chat — export only happens on user confirmation.
+ */
+function applySubtitleStyleToCurrentVideo({ color, position }) {
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(t("speedIntentNoVideo"), "blocked");
+    return;
+  }
+  const newEdit = { ...state.videoEdit };
+  if (color) newEdit.maskColor = color;
+  if (position === "center") { newEdit.x = 50; newEdit.y = 50; }
+  state.videoEdit = newEdit;
+  applyVideoEditsToPreview();
+
+  // Store the export callback and show an inline confirm prompt
+  state.pendingEditExport = async () => {
+    pushVideoUrlToHistory();
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/edit/export`,
+      { video_url: state.lastVideoUrl, edits: state.videoEdit },
+      240000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+  };
+
+  const confirmId = `preview-confirm-${Date.now()}`;
+  window[`__previewConfirm_${confirmId}`] = async () => {
+    const fn = state.pendingEditExport;
+    state.pendingEditExport = null;
+    document.getElementById(confirmId)?.remove();
+    if (!fn) return;
+    pushSystemStateMsg(t("videoExporting"), "progress");
+    try {
+      await fn();
+      pushSystemStateMsg(t("subtitleStyleExportDone"), "done");
+    } catch (_e) {
+      pushSystemStateMsg(t("subtitleStyleExportFail"), "blocked");
+    }
+  };
+  window[`__previewCancel_${confirmId}`] = () => {
+    state.pendingEditExport = null;
+    document.getElementById(confirmId)?.remove();
+    pushSystemStateMsg(t("subtitleStyleCancelled"), "done");
+  };
+
+  pushSystemGuideMsg(
+    `${t("subtitleStyleApplied")} <span id="${confirmId}" style="display:inline-flex;gap:6px;margin-top:6px;">` +
+    `<button class="action-chip-btn" onclick="window['__previewConfirm_${confirmId}']()">${t("subtitleStyleConfirmBtn")}</button>` +
+    `<button class="action-chip-btn" onclick="window['__previewCancel_${confirmId}']()">${t("subtitleStyleCancelBtn")}</button>` +
+    `</span>`
+  );
+}
+
+/** Restore the most recent URL from undo history. */
+async function applyUndoLastEdit() {
+  const history = state.videoUrlHistory || [];
+  if (history.length === 0) {
+    pushSystemStateMsg(t("undoNoHistory"), "blocked");
+    return;
+  }
+  const prevUrl = history[history.length - 1];
+  state.videoUrlHistory = history.slice(0, -1);
+  state.lastVideoUrl = prevUrl;
+  document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = prevUrl; });
+  renderVideoEditor();
+  applyVideoEditsToPreview();
+  pushSystemStateMsg(t("undoApplied"), "done");
+}
+
+ * Returns { start, end, text } if matched, null otherwise.
+ * Examples: "给1~3s添加字幕：你好" / "add subtitle 'hello' from 2s to 5s"
+ */
+function extractSubtitleIntent(raw = "") {
+  const str = String(raw || "").trim();
+  if (!str) return null;
+  // Must contain caption/subtitle keyword
+  if (!/(字幕|caption|subtitle|文字|文案|字|加字|叠字)/i.test(str)) return null;
+
+  // Extract time range: common patterns
+  // Chinese: "1~3s" / "1秒到3秒" / "1-3s" / "第1到3秒"
+  // English: "1s to 3s" / "1-3s" / "from 1s to 3s"
+  const timePattern = /(\d+(?:\.\d+)?)\s*[~\-–到至to]\s*(\d+(?:\.\d+)?)\s*s(?:ec)?/i;
+  const timePatternZh = /第?(\d+(?:\.\d+)?)\s*[秒s]\s*[到至~\-–]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/i;
+  const singlePoint = /(?:第?(\d+(?:\.\d+)?)\s*[秒s])/i;
+
+  let start = 0;
+  let end = 0;
+  let matched = false;
+
+  let m = timePattern.exec(str) || timePatternZh.exec(str);
+  if (m) {
+    start = parseFloat(m[1]);
+    end = parseFloat(m[2]);
+    matched = true;
+  } else {
+    // Single time point: e.g. "在第2秒加字幕" → 2s ~ 2s+3
+    const sp = singlePoint.exec(str);
+    if (sp) {
+      start = parseFloat(sp[1]);
+      end = start + 3;
+      matched = true;
+    }
+  }
+  if (!matched) return null;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+
+  // Extract caption text: content after "：" / ":" / "「」" / quoted text
+  let captionText = "";
+  const colonMatch = str.match(/[：:「『"']\s*([^」』"'：:]{1,80})\s*[」』"']?/);
+  if (colonMatch) {
+    captionText = colonMatch[1].trim();
+  } else {
+    // Fallback: remove time range and keywords, use remainder
+    captionText = str
+      .replace(timePattern, "")
+      .replace(timePatternZh, "")
+      .replace(/(给|在|为|对|add|insert|put|字幕|caption|subtitle|文字|文案|第|秒|s\b|～|~|：|:)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 60);
+  }
+  if (!captionText) return null;
+
+  return { start: Math.max(0, start), end, text: captionText };
+}
+
+async function applySubtitleToCurrentVideo(intent = {}) {
+  const { start = 0, end = 3, text = "" } = intent;
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(t("subtitleIntentNoVideo"), "blocked");
+    return;
+  }
+  if (!text.trim()) return;
+
+  // Update videoEdit state: set mask text + time range via keyframe
+  const startSec = Math.max(0, Number(start) || 0);
+  const endSec = Math.max(startSec + 0.5, Number(end) || startSec + 3);
+
+  const prevEdit = state.videoEdit || {};
+  state.videoEdit = {
+    ...prevEdit,
+    maskText: text.trim(),
+    maskStyle: prevEdit.maskStyle || "elegant",
+    maskFont: prevEdit.maskFont || "sans",
+    maskColor: prevEdit.maskColor || "#ffffff",
+    x: prevEdit.x ?? 10,
+    y: prevEdit.y ?? 80,
+    w: prevEdit.w ?? 80,
+    h: prevEdit.h ?? 12,
+    opacity: prevEdit.opacity ?? 90,
+    rotation: prevEdit.rotation ?? 0,
+    timeline: {
+      ...(prevEdit.timeline || {}),
+      keyframes: {
+        ...(prevEdit.timeline?.keyframes || { mask: [], color: [], bgm: [], motion: [] }),
+        // Add keyframes bracketing the subtitle range so only that segment is active
+        mask: [startSec, endSec].filter((v, i, arr) => arr.indexOf(v) === i).sort((a, b) => a - b),
+      },
+      selectedTrack: "mask",
+      playhead: startSec,
+    },
+    activeModule: "mask",
+  };
+  applyVideoEditsToPreview();
+
+  pushSystemStateMsg(
+    t("subtitleIntentApplying", { start: startSec.toFixed(1), end: endSec.toFixed(1), text: text.trim() }),
+    "progress"
+  );
+  try {
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/edit/export`,
+      { video_url: state.lastVideoUrl, edits: state.videoEdit },
+      240000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory();
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(
+      t("subtitleIntentApplied", { start: startSec.toFixed(1), end: endSec.toFixed(1) }),
+      "done"
+    );
+  } catch (_e) {
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(t("subtitleIntentFailed"), "blocked");
+  }
 }
 
 async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
@@ -4881,6 +5551,7 @@ async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     );
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory();
     state.lastVideoUrl = exportedUrl;
     document.querySelectorAll(".video-edit-surface video").forEach((v) => {
       v.src = exportedUrl;
@@ -5265,6 +5936,47 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     state.lastPrompt = cardPrompt;
     state.lastStoryboard = cardStoryboard;
     state.activeVideoCardId = cardId;
+    // Reset per-card edit state so previous card's edits don't bleed into this card
+    state.videoEdit = {
+      ...state.videoEdit,
+      maskText: "",
+      maskStyle: "elegant",
+      maskFont: "sans",
+      maskColor: "#ffffff",
+      x: 50,
+      y: 88,
+      w: 78,
+      h: 14,
+      opacity: 95,
+      rotation: 0,
+      speed: "1.0",
+      temp: 0,
+      tint: 0,
+      sat: 0,
+      vibrance: 0,
+      bgmExtract: false,
+      bgmMood: "elegant",
+      bgmVolume: 70,
+      bgmReplaceMode: "auto",
+      localBgmUrl: "",
+      localBgmName: "",
+      localBgmDataUrl: "",
+      activeModule: "mask",
+      timeline: {
+        playhead: 0,
+        selectedTrack: "mask",
+        pendingRangeStart: null,
+        pendingRangeHoverSec: null,
+        trackState: {
+          mask: { visible: true, locked: false },
+          color: { visible: true, locked: false },
+          bgm: { visible: true, locked: false },
+          motion: { visible: true, locked: false },
+        },
+        keyframes: { mask: [], color: [], bgm: [], motion: [] },
+      },
+      _renderHash: null,  // force re-render
+    };
     state.videoEditorOpen = true;
     state.scriptEditorOpen = true;
     applyWorkspaceMode();
@@ -5990,11 +6702,11 @@ async function onSend() {
     }
     const finalText = String(chatInput.value || "").trim() || promptText;
     if (!finalText) return;
-    const speedIntent = extractPlaybackSpeedIntent(finalText);
-    if (speedIntent > 0) {
+    // Single dispatch for all video-edit intents
+    const handled = await dispatchVideoEditIntent(finalText);
+    if (handled) {
       if (chatInput) chatInput.value = "";
       pushMsg("user", finalText, { typewriter: false });
-      await applyPlaybackSpeedToCurrentVideo(speedIntent);
       return;
     }
     if (showPromptConfigConfirmBubble(finalText)) return;

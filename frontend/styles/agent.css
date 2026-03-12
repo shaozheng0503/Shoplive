@@ -2666,11 +2666,21 @@ body {
   align-items: start;
 }
 
+.workspace .video-preview-wrap {
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  line-height: 0;
+}
+
 .workspace .video-preview-wrap video {
   width: 100%;
-  min-height: 300px;
-  max-height: 420px;
+  height: auto;
+  max-height: 52vh;
+  min-height: unset;
   object-fit: contain;
+  display: block;
+  border-radius: 12px;
 }
 
 .workspace .module-panel .editor-note {
