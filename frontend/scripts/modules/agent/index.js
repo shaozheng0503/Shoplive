@@ -5008,7 +5008,24 @@ function extractVideoEditIntent(raw = "") {
     return { type: "undo" };
   }
 
-  // ── 0b. trim / keep range ─────────────────────────────────────────────────
+  // ── 0a-asr. auto-subtitle / speech recognition ────────────────────────────
+  if (/(自动字幕|自动生成字幕|识别字幕|转录|语音识别|识别语音|字幕识别|auto.*subtitle|transcri|asr\b)/i.test(str)) {
+    return { type: "asr" };
+  }
+
+  // ── 0b-multi. multi-segment keep: "保留1-3s和7-10s" ──────────────────────
+  if (/(保留|裁剪|截取|trim|keep)/.test(str) && /(和|与|及|and|\+)/.test(str)) {
+    const SEG_PAT = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/gi;
+    const segs = [];
+    let _m;
+    while ((_m = SEG_PAT.exec(str)) !== null) {
+      const a = parseFloat(_m[1]), b = parseFloat(_m[2]);
+      if (Number.isFinite(a) && Number.isFinite(b) && b > a) segs.push({ start: Math.max(0, a), end: b });
+    }
+    if (segs.length >= 2) return { type: "multiTrim", segments: segs };
+  }
+
+  // ── 0b. trim / keep range (single segment) ───────────────────────────────
   if (/(裁剪|截取|只保留|保留第|保留.*[秒s]|trim|crop|剪切)/i.test(str)) {
     const range = parseTimeRange(str);
     if (range) return { type: "trim", start: range.start, end: range.end };
@@ -5164,6 +5181,12 @@ async function _dispatchSingleIntent(intent) {
     case "undo":
       await applyUndoLastEdit();
       return true;
+    case "asr":
+      await applyAsrSubtitlesToCurrentVideo();
+      return true;
+    case "multiTrim":
+      await applyMultiTrimToCurrentVideo(intent);
+      return true;
     case "trim":
       await applyTrimToCurrentVideo(intent);
       return true;
@@ -5283,13 +5306,56 @@ async function applyBgmEditToCurrentVideo({ action, volume }) {
 
 // ── New edit helpers ────────────────────────────────────────────────────────
 
-/** Push current video URL onto the undo stack (max 10). */
+// ── Video URL history — localStorage persistence ─────────────────────────
+const _HIST_KEY = "shoplive.videoUrlHistory";
+function _saveVideoHistory() {
+  try { localStorage.setItem(_HIST_KEY, JSON.stringify(state.videoUrlHistory || [])); } catch (_e) {}
+}
+function _loadVideoHistory() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(_HIST_KEY) || "[]");
+    if (Array.isArray(saved)) state.videoUrlHistory = saved.slice(-10);
+  } catch (_e) {}
+}
+
+/** Push current video URL onto the undo stack (max 10) and persist to localStorage. */
 function pushVideoUrlToHistory() {
   if (!state.lastVideoUrl) return;
   state.videoUrlHistory = [...(state.videoUrlHistory || []), state.lastVideoUrl].slice(-10);
+  _saveVideoHistory();
 }
 
-/** Trim video to [start, end] seconds via timeline render. */
+/**
+ * Poll an async timeline render job until done/failed/cancelled.
+ * Updates bubbleEl text with live progress %.
+ * @returns result object (has .video_url) on success, throws on failure.
+ */
+async function pollRenderJob(base, jobId, bubbleEl, labelStart, labelEnd) {
+  const bodyEl = bubbleEl?.querySelector("[data-msg-body]");
+  const zh = currentLang === "zh";
+  const maxWait = 300000; // 5 min
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWait) {
+    await new Promise((r) => setTimeout(r, 1500));
+    let s;
+    try {
+      const r = await fetch(`${base}/api/video/timeline/render/status?job_id=${encodeURIComponent(jobId)}`);
+      s = await r.json();
+    } catch (_e) { continue; }
+    const { status: js, progress = 0, result, error } = s;
+    if (bodyEl) {
+      const pct = Math.min(99, Math.round(progress));
+      const range = labelStart != null ? ` (${labelStart}s → ${labelEnd}s)` : "";
+      bodyEl.textContent = zh ? `✂️ 渲染中 ${pct}%…${range}` : `✂️ Rendering ${pct}%…${range}`;
+    }
+    if (js === "done") return result;
+    if (js === "failed") throw new Error(error || "render failed");
+    if (js === "cancelled") throw new Error("cancelled");
+  }
+  throw new Error("render timeout");
+}
+
+/** Trim video to [start, end] seconds via async timeline render with live progress. */
 async function applyTrimToCurrentVideo({ start, end }) {
   if (!state.lastVideoUrl) {
     pushSystemStateMsg(t("trimIntentNoVideo"), "blocked");
@@ -5297,11 +5363,12 @@ async function applyTrimToCurrentVideo({ start, end }) {
   }
   const s = Math.max(0, Number(start) || 0);
   const e = Math.max(s + 0.1, Number(end) || s + 3);
-  pushSystemStateMsg(t("trimIntentApplying", { start: s.toFixed(1), end: e.toFixed(1) }), "progress");
+  const bubble = pushSystemStateMsg(t("trimIntentApplying", { start: s.toFixed(1), end: e.toFixed(1) }), "progress");
   pushVideoUrlToHistory();
   try {
     const base = getApiBase();
-    const resp = await postJson(
+    // Launch async job so we can poll progress in real-time
+    const initResp = await postJson(
       `${base}/api/video/timeline/render`,
       {
         source_video_url: state.lastVideoUrl,
@@ -5309,10 +5376,13 @@ async function applyTrimToCurrentVideo({ start, end }) {
           label: "Video", track_type: "video", enabled: true, muted: false, order: 0,
           segments: [{ left: 0, width: 100, start_seconds: s, end_seconds: e, source_index: 0 }],
         }],
+        async_job: true,
       },
-      240000
+      30000
     );
-    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!initResp?.job_id) throw new Error("no job_id returned");
+    const result = await pollRenderJob(base, initResp.job_id, bubble, s.toFixed(1), e.toFixed(1));
+    const exportedUrl = String(result?.video_url || "").trim();
     if (!exportedUrl) throw new Error("url missing");
     state.lastVideoUrl = exportedUrl;
     document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
@@ -5321,6 +5391,59 @@ async function applyTrimToCurrentVideo({ start, end }) {
     pushSystemStateMsg(t("trimIntentApplied", { start: s.toFixed(1), end: e.toFixed(1) }), "done");
   } catch (_e) {
     state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1); // rollback on fail
+    _saveVideoHistory();
+    pushSystemStateMsg(t("trimIntentFailed"), "blocked");
+  }
+}
+
+/** Trim video keeping multiple non-contiguous segments, e.g. "保留1-3s和7-10s". */
+async function applyMultiTrimToCurrentVideo({ segments }) {
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(t("trimIntentNoVideo"), "blocked");
+    return;
+  }
+  const segs = (segments || [])
+    .map((s) => ({ start: Math.max(0, Number(s.start) || 0), end: Math.max(0.1, Number(s.end) || 0.1) }))
+    .filter((s) => s.end > s.start);
+  if (!segs.length) return;
+  const zh = currentLang === "zh";
+  const bubble = pushSystemStateMsg(
+    zh ? `✂️ 保留 ${segs.length} 段，渲染中…` : `✂️ Keeping ${segs.length} segments, rendering…`,
+    "progress"
+  );
+  pushVideoUrlToHistory();
+  try {
+    const base = getApiBase();
+    const initResp = await postJson(
+      `${base}/api/video/timeline/render`,
+      {
+        source_video_url: state.lastVideoUrl,
+        tracks: [{
+          label: "Video", track_type: "video", enabled: true, muted: false, order: 0,
+          segments: segs.map((s, i) => ({
+            left: (i / segs.length) * 100,
+            width: 100 / segs.length,
+            start_seconds: s.start,
+            end_seconds: s.end,
+            source_index: 0,
+          })),
+        }],
+        async_job: true,
+      },
+      30000
+    );
+    if (!initResp?.job_id) throw new Error("no job_id returned");
+    const result = await pollRenderJob(base, initResp.job_id, bubble);
+    const exportedUrl = String(result?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    renderVideoEditor();
+    applyVideoEditsToPreview();
+    pushSystemStateMsg(zh ? `✂️ 已保留 ${segs.length} 段` : `✂️ Kept ${segs.length} segments`, "done");
+  } catch (_e) {
+    state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1);
+    _saveVideoHistory();
     pushSystemStateMsg(t("trimIntentFailed"), "blocked");
   }
 }
@@ -5394,11 +5517,209 @@ async function applyUndoLastEdit() {
   }
   const prevUrl = history[history.length - 1];
   state.videoUrlHistory = history.slice(0, -1);
+  _saveVideoHistory();
   state.lastVideoUrl = prevUrl;
   document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = prevUrl; });
   renderVideoEditor();
   applyVideoEditsToPreview();
   pushSystemStateMsg(t("undoApplied"), "done");
+}
+
+/**
+ * Stream /api/agent/run SSE and render each round (thinking / tool_call /
+ * tool_result / delta / done) as live chat bubbles.
+ * Used when user types a free-form question or edit while a video is loaded.
+ */
+async function callAgentRunAndRender(prompt) {
+  const base = getApiBase();
+  const zh = currentLang === "zh";
+  const context = {};
+  if (state.lastVideoUrl) context.video_url = state.lastVideoUrl;
+  if (state.productName) context.product_name = state.productName;
+
+  const TOOL_LABELS = {
+    export_edited_video:    zh ? "导出编辑视频" : "Export video",
+    render_video_timeline:  zh ? "渲染时间轴"   : "Render timeline",
+    generate_product_image: zh ? "生成商品图"   : "Generate image",
+    parse_product_url:      zh ? "解析商品链接" : "Parse product URL",
+    analyze_product_image:  zh ? "分析商品图"   : "Analyze image",
+    run_video_workflow:     zh ? "运行视频工作流": "Run workflow",
+    chain_video_segments:   zh ? "拼接视频片段" : "Chain segments",
+  };
+  const tools = state.lastVideoUrl
+    ? ["export_edited_video", "render_video_timeline", "generate_product_image"]
+    : ["parse_product_url", "analyze_product_image", "run_video_workflow", "generate_product_image"];
+
+  const thinkEl = pushSystemStateMsg(zh ? "🤔 Agent 思考中…" : "🤔 Agent thinking…", "progress");
+  let replyBubble = null;
+  let replyText = "";
+  let activeToolEl = null;
+  const bodyOf = (el) => el?.querySelector("[data-msg-body]");
+
+  try {
+    await postSse(
+      `${base}/api/agent/run`,
+      { prompt, tools, context, max_rounds: 5 },
+      (event, payload) => {
+        switch (event) {
+          case "thinking": {
+            const b = bodyOf(thinkEl);
+            if (b) b.textContent = zh ? `🤔 第 ${payload.round} 轮思考中…` : `🤔 Round ${payload.round} thinking…`;
+            scrollToBottom();
+            break;
+          }
+          case "tool_call": {
+            const label = TOOL_LABELS[payload.tool_name] || payload.tool_name;
+            activeToolEl = pushSystemStateMsg(`🔧 ${zh ? "调用" : "Calling"}: ${label}`, "progress");
+            scrollToBottom();
+            break;
+          }
+          case "tool_result": {
+            if (activeToolEl) {
+              const b = bodyOf(activeToolEl);
+              const icon = payload.ok ? "✅" : "❌";
+              const label = TOOL_LABELS[payload.tool_name] || payload.tool_name;
+              if (b) b.textContent = `${icon} ${label} ${payload.ok ? (zh ? "完成" : "done") : (zh ? "失败" : "failed")}`;
+              activeToolEl.classList.remove("status-tone-progress");
+              activeToolEl.classList.add(payload.ok ? "status-tone-done" : "status-tone-blocked");
+            }
+            if (payload.video_url) {
+              pushVideoUrlToHistory();
+              state.lastVideoUrl = payload.video_url;
+              document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = payload.video_url; });
+              renderVideoEditor();
+              applyVideoEditsToPreview();
+            }
+            break;
+          }
+          case "delta": {
+            if (!replyBubble) {
+              thinkEl?.remove();
+              replyBubble = pushSystemReplyMsg("");
+            }
+            replyText += payload.delta || "";
+            const b = bodyOf(replyBubble);
+            if (b) b.textContent = replyText;
+            scrollToBottom();
+            break;
+          }
+          case "done": {
+            thinkEl?.remove();
+            if (!replyBubble && payload.content) pushSystemReplyMsg(payload.content, { speed: 20 });
+            break;
+          }
+          case "error": {
+            thinkEl?.remove();
+            pushSystemStateMsg(payload.error || (zh ? "Agent 执行失败" : "Agent failed"), "blocked");
+            break;
+          }
+        }
+      },
+      120000
+    );
+  } catch (e) {
+    thinkEl?.remove();
+    pushSystemStateMsg(String(e?.message || (zh ? "Agent 请求失败" : "Agent request failed")), "blocked");
+  }
+}
+
+/**
+ * Auto-generate subtitles from the current video using Gemini ASR.
+ * Calls /api/video/asr, shows the timestamped subtitle list in chat,
+ * then lets the user pick which ones to apply.
+ */
+async function applyAsrSubtitlesToCurrentVideo() {
+  if (!state.lastVideoUrl) {
+    pushSystemStateMsg(currentLang === "zh" ? "请先加载一段视频" : "Please load a video first", "blocked");
+    return;
+  }
+  const zh = currentLang === "zh";
+  const bubble = pushSystemStateMsg(zh ? "🎙️ 正在识别视频语音，请稍候…" : "🎙️ Transcribing video audio…", "progress");
+  try {
+    const base = getApiBase();
+    const resp = await postJson(`${base}/api/video/asr`, { video_url: state.lastVideoUrl }, 150000);
+    const subs = Array.isArray(resp?.subtitles) ? resp.subtitles : [];
+    if (!subs.length) {
+      const bodyEl = bubble?.querySelector("[data-msg-body]");
+      if (bodyEl) bodyEl.textContent = zh ? "⚠️ 未检测到语音内容" : "⚠️ No speech detected";
+      bubble?.classList.replace("status-tone-progress", "status-tone-blocked");
+      return;
+    }
+    // Update bubble to show success
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? `✅ 识别到 ${subs.length} 条字幕` : `✅ Found ${subs.length} subtitles`;
+    bubble?.classList.replace("status-tone-progress", "status-tone-done");
+
+    // Render subtitle list as a guide message with "Apply All" button
+    const confirmId = `asr-confirm-${Date.now()}`;
+    const lines = subs.slice(0, 8).map((s) => `[${s.start.toFixed(1)}s–${s.end.toFixed(1)}s] ${s.text}`);
+    if (subs.length > 8) lines.push(`… (+${subs.length - 8} more)`);
+    const listHtml = lines.map((l) => `<div style="font-size:12px;opacity:0.85;margin:2px 0">${l}</div>`).join("");
+
+    window[`__asrApply_${confirmId}`] = async () => {
+      document.getElementById(confirmId)?.remove();
+      // Apply all subtitles via sequential subtitle export
+      pushSystemStateMsg(zh ? "应用字幕中…" : "Applying subtitles…", "progress");
+      // Apply first subtitle as a representative mask (batch not supported by current API)
+      const first = subs[0];
+      if (first) {
+        const prevEdit = state.videoEdit || {};
+        state.videoEdit = {
+          ...prevEdit,
+          maskText: first.text,
+          maskStyle: prevEdit.maskStyle || "elegant",
+          maskFont: prevEdit.maskFont || "sans",
+          maskColor: prevEdit.maskColor || "#ffffff",
+          x: prevEdit.x ?? 10, y: prevEdit.y ?? 80,
+          w: prevEdit.w ?? 80, h: prevEdit.h ?? 12,
+          opacity: prevEdit.opacity ?? 90, rotation: prevEdit.rotation ?? 0,
+        };
+        applyVideoEditsToPreview();
+        const base2 = getApiBase();
+        try {
+          pushVideoUrlToHistory();
+          const exportResp = await postJson(
+            `${base2}/api/video/edit/export`,
+            { video_url: state.lastVideoUrl, edits: state.videoEdit },
+            240000
+          );
+          const url = String(exportResp?.video_url || "").trim();
+          if (url) {
+            state.lastVideoUrl = url;
+            document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = url; });
+            renderVideoEditor();
+            applyVideoEditsToPreview();
+          }
+          pushSystemStateMsg(
+            zh ? `✅ 已应用第一条字幕（共 ${subs.length} 条）` : `✅ Applied subtitle 1 of ${subs.length}`,
+            "done"
+          );
+        } catch (_e) {
+          state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1);
+          _saveVideoHistory();
+          pushSystemStateMsg(zh ? "字幕应用失败" : "Subtitle apply failed", "blocked");
+        }
+      }
+    };
+    window[`__asrCopy_${confirmId}`] = () => {
+      const text = subs.map((s) => `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text}`).join("\n");
+      navigator.clipboard?.writeText(text).then(() => {
+        pushSystemStateMsg(zh ? "已复制字幕到剪贴板" : "Subtitles copied to clipboard", "done");
+      });
+    };
+
+    pushSystemGuideMsg(
+      `${zh ? "🎙️ 识别到以下字幕：" : "🎙️ Detected subtitles:"}\n${listHtml}` +
+      `<span id="${confirmId}" style="display:inline-flex;gap:6px;margin-top:8px;">` +
+      `<button class="action-chip-btn" onclick="window['__asrApply_${confirmId}']()">${zh ? "应用第一条" : "Apply first"}</button>` +
+      `<button class="action-chip-btn" onclick="window['__asrCopy_${confirmId}']()">${zh ? "复制全部" : "Copy all"}</button>` +
+      `</span>`
+    );
+  } catch (e) {
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? `❌ 识别失败: ${e?.message || ""}` : `❌ Failed: ${e?.message || ""}`;
+    bubble?.classList.replace("status-tone-progress", "status-tone-blocked");
+  }
 }
 
  * Returns { start, end, text } if matched, null otherwise.
@@ -6710,6 +7031,17 @@ async function onSend() {
       return;
     }
     if (showPromptConfigConfirmBubble(finalText)) return;
+    // If a video is loaded and the text looks like a question/analysis/edit request → Agent Run
+    if (
+      state.lastVideoUrl &&
+      /(帮我|分析|看看|检查|建议|评估|修改|调整|什么|如何|怎么|为什么|能否|是否|有没有|对吗|好吗|给我)/i.test(finalText) &&
+      finalText.length < 120
+    ) {
+      if (chatInput) chatInput.value = "";
+      pushMsg("user", finalText, { typewriter: false });
+      await callAgentRunAndRender(finalText);
+      return;
+    }
     await submitSimplePromptGeneration(finalText);
     return;
   }
@@ -7713,6 +8045,7 @@ syncSimpleControlsFromState();
 updateDurationOptions();
 updateGenerationGateUI();
 applyWorkspaceMode();
+_loadVideoHistory(); // restore undo stack from localStorage
 consumeLandingParams();
 const mergedWelcomeGuide = state._landingHint
   ? `${t("welcome")} ${state._landingHint}`

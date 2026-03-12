@@ -749,3 +749,118 @@ def register_video_edit_routes(
             except Exception:
                 pass
         return jsonify({"ok": True, "job_id": job_id, "status": "cancelling"})
+
+    @app.post("/api/video/asr")
+    def api_video_asr():
+        """Auto-generate timestamped subtitles from a video using Gemini vision.
+
+        Request JSON:
+            video_url   str   — URL of the video to transcribe (required)
+            language    str   — "zh" | "en" (default "zh")
+            max_lines   int   — max subtitle lines to return (default 20)
+            project_id  str   — GCP project id (optional, falls back to env)
+            key_file    str   — GCP service-account key path (optional)
+
+        Response JSON:
+            ok          bool
+            subtitles   list of {start, end, text}
+            raw_text    str   — raw Gemini output (debug)
+        """
+        import re as _re
+        import requests as _req
+        from shoplive.backend.infra import parse_common_payload, get_access_token
+
+        payload = request.get_json(silent=True) or {}
+        video_url = str(payload.get("video_url") or "").strip()
+        language = str(payload.get("language") or "zh").strip().lower()
+        max_lines = max(1, min(40, int(payload.get("max_lines") or 20)))
+
+        if not video_url:
+            from shoplive.backend.common.helpers import json_error
+            return json_error("video_url 不能为空", error_code="MISSING_VIDEO_URL")
+
+        try:
+            project_id, key_file, proxy, _ = parse_common_payload(payload)
+        except Exception:
+            project_id, key_file, proxy = "", "", ""
+
+        from shoplive.backend.common.helpers import json_error, download_video_to_file
+        from shoplive.backend.infra import build_proxies
+
+        try:
+            # Download video to a temp file for base64 encoding
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir) / "asr_input.mp4"
+                download_video_to_file(video_url, tmp_path, proxies=build_proxies(proxy))
+                video_bytes = tmp_path.read_bytes()
+
+            video_b64 = base64.b64encode(video_bytes).decode("ascii")
+            mime_type = "video/mp4"
+
+            # Limit upload size: skip if >20 MB (Gemini inline limit)
+            if len(video_bytes) > 20 * 1024 * 1024:
+                return json_error("视频文件过大（>20MB），暂不支持 ASR", error_code="VIDEO_TOO_LARGE")
+
+            token = get_access_token(key_file, proxy)
+            lang_name = "Chinese" if language == "zh" else "English"
+            prompt = (
+                f"Watch this video carefully and generate timestamped subtitles in {lang_name}. "
+                f"Return up to {max_lines} lines. "
+                "Format each line EXACTLY as: [START_SEC-END_SEC] TEXT\n"
+                "Example: [0.0-3.5] 这是第一句字幕\n"
+                "Rules:\n"
+                "- START_SEC and END_SEC are floats in seconds from video start\n"
+                "- If the video has no speech, return an empty list and say '无语音内容'\n"
+                "- Do NOT add any extra explanation, only the timestamped lines\n"
+            )
+            gemini_model = "gemini-2.5-flash"
+            location = "global"
+            url = (
+                f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
+                f"/locations/{location}/publishers/google/models/{gemini_model}:generateContent"
+            )
+            body = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"inline_data": {"mime_type": mime_type, "data": video_b64}},
+                        {"text": prompt},
+                    ],
+                }],
+                "generation_config": {"temperature": 0.1, "max_output_tokens": 2048},
+            }
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            }
+            proxies = build_proxies(proxy)
+            resp = _req.post(url, json=body, headers=headers, proxies=proxies or None, timeout=120)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Extract text from Gemini response
+            raw_text = ""
+            for cand in (data.get("candidates") or []):
+                for part in (cand.get("content", {}).get("parts") or []):
+                    raw_text += part.get("text", "")
+
+            # Parse timestamped lines: [0.0-3.5] text
+            LINE_PAT = _re.compile(r"\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]\s*(.+)")
+            subtitles = []
+            for line in raw_text.splitlines():
+                m = LINE_PAT.search(line.strip())
+                if m:
+                    start = float(m.group(1))
+                    end = float(m.group(2))
+                    text = m.group(3).strip()
+                    if end > start and text:
+                        subtitles.append({"start": start, "end": end, "text": text})
+                    if len(subtitles) >= max_lines:
+                        break
+
+            return jsonify({"ok": True, "subtitles": subtitles, "raw_text": raw_text})
+
+        except Exception as exc:
+            from shoplive.backend.common.helpers import json_error
+            return json_error(f"ASR 失败: {exc}", 500, error_code="ASR_FAILED")
+
