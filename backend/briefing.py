@@ -96,8 +96,9 @@ def normalize_shoplive_brief(payload: Dict) -> Dict:
     total_duration = normalize_total_duration_seconds(raw_total_duration)
     duration = normalize_duration_seconds(payload.get("duration", total_duration))
     raw_aspect_ratio = str(payload.get("aspect_ratio", "16:9") or "16:9").strip() or "16:9"
-    aspect_ratio_overridden = raw_aspect_ratio != "16:9"
-    aspect_ratio = "16:9"
+    _VALID_RATIOS = {"16:9", "9:16", "1:1"}
+    aspect_ratio = raw_aspect_ratio if raw_aspect_ratio in _VALID_RATIOS else "16:9"
+    aspect_ratio_overridden = raw_aspect_ratio not in _VALID_RATIOS and raw_aspect_ratio != "16:9"
     product_name = str(payload.get("product_name", "") or "").strip()
     main_category = str(payload.get("main_category", payload.get("main_business", "")) or "").strip()
     template = str(payload.get("template", payload.get("style_template", "clean")) or "clean").strip() or "clean"
@@ -126,7 +127,7 @@ def normalize_shoplive_brief(payload: Dict) -> Dict:
         if isinstance(payload.get("quality_reports", []), list)
         else [],
         "aspect_ratio_warning": (
-            f"aspect_ratio '{raw_aspect_ratio}' 暂不支持，已自动设为 '16:9'"
+            f"aspect_ratio '{raw_aspect_ratio}' 不支持（仅 16:9 / 9:16 / 1:1），已自动设为 '16:9'"
             if aspect_ratio_overridden else ""
         ),
     }

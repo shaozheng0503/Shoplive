@@ -6857,7 +6857,7 @@ async function generateVideo(promptOverride = "") {
     }
     if (getModelProvider() === "tabcode") {
       const targetDuration = Number(state.duration) || 6;
-      const grokPrompt = buildGrokVideoPrompt(safePrompt, 6);
+      const grokPrompt = buildGrokVideoPrompt(safePrompt, targetDuration);
       await generateTabcodeVideo(grokPrompt, taskId, targetDuration);
       finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
       releaseSlotOnce();
