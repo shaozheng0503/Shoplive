@@ -13,43 +13,90 @@ from shoplive.backend.scraper.adapters.generic_adapter import (
 
 def _extract_amazon_images(product_url: str, html_text: str, product_name: str):
     candidates = []
+    text = html_text or ""
+
+    # 1. High-res direct attributes
     for pattern in [
         r'data-old-hires=["\']([^"\']+)["\']',
         r'"hiRes"\s*:\s*"([^"]+)"',
         r'"large"\s*:\s*"([^"]+)"',
         r'"mainUrl"\s*:\s*"([^"]+)"',
     ]:
-        for raw in re.findall(pattern, html_text or "", flags=re.IGNORECASE):
+        for raw in re.findall(pattern, text, flags=re.IGNORECASE):
             url = html.unescape(str(raw or "").replace("\\/", "/").strip())
             if url.startswith("http"):
                 candidates.append({"url": url, "source": "amazon_hires"})
 
-    # Amazon variant blocks often carry image dictionaries.
-    for raw_json in re.findall(r'"colorImages"\s*:\s*(\{[\s\S]*?\})\s*,\s*"colorToAsin"', html_text or "", flags=re.IGNORECASE):
+    # 2. data-a-dynamic-image — JSON dict of {url: [w, h]} on #landingImage
+    for raw_json in re.findall(r'data-a-dynamic-image=["\'](\{[^"\']+\})["\']', text, flags=re.IGNORECASE):
         try:
-            blob = json.loads(raw_json)
+            blob = json.loads(html.unescape(raw_json))
+            if isinstance(blob, dict):
+                # Pick the largest dimension variant
+                best_url = max(blob.keys(), key=lambda u: (blob[u] or [0, 0])[0], default=None)
+                if best_url and best_url.startswith("http"):
+                    candidates.append({"url": best_url, "source": "amazon_dynamic"})
+                for u in blob:
+                    if u.startswith("http"):
+                        candidates.append({"url": u, "source": "amazon_dynamic"})
         except Exception:
-            continue
-        if not isinstance(blob, dict):
-            continue
-        for _, imgs in blob.items():
-            if not isinstance(imgs, list):
-                continue
-            for item in imgs:
-                if not isinstance(item, dict):
-                    continue
-                for key in ("hiRes", "large", "mainUrl"):
-                    url = html.unescape(str(item.get(key) or "").replace("\\/", "/").strip())
-                    if url.startswith("http"):
-                        candidates.append({"url": url, "source": "amazon_hires"})
+            pass
 
-    for raw in re.findall(r'"landingImageUrl"\s*:\s*"([^"]+)"', html_text or "", flags=re.IGNORECASE):
+    # 3. ImageBlockATF / ImageBlockBTF embedded JSON
+    for block_pattern in [
+        r"'colorImages'\s*:\s*(\{[\s\S]*?\})\s*,\s*'colorToAsin'",
+        r'"colorImages"\s*:\s*(\{[\s\S]*?\})\s*,\s*"colorToAsin"',
+        r"ImageBlockATF\s*&&\s*ImageBlockATF\.push\s*\((\{[\s\S]*?\})\)",
+    ]:
+        for raw_json in re.findall(block_pattern, text, flags=re.IGNORECASE):
+            try:
+                blob = json.loads(raw_json)
+            except Exception:
+                continue
+            if not isinstance(blob, dict):
+                continue
+            for _, imgs in blob.items():
+                if not isinstance(imgs, list):
+                    continue
+                for item in imgs:
+                    if not isinstance(item, dict):
+                        continue
+                    for key in ("hiRes", "large", "mainUrl"):
+                        url = html.unescape(str(item.get(key) or "").replace("\\/", "/").strip())
+                        if url.startswith("http"):
+                            candidates.append({"url": url, "source": "amazon_hires"})
+
+    # 4. landingImageUrl in JS data
+    for raw in re.findall(r'"landingImageUrl"\s*:\s*"([^"]+)"', text, flags=re.IGNORECASE):
         url = html.unescape(raw.replace("\\/", "/").strip())
         if url.startswith("http"):
             candidates.append({"url": url, "source": "amazon_hires"})
 
-    for raw in re.findall(r'https://[^"\']*images-na\.ssl-images-amazon\.com[^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*', html_text or "", flags=re.IGNORECASE):
-        candidates.append({"url": html.unescape(raw), "source": "amazon_hires"})
+    # 5. JSON-LD product image
+    for raw_json in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>', text, flags=re.IGNORECASE):
+        try:
+            blob = json.loads(raw_json.strip())
+            entries = blob if isinstance(blob, list) else [blob]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                for key in ("image", "thumbnailUrl"):
+                    val = entry.get(key)
+                    if isinstance(val, str) and val.startswith("http"):
+                        candidates.append({"url": val, "source": "amazon_jsonld"})
+                    elif isinstance(val, list):
+                        for v in val:
+                            if isinstance(v, str) and v.startswith("http"):
+                                candidates.append({"url": v, "source": "amazon_jsonld"})
+        except Exception:
+            pass
+
+    # 6. Fallback: any SSL images-amazon CDN URL
+    for raw in re.findall(
+        r'https://[^"\'<>\s]*(?:images-na\.ssl-images-amazon\.com|m\.media-amazon\.com)[^"\'<>\s]+\.(?:jpg|jpeg|png|webp)',
+        text, flags=re.IGNORECASE,
+    ):
+        candidates.append({"url": html.unescape(raw), "source": "amazon_cdn"})
 
     return rank_and_filter_images(candidates, product_name=product_name, platform="amazon", limit=12)
 
@@ -88,12 +135,71 @@ def _extract_amazon_reviews(html_text: str):
     return lines, pos, neg, summary
 
 
+def _extract_amazon_product_name(html_text: str) -> str:
+    """Try #productTitle and JSON-LD name before falling back to generic."""
+    text = html_text or ""
+    # #productTitle span
+    m = re.search(r'id=["\']productTitle["\'][^>]*>\s*([\s\S]*?)\s*</(?:span|h1)', text, re.IGNORECASE)
+    if m:
+        name = clean_text(html.unescape(m.group(1)))
+        if name:
+            return name
+    # JSON-LD name
+    for raw_json in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>', text, re.IGNORECASE):
+        try:
+            blob = json.loads(raw_json.strip())
+            entries = blob if isinstance(blob, list) else [blob]
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("name"):
+                    name = clean_text(str(entry["name"]))
+                    if name:
+                        return name
+        except Exception:
+            pass
+    return ""
+
+
+def _extract_amazon_selling_points(html_text: str) -> list:
+    """Extract bullet points from feature-bullets section."""
+    text = html_text or ""
+    bullets = []
+    # Feature bullets block
+    m = re.search(r'id=["\']feature-bullets["\'][\s\S]*?(<ul[\s\S]*?</ul>)', text, re.IGNORECASE)
+    if m:
+        for li in re.findall(r'<li[^>]*>([\s\S]*?)</li>', m.group(1), re.IGNORECASE):
+            point = clean_text(html.unescape(re.sub(r'<[^>]+>', '', li)))
+            if point and len(point) > 4 and "javascript" not in point.lower():
+                bullets.append(point)
+    # Fallback: #productDescription
+    if not bullets:
+        desc_m = re.search(r'id=["\']productDescription["\'][^>]*>([\s\S]*?)</div>', text, re.IGNORECASE)
+        if desc_m:
+            for li in re.findall(r'<li[^>]*>([\s\S]*?)</li>', desc_m.group(1), re.IGNORECASE):
+                point = clean_text(html.unescape(re.sub(r'<[^>]+>', '', li)))
+                if point and len(point) > 4:
+                    bullets.append(point)
+    return bullets[:8]
+
+
 def parse_amazon_page(product_url: str, html_text: str):
     result = parse_generic_page(product_url, html_text, platform_hint="amazon")
+
+    # Override product name with Amazon-specific extraction if better
+    amazon_name = _extract_amazon_product_name(html_text)
+    if amazon_name and (not result.product_name or len(amazon_name) > len(result.product_name)):
+        result.product_name = amazon_name
+
     images = _extract_amazon_images(product_url, html_text, result.product_name)
     review_lines, review_pos, review_neg, review_summary = _extract_amazon_reviews(html_text)
+
     if images:
         result.image_urls = images
+
+    # Selling points from feature bullets
+    bullets = _extract_amazon_selling_points(html_text)
+    if bullets and not getattr(result, "selling_points", None):
+        result.selling_points = bullets
+
     if review_lines:
         result.review_highlights = review_lines
     if review_pos:
@@ -102,6 +208,7 @@ def parse_amazon_page(product_url: str, html_text: str):
         result.review_negative_points = review_neg
     if review_summary:
         result.review_summary = review_summary
+
     result.main_image_confidence = "high" if len(result.image_urls) >= 3 else ("medium" if result.image_urls else "low")
     result.review_extraction_method = "structured" if (review_lines or review_pos or review_neg) else "generic"
 

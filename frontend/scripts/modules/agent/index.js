@@ -3753,11 +3753,8 @@ async function onUpload(files) {
     chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
     state.lastPrompt = chatInput.value.trim();
     state.lastStoryboard = buildStoryboardText();
-    try {
-      await hydrateWorkflowTexts(true);
-    } catch (_e) {}
-    if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
     syncSimpleControlsFromState();
+    // Show parse result immediately so user sees it before they can submit
     pushSystemStateMsg(
       t("parseDone", {
         product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
@@ -3766,6 +3763,9 @@ async function onUpload(files) {
       }),
       "done"
     );
+    // Hydrate in background; silently update prompt if improved
+    try { await hydrateWorkflowTexts(true); } catch (_e) {}
+    if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
     return;
   }
   pushSystemReplyMsg(t("insightRecapTitle"));
@@ -4309,14 +4309,15 @@ function consumeLandingParams() {
           chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
           state.lastPrompt = chatInput.value.trim();
           state.lastStoryboard = buildStoryboardText();
-          try { await hydrateWorkflowTexts(true); } catch (_) {}
-          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
           syncSimpleControlsFromState();
+          // Show immediately — don't wait for hydrateWorkflowTexts
           pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
             style: state.template || "clean",
           }), "done");
+          try { await hydrateWorkflowTexts(true); } catch (_) {}
+          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
         }, 600);
       }
     } catch (_e) {}
@@ -4347,14 +4348,15 @@ function consumeLandingParams() {
           chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
           state.lastPrompt = chatInput.value.trim();
           state.lastStoryboard = buildStoryboardText();
-          try { await hydrateWorkflowTexts(true); } catch (_) {}
-          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
           syncSimpleControlsFromState();
+          // Show immediately — don't wait for hydrateWorkflowTexts
           pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
             style: state.template || "clean",
           }), "done");
+          try { await hydrateWorkflowTexts(true); } catch (_) {}
+          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
         }, 600);
       }
     } catch (_e) {}
@@ -4467,14 +4469,15 @@ function scheduleLandingPrefillAfterWelcome() {
         chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
         state.lastPrompt = chatInput.value.trim();
         state.lastStoryboard = buildStoryboardText();
-        try { await hydrateWorkflowTexts(true); } catch (_) {}
-        if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
         syncSimpleControlsFromState();
+        // Show immediately — don't wait for hydrateWorkflowTexts
         pushSystemStateMsg(t("parseDone", {
           product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
           business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
           style: state.template || "clean",
         }), "done");
+        try { await hydrateWorkflowTexts(true); } catch (_) {}
+        if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
       });
       card.appendChild(imgBtn);
       container.appendChild(card);
@@ -4806,19 +4809,75 @@ window.addEventListener("resize", () => updateToolbarIndicator());
 // so the text-mask overlay, color filter and BGM remain visible.
 document.addEventListener("fullscreenchange", () => {
   const fsEl = document.fullscreenElement;
-  if (!fsEl || fsEl.tagName !== "VIDEO") return;
-  const surface = fsEl.closest(".video-edit-surface");
-  if (!surface) return;
-  document.exitFullscreen().then(() => surface.requestFullscreen()).then(() => applyVideoEditsToPreview()).catch(err => console.debug('[shoplive]', err));
+  if (!fsEl) return;
+  // If the fullscreen element is a <video> inside a surface, redirect to the surface
+  if (fsEl.tagName === "VIDEO") {
+    const surface = fsEl.closest(".video-edit-surface");
+    if (!surface) return;
+    document.exitFullscreen()
+      .then(() => surface.requestFullscreen())
+      .then(() => applyVideoEditsToPreview())
+      .catch(err => console.debug("[shoplive]", err));
+    return;
+  }
+  // Surface is now fullscreen — clear inline size limits on the video so it fills screen
+  if (fsEl.classList?.contains("video-edit-surface")) {
+    const video = fsEl.querySelector("video");
+    if (video) {
+      video.dataset.inlineStyleBackup = video.getAttribute("style") || "";
+      video.style.cssText = "display:block;width:100%;height:100%;max-width:100vw;max-height:100vh;min-height:unset;object-fit:contain;border-radius:0;background:#000;";
+    }
+    applyVideoEditsToPreview();
+  }
 });
+document.addEventListener("fullscreenchange", () => {
+  // Handle exit: restore inline style
+  if (!document.fullscreenElement) {
+    document.querySelectorAll(".video-edit-surface[data-was-fs]").forEach((surface) => {
+      surface.removeAttribute("data-was-fs");
+    });
+    document.querySelectorAll(".video-edit-surface video[data-inline-style-backup]").forEach((video) => {
+      const backup = video.dataset.inlineStyleBackup;
+      if (backup !== undefined) {
+        video.setAttribute("style", backup);
+        delete video.dataset.inlineStyleBackup;
+      }
+    });
+    applyVideoEditsToPreview();
+  }
+}, { capture: false });
 document.addEventListener("webkitfullscreenchange", () => {
   const fsEl = document.webkitFullscreenElement;
-  if (!fsEl || fsEl.tagName !== "VIDEO") return;
-  const surface = fsEl.closest(".video-edit-surface");
-  if (!surface) return;
-  document.webkitExitFullscreen?.();
-  surface.webkitRequestFullscreen?.();
-  applyVideoEditsToPreview();
+  if (!fsEl) {
+    // Exiting — restore inline styles
+    document.querySelectorAll(".video-edit-surface video[data-inline-style-backup]").forEach((video) => {
+      const backup = video.dataset.inlineStyleBackup;
+      if (backup !== undefined) {
+        video.setAttribute("style", backup);
+        delete video.dataset.inlineStyleBackup;
+      }
+    });
+    applyVideoEditsToPreview();
+    return;
+  }
+  if (fsEl.tagName === "VIDEO") {
+    const surface = fsEl.closest(".video-edit-surface");
+    if (!surface) return;
+    document.webkitExitFullscreen?.();
+    setTimeout(() => {
+      surface.webkitRequestFullscreen?.();
+      applyVideoEditsToPreview();
+    }, 80);
+    return;
+  }
+  if (fsEl.classList?.contains("video-edit-surface")) {
+    const video = fsEl.querySelector("video");
+    if (video) {
+      video.dataset.inlineStyleBackup = video.getAttribute("style") || "";
+      video.style.cssText = "display:block;width:100%;height:100%;max-width:100vw;max-height:100vh;min-height:unset;object-fit:contain;border-radius:0;background:#000;";
+    }
+    applyVideoEditsToPreview();
+  }
 });
 
 // ── Quick-edit command chips bar ─────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import re
 import threading
 from typing import Callable, Dict
 from urllib.parse import urlparse
@@ -9,11 +10,15 @@ from shoplive.backend.scraper.models import FetchArtifact
 
 DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 MOBILE_UA = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+)
+DESKTOP_UA_WIN = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
 
@@ -22,24 +27,75 @@ def _is_amazon_url(url: str) -> bool:
     return "amazon." in host
 
 
+def _normalize_amazon_url(url: str) -> str:
+    """Strip tracking/affiliate params and reduce to canonical /dp/ASIN form.
+
+    Keeps the URL clean so bot-detection systems don't flag tracking parameters,
+    and also improves cache hit rate for the same product accessed via different
+    affiliate/referral links.
+    """
+    try:
+        parsed = urlparse(url)
+        # Extract ASIN from /dp/ASIN or /gp/product/ASIN paths
+        m = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", parsed.path)
+        if m:
+            asin = m.group(1)
+            clean_path = f"/dp/{asin}"
+            return f"{parsed.scheme}://{parsed.netloc}{clean_path}"
+    except Exception:
+        pass
+    return url
+
+
 def _build_amazon_headers_variants():
     desktop = {
         "User-Agent": DESKTOP_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
         "Referer": "https://www.amazon.com/",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+    }
+    desktop_win = {
+        "User-Agent": DESKTOP_UA_WIN,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Referer": "https://www.amazon.com/",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
     }
     mobile = {
         "User-Agent": MOBILE_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
         "Referer": "https://www.amazon.com/",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "upgrade-insecure-requests": "1",
     }
-    return [desktop, mobile]
+    return [desktop, desktop_win, mobile]
 
 
 def _is_anti_bot_page(html_text: str) -> bool:
@@ -118,6 +174,10 @@ def _detect_failure_tag(html_text: str, anti_bot: bool, platform: str = "") -> s
 
 
 def fetch_html_with_requests(product_url: str, proxy: str, build_proxies: Callable[[str], Dict[str, str]]) -> FetchArtifact:
+    import time as _time
+    is_amazon = _is_amazon_url(product_url)
+    fetch_url = _normalize_amazon_url(product_url) if is_amazon else product_url
+
     headers = {
         "User-Agent": DESKTOP_UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -129,16 +189,15 @@ def fetch_html_with_requests(product_url: str, proxy: str, build_proxies: Callab
     try:
         session = requests.Session()
         response_candidates = []
-        if _is_amazon_url(product_url):
-            header_variants = _build_amazon_headers_variants()
-        else:
-            header_variants = [headers]
+        header_variants = _build_amazon_headers_variants() if is_amazon else [headers]
 
-        for req_headers in header_variants:
-            resp = session.get(product_url, timeout=45, proxies=proxies, headers=req_headers, allow_redirects=True)
+        for idx, req_headers in enumerate(header_variants):
+            if idx > 0:
+                _time.sleep(0.8)  # small back-off between UA variants
+            resp = session.get(fetch_url, timeout=45, proxies=proxies, headers=req_headers, allow_redirects=True)
             html_text = resp.text or ""
             anti_bot = _is_anti_bot_page(html_text)
-            failure_tag = _detect_failure_tag(html_text, anti_bot, platform=resp.url or product_url)
+            failure_tag = _detect_failure_tag(html_text, anti_bot, platform=resp.url or fetch_url)
             response_candidates.append((resp, html_text, anti_bot, failure_tag))
             if resp.status_code < 400 and failure_tag not in {"anti_bot", "weak_html", "js_challenge"}:
                 break
@@ -150,7 +209,7 @@ def fetch_html_with_requests(product_url: str, proxy: str, build_proxies: Callab
                 break
         return FetchArtifact(
             engine="requests",
-            url=resp.url or product_url,
+            url=resp.url or fetch_url,
             status_code=resp.status_code,
             html=html_text,
             anti_bot=anti_bot,
@@ -159,7 +218,7 @@ def fetch_html_with_requests(product_url: str, proxy: str, build_proxies: Callab
     except Exception as e:
         return FetchArtifact(
             engine="requests",
-            url=product_url,
+            url=fetch_url,
             status_code=599,
             html="",
             anti_bot=False,
@@ -265,23 +324,79 @@ class _PlaywrightPool:
                 failure_tag="playwright_unavailable",
             )
 
+        is_amazon = _is_amazon_url(url)
+        fetch_url = _normalize_amazon_url(url) if is_amazon else url
+        ctx_locale = "en-US" if is_amazon else "zh-CN"
+
         html_text = ""
         status_code = 599
-        final_url = url
+        final_url = fetch_url
         context = None
         try:
             context = self._local.browser.new_context(
                 user_agent=DESKTOP_UA,
-                locale="zh-CN",
-                viewport={"width": 1365, "height": 1024},
+                locale=ctx_locale,
+                viewport={"width": 1440, "height": 900},
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"macOS"',
+                } if is_amazon else {},
             )
             page = context.new_page()
+
+            # Block resources that are not needed for HTML extraction —
+            # images, fonts, stylesheets, tracking pixels speed up page load significantly
+            _BLOCK_RES = {"image", "media", "font", "stylesheet"}
+            _BLOCK_HOSTS = {
+                "fls-na.amazon.com", "amazon-adsystem.com",
+                "doubleclick.net", "googlesyndication.com",
+                "google-analytics.com", "googletagmanager.com",
+            }
+
+            def _handle_route(route):
+                if route.request.resource_type in _BLOCK_RES:
+                    route.abort()
+                    return
+                req_host = urlparse(route.request.url).hostname or ""
+                if any(d in req_host for d in _BLOCK_HOSTS):
+                    route.abort()
+                    return
+                route.continue_()
+
+            page.route("**/*", _handle_route)
+
+            # Stealth: mask navigator.webdriver and plugins to avoid bot detection
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+                window.chrome = {runtime: {}};
+            """)
             try:
-                resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(render_wait_ms)
-                html_text = page.content() or ""
+                resp = page.goto(fetch_url, wait_until="domcontentloaded", timeout=60000)
                 status_code = resp.status if resp else 200
-                final_url = page.url or url
+                final_url = page.url or fetch_url
+
+                if is_amazon:
+                    # Wait for product content elements before extracting HTML
+                    try:
+                        page.wait_for_selector(
+                            "#productTitle, #landingImage, #feature-bullets",
+                            timeout=12000,
+                        )
+                    except Exception:
+                        pass
+                    # Scroll to trigger lazy-loaded JS data blocks
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight / 3)")
+                    page.wait_for_timeout(800)
+                    page.evaluate("window.scrollTo(0, 0)")
+                    page.wait_for_timeout(max(render_wait_ms, 4000))
+                else:
+                    page.wait_for_timeout(render_wait_ms)
+
+                html_text = page.content() or ""
             finally:
                 page.close()
         except Exception as e:

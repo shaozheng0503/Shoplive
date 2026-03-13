@@ -219,8 +219,11 @@ def _score_image_url(url: str, *, source: str, product_name: str, platform: str)
     score = 0
     source_weight = {
         "jsonld": 90,
+        "amazon_jsonld": 88,
         "inline": 80,
         "amazon_hires": 95,
+        "amazon_dynamic": 92,
+        "amazon_cdn": 50,
         "meta": 40,
         "html_img": 10,
         "shein_inline": 90,
@@ -254,11 +257,17 @@ def _score_image_url(url: str, *, source: str, product_name: str, platform: str)
     if any(k in low for k in ["product", "main", "gallery", "large", "original", "zoom", "detail", "hero", "pdp", "sl1500", "sl1200", "ac_sl"]):
         score += 20
     if platform == "amazon":
-        if "images-na.ssl-images-amazon.com/images/i/" in low or "/images/i/" in low:
+        amazon_cdn_domains = (
+            "images-na.ssl-images-amazon.com",
+            "m.media-amazon.com",
+            "images-eu.ssl-images-amazon.com",
+            "images-fe.ssl-images-amazon.com",
+        )
+        if any(d in low for d in amazon_cdn_domains):
             score += 55
         else:
             score -= 40
-        if any(k in low for k in ["_ac_sl", "_sl1500_", "_ul", "_sx", "_sy", "landing"]):
+        if any(k in low for k in ["_ac_sl", "_sl1500_", "_ul1500_", "_sx", "_sy", "landing"]):
             score += 20
         if any(k in low for k in ["sprite", "pixel", "fls-na.amazon", "amazon-adsystem", "nav", "icon", "logo"]):
             score -= 120
@@ -471,10 +480,10 @@ def parse_generic_page(product_url: str, html_text: str, platform_hint: str = "g
         parts = re.split(r"[，,。.;；!！?？\n]", description_plain)
         for p in parts:
             s = p.strip(" -:：")
-            if len(s) < 5 or len(s) > 42:
+            if len(s) < 5 or len(s) > 100:
                 continue
             selling_points.append(s)
-            if len(selling_points) >= 4:
+            if len(selling_points) >= 6:
                 break
     if not selling_points:
         selling_points = _build_fallback_selling_points(product_name)

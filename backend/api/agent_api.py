@@ -518,6 +518,53 @@ def register_agent_routes(
             fetch_req = None
             fetch_pw = None
 
+            def _merge_results(primary: ParseResult, secondary: ParseResult) -> ParseResult:
+                """Merge two ParseResults: take the best field from each source."""
+                # Product name: prefer the longer, more descriptive one
+                if not primary.product_name and secondary.product_name:
+                    primary.product_name = secondary.product_name
+                elif secondary.product_name and len(secondary.product_name) > len(primary.product_name or ""):
+                    primary.product_name = secondary.product_name
+
+                # Images: merge unique URLs, keeping order (primary first)
+                if secondary.image_urls:
+                    seen = set(primary.image_urls)
+                    for u in secondary.image_urls:
+                        if u not in seen:
+                            primary.image_urls.append(u)
+                            seen.add(u)
+
+                # Selling points: merge unique points
+                if secondary.selling_points:
+                    seen_sp = {s.lower() for s in primary.selling_points}
+                    for sp in secondary.selling_points:
+                        if sp.lower() not in seen_sp:
+                            primary.selling_points.append(sp)
+                            seen_sp.add(sp.lower())
+
+                # Reviews: merge unique lines
+                for attr in ("review_highlights", "review_positive_points", "review_negative_points"):
+                    pri_list = getattr(primary, attr, []) or []
+                    sec_list = getattr(secondary, attr, []) or []
+                    if sec_list:
+                        seen_r = {x.lower() for x in pri_list}
+                        for r in sec_list:
+                            if r.lower() not in seen_r:
+                                pri_list.append(r)
+                                seen_r.add(r.lower())
+                        setattr(primary, attr, pri_list[:8])
+
+                if not primary.review_summary and secondary.review_summary:
+                    primary.review_summary = secondary.review_summary
+                if not primary.price and secondary.price:
+                    primary.price = secondary.price
+                    primary.currency = secondary.currency
+
+                # Recalculate confidence after merge
+                from shoplive.backend.scraper.adapters.generic_adapter import _build_confidence
+                primary.confidence = _build_confidence(primary)
+                return primary
+
             if platform in js_first_platforms:
                 fetch_pw = fetch_html_with_playwright(
                     product_url,
@@ -530,13 +577,17 @@ def register_agent_routes(
                 needs_requests = (not fetch_pw.html) or fetch_pw.status_code >= 400 or parsed.confidence == "low"
                 if not parsed.product_name or not parsed.image_urls:
                     needs_requests = True
-                if platform == "amazon" and fetch_pw.failure_tag == "weak_html":
+                if platform == "amazon" and fetch_pw.failure_tag in {"weak_html", "anti_bot"}:
                     needs_requests = True
                 if needs_requests:
                     fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
                     parsed_req = parse_with_artifact(fetch_req)
                     if _artifact_quality(fetch_req, parsed_req) >= _artifact_quality(fetch_pw, parsed):
-                        parsed = parsed_req
+                        # requests result is better: use as primary, merge playwright into it
+                        parsed = _merge_results(parsed_req, parsed)
+                    else:
+                        # playwright result is better: merge requests fields into it
+                        parsed = _merge_results(parsed, parsed_req)
                     fallback_reason = fetch_req.failure_tag or fetch_req.error or fallback_reason
             else:
                 fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
@@ -554,7 +605,9 @@ def register_agent_routes(
                     )
                     parsed_pw = parse_with_artifact(fetch_pw)
                     if _artifact_quality(fetch_pw, parsed_pw) >= _artifact_quality(fetch_req, parsed):
-                        parsed = parsed_pw
+                        parsed = _merge_results(parsed_pw, parsed)
+                    else:
+                        parsed = _merge_results(parsed, parsed_pw)
                     fallback_reason = fetch_pw.failure_tag or fetch_pw.error or fallback_reason
 
             if parsed.confidence == "low" and not fallback_reason:
