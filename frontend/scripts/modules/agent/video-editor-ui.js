@@ -266,7 +266,22 @@ export function setupSurfaceFullscreen(surface) {
   // Re-apply all effects when fullscreen is entered (sizes may change)
   const onFsChange = () => {
     const isFs = document.fullscreenElement === surface || document.webkitFullscreenElement === surface;
-    if (isFs) applyVideoEditsToPreview();
+    const video = surface.querySelector("video");
+    if (isFs) {
+      // Remove inline size constraints so CSS :fullscreen rules can take full effect
+      if (video) {
+        video.dataset.inlineStyleBackup = video.getAttribute("style") || "";
+        video.style.cssText = "display:block;width:100vw;height:100vh;max-width:100vw;max-height:100vh;min-height:unset;object-fit:contain;border-radius:0;background:#000;";
+      }
+      applyVideoEditsToPreview();
+    } else {
+      // Restore original inline style when exiting fullscreen
+      if (video && video.dataset.inlineStyleBackup !== undefined) {
+        video.setAttribute("style", video.dataset.inlineStyleBackup);
+        delete video.dataset.inlineStyleBackup;
+      }
+      applyVideoEditsToPreview();
+    }
   };
   surface.addEventListener("fullscreenchange", onFsChange);
   surface.addEventListener("webkitfullscreenchange", onFsChange);

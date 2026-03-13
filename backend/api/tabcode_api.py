@@ -36,7 +36,7 @@ _POSTER_SRC_RE = re.compile(r'poster=["\']([^"\']+)["\']', re.IGNORECASE)
 _PROGRESS_RE = re.compile(r'(\d+)\s*%', re.IGNORECASE)
 
 
-def _stream_tabcode_video(prompt: str, model: str) -> Generator[str, None, None]:
+def _stream_tabcode_video(prompt: str, model: str, aspect_ratio: str = "16:9") -> Generator[str, None, None]:
     """
     Call tabcode API, stream SSE back to frontend with progress + final URL.
     Each yielded string is a raw SSE line (ends with \\n\\n).
@@ -53,11 +53,17 @@ def _stream_tabcode_video(prompt: str, model: str) -> Generator[str, None, None]
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
     }
+    # Map ratio string to pixel size (common format for video/image generation APIs)
+    _SIZE_MAP = {"9:16": "1080x1920", "16:9": "1920x1080", "1:1": "1080x1080"}
+    size = _SIZE_MAP.get(aspect_ratio, "1920x1080")
     payload = {
         "model": model or _DEFAULT_VIDEO_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "max_tokens": 1024,
+        # Pass aspect ratio as both ratio string and pixel size — providers vary on which they accept
+        "aspect_ratio": aspect_ratio,
+        "size": size,
     }
 
     try:
@@ -143,15 +149,16 @@ def register_tabcode_routes(app: Flask, **_kwargs) -> None:
             {"type":"error","message":"..."}
             [DONE]
         """
-        body = request.get_json(silent=True) or {}
-        prompt = str(body.get("prompt") or "").strip()
-        model  = str(body.get("model")  or _DEFAULT_VIDEO_MODEL).strip()
+        body         = request.get_json(silent=True) or {}
+        prompt       = str(body.get("prompt")       or "").strip()
+        model        = str(body.get("model")        or _DEFAULT_VIDEO_MODEL).strip()
+        aspect_ratio = str(body.get("aspect_ratio") or "16:9").strip()
 
         if not prompt:
             return json_error("prompt is required", 400)
 
         def generate():
-            yield from _stream_tabcode_video(prompt, model)
+            yield from _stream_tabcode_video(prompt, model, aspect_ratio)
 
         return Response(generate(), mimetype="text/event-stream",
                         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})

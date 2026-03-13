@@ -536,16 +536,29 @@ function buildGrokVideoPrompt(basePrompt, targetDuration = 8) {
     `Never drift to ${avoidBits}.`,
     "No jewelry, no earrings, no fashion accessories unless they are the exact target product.",
   ].filter(Boolean).join(" ");
-  return `Create a ${durStr}, aspect ratio ${ratio}. ${lockLine} ${core}`.replace(/\s{2,}/g, " ").trim();
+  // Explicit aspect ratio instruction at both the start and end of the prompt.
+  // Text-only hints are often ignored by video models; flanking the prompt forces compliance.
+  const ratioLabel = ratio === "9:16"
+    ? "vertical 9:16 portrait, mobile-first TikTok/Reels format"
+    : ratio === "1:1"
+    ? "square 1:1 format"
+    : "horizontal 16:9 landscape format";
+  return (
+    `[ASPECT RATIO: ${ratio}] [FORMAT: ${ratioLabel}] `
+    + `Create a ${durStr}. `
+    + `${lockLine} `
+    + `${core} `
+    + `[OUTPUT MUST BE ${ratio} ASPECT RATIO]`
+  ).replace(/\s{2,}/g, " ").trim();
 }
 
-async function _runOneGrokGeneration(base, prompt, model, taskId, labelZh, labelEn) {
+async function _runOneGrokGeneration(base, prompt, model, taskId, labelZh, labelEn, aspectRatio) {
   const zh = currentLang === "zh";
   let videoUrl = "";
   let posterUrl = "";
   await postSse(
     `${base}/api/tabcode/video/generate`,
-    { prompt, model },
+    { prompt, model, aspect_ratio: aspectRatio || state.aspectRatio || "16:9" },
     (eventName, payload) => {
       if (eventName !== "message" && eventName !== "data") return;
       const type = payload?.type;
@@ -742,7 +755,7 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
       updateVideoTask(taskId, { status: "running", stage: zh ? `${labelZh} 0%` : `${labelEn} 0%` });
       // Use the LLM-split segment prompt, wrapped with Grok-friendly prefix/suffix
       const clipPrompt = buildGrokVideoPrompt(segmentPrompts[i] || core, 6);
-      const res = await _runOneGrokGeneration(base, clipPrompt, model, taskId, labelZh, labelEn);
+      const res = await _runOneGrokGeneration(base, clipPrompt, model, taskId, labelZh, labelEn, state.aspectRatio);
       results.push(res.videoUrl);
     }
 
@@ -854,6 +867,13 @@ function updateActiveVideoCardState() {
       if (label) editMode.textContent = `${t("cardEditModeShort")} · ${label}`;
     }
   });
+}
+
+function getCurrentEditModeLabel() {
+  if (state.videoEditorOpen && state.scriptEditorOpen) return t("cardEditModeHybrid");
+  if (state.videoEditorOpen) return t("cardEditModeVideo");
+  if (state.scriptEditorOpen) return t("cardEditModeScript");
+  return "";
 }
 
 function focusActiveVideoCard(behavior = "smooth", block = "center") {
@@ -2481,6 +2501,12 @@ function extractVideoEditIntent(raw = "") {
   const str = String(raw || "").trim();
   if (!str) return null;
 
+  // ── Early exit guards ──────────────────────────────────────────────────────
+  // Edit commands are always short (< 120 chars). Long text is a generation prompt.
+  if (str.length > 120) return null;
+  // Explicit generation starters
+  if (/^(generate|create|make a|制作|生成|帮我生成|帮我制作|请生成|请制作)/i.test(str)) return null;
+
   // ── helpers ────────────────────────────────────────────────────────────────
   // Time range: "1~3s" / "1秒到3秒" / "1s to 3s" / "第1到第3秒"
   const TIME_RANGE = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/i;
@@ -2560,33 +2586,36 @@ function extractVideoEditIntent(raw = "") {
     if (speed > 0) {
       return { type: "speed", speed };
     }
-    // Descriptive speed: "加速" "快一倍" "慢一半"
-    if (/加速|speed\s*up|fast/i.test(str)) return { type: "speed", speed: 1.5 };
-    if (/减速|slow\s*down|慢/i.test(str)) return { type: "speed", speed: 0.75 };
+    // Descriptive speed: require video/edit context to avoid false positives like "加速推进项目"
+    if (/加速|speed\s*up/i.test(str) && /(视频|video|帧|倍速|播放速度)/i.test(str)) return { type: "speed", speed: 1.5 };
+    if (/减速|slow\s*down/i.test(str) && /(视频|video|帧|倍速|播放速度)/i.test(str)) return { type: "speed", speed: 0.75 };
   }
 
   // ── 2. subtitle / text overlay ─────────────────────────────────────────────
-  if (/(字幕|caption|subtitle|文字|文案|加字|叠字)/i.test(str)) {
+  // Exclude "文字"/"文案" from outer trigger — too common in generation prompts ("文案方向", "文字说明")
+  // Exclude "字幕" when it appears in a negative/avoidance context ("避免字幕", "字幕水印")
+  const _subtitleInNegCtx = /(避免.*字幕|不要.*字幕|去掉.*字幕|禁止字幕|无字幕|字幕.*水印|水印.*字幕)/i.test(str);
+  if (!_subtitleInNegCtx && /(字幕|caption|subtitle|加字|叠字)/i.test(str)) {
     const range = parseTimeRange(str);
-    // Single time point: "在第2秒加字幕"
+    // Single time point: require 第 prefix to avoid matching video-duration specs like "生成一条6秒"
     let start = 0;
     let end = 0;
     if (range) {
       start = range.start;
       end = range.end;
     } else {
-      const sp = /第?(\d+(?:\.\d+)?)\s*[秒s]/i.exec(str);
+      const sp = /第(\d+(?:\.\d+)?)\s*[秒s]/i.exec(str);
       if (sp) { start = parseFloat(sp[1]); end = start + 3; }
     }
-    // Extract caption text
+    // Extract caption text — only match quoted/colon-delimited text, not bare aspect ratios like "9:16"
     let captionText = "";
-    const quotedM = str.match(/[：:"'「『]\s*([^」』"'：:"]{1,80}?)\s*[」』"']|[：:]\s*(.{1,80}?)(?:\s*$)/);
+    const quotedM = str.match(/[：:"'「『]\s*([^」』"'：:"]{1,80}?)\s*[」』"']|[：：]\s*([^，。！？\n]{1,80}?)(?:\s*$)/);
     if (quotedM) {
       captionText = (quotedM[1] || quotedM[2] || "").trim();
     } else {
       captionText = str
         .replace(TIME_RANGE, "")
-        .replace(/(?:给|在|为|对|add|insert|put|字幕|caption|subtitle|文字|文案|第|秒|s\b|[~～：:])+/gi, " ")
+        .replace(/(?:给|在|为|对|add|insert|put|字幕|caption|subtitle|加字|叠字|第|秒|s\b|[~～：:])+/gi, " ")
         .replace(/\s+/g, " ").trim().slice(0, 60);
     }
     if (captionText && end > start) {
@@ -2597,19 +2626,19 @@ function extractVideoEditIntent(raw = "") {
   // ── 3. color grading ───────────────────────────────────────────────────────
   if (/(调色|亮|暗|饱和|色调|对比|暖色|冷色|偏黄|偏蓝|偏绿|偏红|color|bright|dark|saturate|warm|cool|hue|contrast|vivid|cinematic|vintage|黑白|灰度|tint)/i.test(str)) {
     const color = {};
-    // Brightness
-    if (/(亮一点|亮度|提亮|brighter|lighten|增加亮度)/i.test(str)) color.bright = 18;
-    else if (/(暗一点|降暗|darker|darken|减少亮度)/i.test(str)) color.bright = -18;
-    // Saturation
-    if (/(饱和|鲜艳|vivid|saturate)/i.test(str)) color.sat = 20;
-    else if (/(去饱和|淡|desaturate|faded|pale)/i.test(str)) color.sat = -20;
-    // Warmth/hue
-    if (/(暖色|偏黄|偏橙|warm|golden)/i.test(str)) color.hue = 15;
-    else if (/(冷色|偏蓝|cool|cooler)/i.test(str)) color.hue = -15;
-    // Contrast
-    if (/(对比|cinematic|contrast)/i.test(str)) color.contrast = 20;
-    // Vintage/film look
-    if (/(vintage|胶片|film|电影感)/i.test(str)) { color.sat = 15; color.hue = 8; color.contrast = 15; }
+    // Brightness — require explicit editing phrases to avoid matching "亮点", "亮度高" in generation prompts
+    if (/(亮一点|提亮|调亮|brighter|lighten|增加亮度)/i.test(str)) color.bright = 18;
+    else if (/(暗一点|降暗|调暗|darker|darken|减少亮度)/i.test(str)) color.bright = -18;
+    // Saturation — require edit-intent context; "鲜艳" alone is too common in product descriptions
+    if (/(饱和度|调饱和|更鲜艳|变鲜艳|vivid|saturate)/i.test(str)) color.sat = 20;
+    else if (/(去饱和|淡化|desaturate|faded|pale)/i.test(str)) color.sat = -20;
+    // Warmth/hue — require directional edit phrases; "暖色" alone common in product style descriptions
+    if (/(偏黄|偏橙|调.*暖|暖色.*调|warm.*tone|warm.*filter|golden)/i.test(str)) color.hue = 15;
+    else if (/(偏蓝|调.*冷|冷色.*调|cool.*tone|cool.*filter|cooler)/i.test(str)) color.hue = -15;
+    // Contrast — "对比" alone is common in "对比鲜明"; require "度" or explicit action
+    if (/(对比度|调.*对比|增.*对比|cinematic|contrast)/i.test(str)) color.contrast = 20;
+    // Vintage/film look — "电影感" alone is common in generation prompts; require effect/filter context
+    if (/(vintage|胶片.*效果|film.*grain|调.*电影感|电影.*滤镜)/i.test(str)) { color.sat = 15; color.hue = 8; color.contrast = 15; }
     // Black & white
     if (/(黑白|灰度|grayscale|black.*white)/i.test(str)) { color.sat = -100; }
     if (Object.keys(color).length > 0) {
@@ -3022,7 +3051,9 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   video.controls = true;
   video.preload = "metadata";
   video.playsInline = true;
-  video.style.cssText = "display:block;width:100%;max-height:280px;border-radius:14px;background:#000;";
+  // width:100% + max-height lets portrait (9:16) videos show at natural AR in card view.
+  // object-fit:contain ensures black bars appear only at sides for landscape, not both axes.
+  video.style.cssText = "display:block;width:100%;max-height:360px;border-radius:14px;background:#000;object-fit:contain;";
   // Disable native video fullscreen so the surface-level fullscreen (which
   // keeps overlays, color filter and BGM visible) is used instead.
   video.controlsList?.add?.("nofullscreen");
@@ -4794,20 +4825,20 @@ document.addEventListener("webkitfullscreenchange", () => {
 let _editCmdsBar = null;
 
 const _EDIT_CMDS_ZH = [
-  { label: "✂️ 裁剪片段", cmd: "只保留第3到10秒" },
-  { label: "⚡ 加速1.5x", cmd: "整体加速1.5倍" },
-  { label: "🎨 提亮", cmd: "画面提亮一些" },
-  { label: "📝 自动字幕", cmd: "自动生成字幕" },
-  { label: "🖼️ 换封面", cmd: "换封面" },
-  { label: "↩️ 撤销", cmd: "撤销" },
+  { label: "裁剪片段", cmd: "只保留第3到10秒" },
+  { label: "加速 1.5x", cmd: "整体加速1.5倍" },
+  { label: "提亮画面", cmd: "画面提亮一些" },
+  { label: "自动字幕", cmd: "自动生成字幕" },
+  { label: "换封面", cmd: "换封面" },
+  { label: "撤销", cmd: "撤销" },
 ];
 const _EDIT_CMDS_EN = [
-  { label: "✂️ Trim", cmd: "keep 3s to 10s" },
-  { label: "⚡ 1.5x speed", cmd: "speed up 1.5x" },
-  { label: "🎨 Brighten", cmd: "brighten the video" },
-  { label: "📝 Auto subtitles", cmd: "auto subtitle" },
-  { label: "🖼️ Cover", cmd: "replace cover" },
-  { label: "↩️ Undo", cmd: "undo" },
+  { label: "Trim clip", cmd: "keep 3s to 10s" },
+  { label: "1.5x speed", cmd: "speed up 1.5x" },
+  { label: "Brighten", cmd: "brighten the video" },
+  { label: "Auto subtitles", cmd: "auto subtitle" },
+  { label: "Replace cover", cmd: "replace cover" },
+  { label: "Undo", cmd: "undo" },
 ];
 
 function _initEditCmdsBar() {
