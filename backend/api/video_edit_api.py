@@ -819,7 +819,7 @@ def register_video_edit_routes(
             # Download video to a temp file for base64 encoding
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_path = Path(tmp_dir) / "asr_input.mp4"
-                download_video_to_file(video_url, tmp_path, proxies=build_proxies(proxy))
+                download_video_to_file(video_url, tmp_path, proxy)
                 video_bytes = tmp_path.read_bytes()
 
             video_b64 = base64.b64encode(video_bytes).decode("ascii")
@@ -970,7 +970,7 @@ def register_video_edit_routes(
                 video_path = tmp / "input.mp4"
                 img_path = tmp / f"overlay.{img_ext}"
 
-                download_video_to_file(video_url, video_path, proxies=proxies)
+                download_video_to_file(video_url, video_path, proxy)
                 img_path.write_bytes(img_bytes)
 
                 output_name = f"overlay-{uuid.uuid4().hex}.mp4"

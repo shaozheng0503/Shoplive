@@ -5,7 +5,9 @@ Tests run against a real Flask test client using ffmpeg-generated synthetic
 videos — no external API calls (GCP, LiteLLM) are made.
 
 Covered endpoints:
-  POST /api/video/edit/export          – colour grading, speed, text, BGM
+  POST /api/video/edit/export          – colour grading, speed, text, BGM, batch subtitles
+  POST /api/video/asr                  – Gemini video transcription (mocked)
+  POST /api/video/overlay-image        – ffmpeg image overlay
   POST /api/video/timeline/render      – segment clip & concat (sync + async)
   GET  /api/video/timeline/render/status
   POST /api/video/timeline/render/cancel
@@ -565,3 +567,323 @@ class TestTimelineRenderAsync:
             })
             assert r4.status_code == 200
             assert "job_id" in r4.get_json()
+
+# ---------------------------------------------------------------------------
+# /api/video/edit/export  –  edits.subtitles (batch ASR burn-in)
+# ---------------------------------------------------------------------------
+
+class TestBatchSubtitles:
+    EP = "/api/video/edit/export"
+
+    def test_single_subtitle_applied(self, client, vid_silent):
+        subs = [{"text": "Hello", "start": 0.5, "end": 2.0}]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        if DRAWTEXT_AVAILABLE:
+            assert d["mask_applied"] is True
+
+    def test_multiple_subtitles_applied(self, client, vid_silent):
+        subs = [
+            {"text": "First line", "start": 0.0, "end": 1.0},
+            {"text": "Second line", "start": 1.2, "end": 2.5},
+            {"text": "Third line", "start": 2.7, "end": 3.0},
+        ]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_chinese_subtitles(self, client, vid_silent):
+        subs = [{"text": "限时特卖", "start": 0.0, "end": 2.0}]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_special_char_subtitles(self, client, vid_silent):
+        """Characters unsafe for ffmpeg drawtext must be escaped without crashing."""
+        subs = [{"text": "50% OFF: It's here!", "start": 0.0, "end": 2.0}]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_entries_with_empty_text_skipped(self, client, vid_silent):
+        """Entries with empty/None text are skipped; valid entry still applied."""
+        subs = [
+            {"text": "", "start": 0.0, "end": 1.0},
+            {"text": None, "start": 0.5, "end": 1.5},
+            {"text": "Valid", "start": 1.0, "end": 2.0},
+        ]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_subtitles_and_masktext_coexist(self, client, vid_silent):
+        """subtitles array and maskText can be sent together; both are applied."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "Static",
+                "subtitles": [{"text": "Timed", "start": 0.5, "end": 1.5}],
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_empty_subtitles_array_is_noop(self, client, vid_silent):
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": []}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_non_list_subtitles_ignored(self, client, vid_silent):
+        """Non-list value for subtitles is treated as empty — no crash."""
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": "bad"}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_cap_at_30_subtitles(self, client, vid_silent):
+        """Sending 35 subtitles: only first 30 are processed — no crash."""
+        subs = [
+            {"text": f"Line {i}", "start": i * 0.08, "end": i * 0.08 + 0.07}
+            for i in range(35)
+        ]
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"subtitles": subs}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# /api/video/asr  –  Gemini transcription (external calls mocked)
+# ---------------------------------------------------------------------------
+
+class TestVideoASR:
+    EP = "/api/video/asr"
+
+    # --- validation ---
+
+    def test_missing_video_url_rejected(self, client):
+        r = client.post(self.EP, json={})
+        assert r.status_code == 400
+        assert r.get_json()["error_code"] == "MISSING_VIDEO_URL"
+
+    def test_empty_video_url_rejected(self, client):
+        r = client.post(self.EP, json={"video_url": ""})
+        assert r.status_code == 400
+
+    # --- happy path (Gemini mocked) ---
+
+    def _mock_gemini(self, text: str):
+        """Return (access_token_patch, requests_post_patch) context manager."""
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": text}]}}]
+        }
+        return (
+            patch("shoplive.backend.infra.get_access_token", return_value="fake-token"),
+            patch("requests.post", return_value=mock_resp),
+        )
+
+    def test_returns_parsed_subtitles(self, client, vid_silent):
+        gemini_text = "[0.0-2.5] Hello world\n[3.0-5.0] Second subtitle\n"
+        p1, p2 = self._mock_gemini(gemini_text)
+        with p1, p2:
+            r = client.post(self.EP, json={"video_url": vid_silent, "project_id": "test-proj"})
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert len(d["subtitles"]) == 2
+        assert d["subtitles"][0] == {"start": 0.0, "end": 2.5, "text": "Hello world"}
+        assert d["subtitles"][1]["text"] == "Second subtitle"
+
+    def test_no_speech_returns_empty_list(self, client, vid_silent):
+        p1, p2 = self._mock_gemini("无语音内容")
+        with p1, p2:
+            r = client.post(self.EP, json={"video_url": vid_silent, "project_id": "test-proj"})
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["subtitles"] == []
+
+    def test_max_lines_respected(self, client, vid_silent):
+        """max_lines=3 → at most 3 subtitles returned even if Gemini gives more."""
+        lines = "\n".join(f"[{i}.0-{i+1}.0] line {i}" for i in range(10))
+        p1, p2 = self._mock_gemini(lines)
+        with p1, p2:
+            r = client.post(self.EP, json={
+                "video_url": vid_silent, "project_id": "test-proj", "max_lines": 3,
+            })
+        assert r.status_code == 200
+        assert len(r.get_json()["subtitles"]) <= 3
+
+    def test_max_lines_clamped_to_40(self, client, vid_silent):
+        """max_lines > 40 is clamped to 40 — no crash."""
+        lines = "\n".join(f"[{i}.0-{i+1}.0] line {i}" for i in range(50))
+        p1, p2 = self._mock_gemini(lines)
+        with p1, p2:
+            r = client.post(self.EP, json={
+                "video_url": vid_silent, "project_id": "test-proj", "max_lines": 999,
+            })
+        assert r.status_code == 200
+        assert len(r.get_json()["subtitles"]) <= 40
+
+    def test_malformed_lines_skipped(self, client, vid_silent):
+        """Lines not matching [start-end] TEXT format are silently skipped."""
+        gemini_text = "some garbage\n[0.0-2.0] Valid line\nmore garbage without brackets\n"
+        p1, p2 = self._mock_gemini(gemini_text)
+        with p1, p2:
+            r = client.post(self.EP, json={"video_url": vid_silent, "project_id": "test-proj"})
+        assert r.status_code == 200
+        d = r.get_json()
+        assert len(d["subtitles"]) == 1
+        assert d["subtitles"][0]["text"] == "Valid line"
+
+    def test_gemini_http_error_returns_500(self, client, vid_silent):
+        """Non-2xx from Gemini → 500 with ASR_FAILED error_code."""
+        import requests as _req
+        from unittest.mock import patch, MagicMock
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = _req.exceptions.HTTPError("403 Forbidden")
+        with patch("shoplive.backend.infra.get_access_token", return_value="fake-token"), \
+             patch("requests.post", return_value=mock_resp):
+            r = client.post(self.EP, json={"video_url": vid_silent, "project_id": "test-proj"})
+        assert r.status_code == 500
+        assert r.get_json()["error_code"] == "ASR_FAILED"
+
+    def test_raw_text_included_in_response(self, client, vid_silent):
+        """raw_text field is always present in the response for debugging."""
+        gemini_text = "[0.0-1.0] Hi\n"
+        p1, p2 = self._mock_gemini(gemini_text)
+        with p1, p2:
+            r = client.post(self.EP, json={"video_url": vid_silent, "project_id": "test-proj"})
+        assert r.status_code == 200
+        assert "raw_text" in r.get_json()
+
+
+# ---------------------------------------------------------------------------
+# /api/video/overlay-image  –  ffmpeg image overlay
+# ---------------------------------------------------------------------------
+
+def _tiny_png_b64() -> str:
+    """Generate a 32x32 red PNG via ffmpeg lavfi. Returns plain base64 (no data: prefix)."""
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=red:s=32x32:d=0.1:r=1",
+            "-vframes", "1", str(tmp),
+        ], check=True, capture_output=True)
+        return base64.b64encode(tmp.read_bytes()).decode()
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="module")
+def tiny_png():
+    return _tiny_png_b64()
+
+
+class TestVideoOverlayImage:
+    EP = "/api/video/overlay-image"
+
+    # --- validation ---
+
+    def test_missing_video_url_rejected(self, client, tiny_png):
+        r = client.post(self.EP, json={"image_base64": tiny_png})
+        assert r.status_code == 400
+        assert r.get_json()["error_code"] == "MISSING_VIDEO_URL"
+
+    def test_missing_image_rejected(self, client, vid_silent):
+        r = client.post(self.EP, json={"video_url": vid_silent})
+        assert r.status_code == 400
+        assert r.get_json()["error_code"] == "MISSING_IMAGE"
+
+    # --- happy path ---
+
+    def test_overlay_top_right(self, client, vid_silent, tiny_png):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "image_mime_type": "image/png",
+            "overlay_position": "top-right",
+            "overlay_scale": 0.3,
+        })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["video_url"].endswith(".mp4")
+        assert "file_name" in d
+
+    @pytest.mark.parametrize("position", [
+        "top-left", "top-right", "center", "bottom-left", "bottom-right"
+    ])
+    def test_all_positions(self, client, vid_silent, tiny_png, position):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "overlay_position": position,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_overlay_with_audio_preserved(self, client, vid_audio, tiny_png):
+        """Audio stream is preserved after overlay."""
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "image_base64": tiny_png,
+            "overlay_scale": 0.2,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_overlay_duration_limited(self, client, vid_silent, tiny_png):
+        """overlay_duration=1.0 applies enable='between(t,0,1.0)' — no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "overlay_duration": 1.0,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_overlay_scale_clamped_high(self, client, vid_silent, tiny_png):
+        """overlay_scale > 1.0 is clamped to 1.0 — no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "overlay_scale": 99.0,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_overlay_scale_clamped_low(self, client, vid_silent, tiny_png):
+        """overlay_scale < 0.05 is clamped to 0.05 — no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "overlay_scale": 0.001,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_data_url_prefix_stripped(self, client, vid_silent, tiny_png):
+        """image_base64 with data:image/png;base64, prefix is handled correctly."""
+        data_url_b64 = f"data:image/png;base64,{tiny_png}"
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": data_url_b64,
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_unknown_position_falls_back_to_top_right(self, client, vid_silent, tiny_png):
+        """Unrecognised overlay_position falls back to top-right — no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "overlay_position": "invalid-position",
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
