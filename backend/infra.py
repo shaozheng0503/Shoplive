@@ -19,12 +19,12 @@ BACKEND_DIR = Path(__file__).resolve().parent
 SHOPLIVE_DIR = BACKEND_DIR.parent
 PROJECT_ROOT = SHOPLIVE_DIR.parent.resolve()
 DEFAULT_KEY_FILE_CANDIDATES = [
-    (SHOPLIVE_DIR / "credentials/gemini-sl-20251120-gemini-video-hsz-82ee1e22902c.json").resolve(),
-    (SHOPLIVE_DIR / "backend/gemini-sl-20251120-gemini-video-hsz-82ee1e22902c.json").resolve(),
-    (PROJECT_ROOT / "gemini调用/gemini-sl-20251120-gemini-video-hsz-82ee1e22902c.json").resolve(),
+    (SHOPLIVE_DIR / "credentials/qy-shoplazza-02-ai-compet-huangshaozheng-ba94de5ac3ab.json").resolve(),
+    (SHOPLIVE_DIR / "backend/qy-shoplazza-02-ai-compet-huangshaozheng-ba94de5ac3ab.json").resolve(),
+    (PROJECT_ROOT / "gemini调用/qy-shoplazza-02-ai-compet-huangshaozheng-ba94de5ac3ab.json").resolve(),
     (
         PROJECT_ROOT
-        / "gemini调用/vertex_gemini_veo_examples/gemini-sl-20251120-gemini-video-hsz-82ee1e22902c.json"
+        / "gemini调用/vertex_gemini_veo_examples/qy-shoplazza-02-ai-compet-huangshaozheng-ba94de5ac3ab.json"
     ).resolve(),
 ]
 
@@ -229,7 +229,7 @@ def get_token_cache_stats() -> Dict:
 
 
 def parse_common_payload(payload: Dict) -> Tuple[str, str, str, str]:
-    project_id = payload.get("project_id", "gemini-sl-20251120").strip()
+    project_id = payload.get("project_id", "qy-shoplazza-02").strip()
     key_file = (payload.get("key_file") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
     if key_file:
         key_path = Path(key_file).expanduser().resolve()

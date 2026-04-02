@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 class CommonPayload(BaseModel):
     """Google Cloud common authentication and project fields."""
     project_id: str = Field(
-        default="gemini-sl-20251120",
+        default="qy-shoplazza-02",
         description="Google Cloud project ID. Use the default unless you have a custom project.",
     )
     key_file: str = Field(

@@ -958,11 +958,35 @@ input:focus-visible {
     background 0.22s var(--ui-ease);
 }
 
+.template-thumb {
+  display: block;
+  width: 100%;
+  height: 132px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(196, 213, 238, 0.9);
+  margin-bottom: 4px;
+  background: linear-gradient(140deg, #eef4ff, #e2edff);
+}
+
+.template-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.28s var(--ui-ease), filter 0.28s var(--ui-ease);
+}
+
 .command-template-card:hover {
   transform: translateY(-1px);
   border-color: rgba(143, 174, 227, 0.96);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(237, 244, 255, 0.98));
   box-shadow: 0 12px 24px rgba(65, 96, 148, 0.12);
+}
+
+.command-template-card:hover .template-thumb img {
+  transform: scale(1.03);
+  filter: saturate(1.05);
 }
 
 .command-template-card.is-active {
@@ -2441,80 +2465,126 @@ input:focus-visible {
 .ref-grid { gap: var(--sp-2); padding: var(--sp-3); }
 .ai-generate-box { gap: var(--sp-2); margin-bottom: var(--sp-3); }
 
-/* Landing custom: hide top text + center larger input */
+/* Landing custom: reference-like structure, keep blue gradient tone */
 .topbar {
   display: none;
 }
 
-.input-row {
-  max-width: min(88vw, 1120px);
-  margin-top: 18px;
+.landing-body {
+  --landing-top-space: clamp(30px, 4.8vh, 56px);
+  --landing-title-to-input: clamp(24px, 4.2vh, 44px);
+  --landing-input-to-template: clamp(44px, 6.2vh, 72px);
+  --landing-bottom-space: clamp(34px, 6.2vh, 72px);
 }
 
-.input-row-smart .input-main {
-  max-width: min(84vw, 980px);
-  margin-left: auto;
-  margin-right: auto;
-  min-height: 116px;
-  padding: 14px 14px;
-}
-
-#promptInput {
-  min-height: 70px;
-  font-size: 20px;
+.hero-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  min-height: 100dvh;
+  padding-top: var(--landing-top-space);
+  padding-bottom: var(--landing-bottom-space);
 }
 
 .hero-panel {
-  padding-top: 18px;
-  gap: 16px;
+  width: 100%;
+  padding-top: 0;
+  gap: 10px;
+}
+
+.left-copy {
+  max-width: 900px;
+}
+
+.left-copy .hero-kicker {
+  margin-bottom: 12px;
+}
+
+.hero-line-strong {
+  font-size: clamp(42px, 4.5vw, 64px);
 }
 
 .section-divider {
-  margin-top: 16px;
-}
-
-/* Input bar at viewport center */
-.hero-inner {
-  position: relative;
-}
-
-.right-cards.bottom-showcase {
-  position: absolute;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
-  margin: 0;
+  display: none;
 }
 
 .input-row {
-  position: absolute;
-  left: 50%;
-  top: 42%;
-  transform: translate(-50%, -50%);
   width: min(88vw, 1120px);
-  margin: 0;
-  z-index: 5;
+  margin: var(--landing-title-to-input) auto 0;
+  min-height: 0;
+  border-radius: 22px;
+}
+
+.input-row-smart .input-main {
+  min-height: 92px;
+}
+
+#promptInput {
+  min-height: 62px;
+  font-size: 20px;
+}
+
+.command-bar-head {
+  margin-bottom: 2px;
 }
 
 .landing-note {
-  position: absolute;
-  left: 50%;
-  top: calc(42% + 146px);
-  transform: translateX(-50%);
-  margin: 0;
+  margin: 16px auto 0;
+}
+
+.template-section {
+  width: min(88vw, 1120px);
+  margin: var(--landing-input-to-template) auto 0;
+}
+
+.template-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.template-title {
+  color: #355f9f;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.command-template-grid {
+  gap: 18px;
+}
+
+.command-template-card {
+  min-height: 258px;
+  border-radius: 16px;
+  grid-template-rows: 132px auto auto 1fr;
+}
+
+.command-template-card small {
+  min-height: 32px;
 }
 
 @media (max-width: 1150px) {
-  .input-row {
+  .landing-body {
+    --landing-top-space: clamp(20px, 3.6vh, 30px);
+    --landing-title-to-input: clamp(16px, 3.2vh, 26px);
+    --landing-input-to-template: clamp(28px, 4.8vh, 40px);
+    --landing-bottom-space: clamp(22px, 4.2vh, 34px);
+  }
+
+  .hero-inner {
+    padding-top: var(--landing-top-space);
+    padding-bottom: var(--landing-bottom-space);
+  }
+
+  .input-row,
+  .template-section {
     width: min(92vw, 860px);
-    top: 46%;
   }
 
-  .landing-note {
-    top: calc(46% + 138px);
-  }
-
-  .right-cards.bottom-showcase {
-    bottom: 10px;
+  .left-copy .hero-kicker {
+    margin-bottom: 8px;
   }
 }

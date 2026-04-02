@@ -59,7 +59,7 @@ const i18n = {
     commandStatus1: "Auto-detect product",
     commandStatus2: "Auto-route model",
     commandTemplateTag1: "Template 01",
-    commandTemplateTitle1: "Women's launch 9:16",
+    commandTemplateTitle1: "Women's launch",
     commandTemplateDesc1: "For new arrivals, commuter styling, and fabric mood direction",
     commandTemplateTag2: "Template 02",
     commandTemplateTitle2: "Black running shoe details",
@@ -128,7 +128,7 @@ const i18n = {
     commandStatus1: "自动识别商品",
     commandStatus2: "自动路由模型",
     commandTemplateTag1: "模板 01",
-    commandTemplateTitle1: "女装上新 9:16",
+    commandTemplateTitle1: "女装上新",
     commandTemplateDesc1: "适合新品发布、通勤穿搭和面料氛围表达",
     commandTemplateTag2: "模板 02",
     commandTemplateTitle2: "黑色跑鞋细节",
@@ -208,7 +208,6 @@ function gotoAgent(extra = {}) {
   if (extra.from) params.set("from", String(extra.from));
   if (draft) params.set("draft", draft);
   if (extra.product_url) params.set("product_url", String(extra.product_url));
-  if (extra.aspect_ratio) params.set("aspect_ratio", String(extra.aspect_ratio));
   if (extra.duration) params.set("duration", String(extra.duration));
   if (extra.enhance) params.set("enhance", "1");
   window.location.href = `/pages/agent.html?${params.toString()}`;
@@ -225,7 +224,6 @@ function gotoAgentWithAiImage(singleDataUrl, allDataUrls = []) {
   const params = new URLSearchParams();
   params.set("from", "landing-ai-image");
   if (draft) params.set("draft", draft);
-  params.set("aspect_ratio", aspectRatioSelect?.value || "16:9");
   params.set("duration", durationSelect?.value || "8");
   window.location.href = `/pages/agent.html?${params.toString()}`;
 }
@@ -393,6 +391,8 @@ async function callLandingImageGenerate(promptText) {
       sample_count: 1,
       aspect_ratio: aspectRatioSelect?.value || "16:9",
       location: "us-central1",
+      person_generation: "dont_allow",
+      skip_category_check: true,
       language_code: currentLang === "zh" ? "zh-CN" : "en-US",
       currency_code: currentLang === "zh" ? "CNY" : "USD",
       exchange_rate: currentLang === "zh" ? "7.2" : "1.0",
@@ -425,20 +425,17 @@ function closeRefModal() {
   btn.addEventListener("click", () => {
     const draft = promptInput ? promptInput.value.trim() : "";
     const normalizedDraftUrl = normalizeProductUrl(draft);
-    const aspectRatio = aspectRatioSelect?.value || "16:9";
     const duration = durationSelect?.value || "8";
     if (normalizedDraftUrl && isLikelyUrl(normalizedDraftUrl)) {
       gotoAgent({
         from: "landing-product-link",
         product_url: normalizedDraftUrl,
-        aspect_ratio: aspectRatio,
         duration,
       });
       return;
     }
     gotoAgent({
       from: selectedRefDataUrl ? "landing-ref" : "landing-prompt",
-      aspect_ratio: aspectRatio,
       duration,
     });
   });
@@ -612,7 +609,6 @@ refAiGenerateBtn?.addEventListener("click", async () => {
 enhancePromptBtn?.addEventListener("click", () => {
   gotoAgent({
     from: "landing-prompt",
-    aspect_ratio: aspectRatioSelect?.value || "16:9",
     duration: durationSelect?.value || "8",
     enhance: true,
   });

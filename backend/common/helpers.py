@@ -1288,7 +1288,7 @@ def download_gcs_blob_to_file(
     gcs_uri: str,
     output_path: Path,
     key_file: str,
-    project_id: str = "gemini-sl-20251120",
+    project_id: str = "qy-shoplazza-02",
 ) -> Path:
     m = re.match(r"^gs://([^/]+)/(.+)$", gcs_uri)
     if not m:

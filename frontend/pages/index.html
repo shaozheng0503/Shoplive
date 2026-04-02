@@ -108,14 +108,6 @@
           <div class="input-advanced" id="landingAdvanced">
             <div class="adv-ops">
               <label>
-                <span data-i18n="ratioLabel">比例</span>
-                <select id="aspectRatioSelect">
-                  <option value="16:9">16:9</option>
-                  <option value="9:16">9:16</option>
-                  <option value="1:1">1:1</option>
-                </select>
-              </label>
-              <label>
                 <span data-i18n="durationLabel">视频时长</span>
                 <select id="durationSelect">
                   <option value="8">8秒</option>
@@ -127,69 +119,39 @@
               <button id="enhancePromptBtn" class="secondary-btn" data-i18n="enhancePrompt">提示词增强</button>
             </div>
           </div>
+        </div>
+        <p class="landing-note" data-i18n="uploadHint">上传商品图，描述你的商品信息和想要的视频风格…</p>
+        <section class="template-section" aria-label="Explore templates">
+          <div class="template-head">
+            <strong class="template-title">探索模板</strong>
+          </div>
           <div class="command-template-grid" aria-label="Quick prompt templates">
-            <button type="button" class="command-template-card is-active" data-color="indigo" data-fill-zh="为女装上新做一条 9:16 的短视频，突出版型、垂感和通勤氛围。" data-fill-en="Create a 9:16 launch video for women's apparel, highlighting silhouette, drape, and commuter mood." data-ratio="9:16" data-duration="8">
+            <button type="button" class="command-template-card is-active" data-color="indigo" data-fill-zh="为女装上新做一条短视频，突出版型、垂感和通勤氛围。" data-fill-en="Create a launch short video for women's apparel, highlighting silhouette, drape, and commuter mood." data-duration="8">
+              <span class="template-thumb">
+                <img src="https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80" alt="模板01封面" />
+              </span>
               <span class="command-template-tag" data-i18n="commandTemplateTag1">模板 01</span>
-              <strong data-i18n="commandTemplateTitle1">女装上新 9:16</strong>
+              <strong data-i18n="commandTemplateTitle1">女装上新</strong>
               <small data-i18n="commandTemplateDesc1">适合新品发布、通勤穿搭和面料氛围表达</small>
             </button>
-            <button type="button" class="command-template-card" data-color="slate" data-fill-zh="为黑色跑鞋做一条材质细节特写视频，突出鞋底科技感和脚感支撑。" data-fill-en="Create a material-detail video for black running shoes, focusing on sole tech and support." data-ratio="16:9" data-duration="8">
+            <button type="button" class="command-template-card" data-color="slate" data-fill-zh="为黑色跑鞋做一条材质细节特写视频，突出鞋底科技感和脚感支撑。" data-fill-en="Create a material-detail video for black running shoes, focusing on sole tech and support." data-duration="8">
+              <span class="template-thumb">
+                <img src="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=900&q=80" alt="模板02封面" />
+              </span>
               <span class="command-template-tag" data-i18n="commandTemplateTag2">模板 02</span>
               <strong data-i18n="commandTemplateTitle2">黑色跑鞋细节</strong>
               <small data-i18n="commandTemplateDesc2">适合材质展示、鞋底科技感和镜头推进</small>
             </button>
-            <button type="button" class="command-template-card" data-color="rose" data-fill-zh="生成一条适合社媒投放的商品短视频，镜头节奏快，突出卖点和价格记忆点。" data-fill-en="Generate a social-ready product short video with fast pacing, clear selling points, and price recall." data-ratio="9:16" data-duration="6">
+            <button type="button" class="command-template-card" data-color="rose" data-fill-zh="生成一条适合社媒投放的商品短视频，镜头节奏快，突出卖点和价格记忆点。" data-fill-en="Generate a social-ready product short video with fast pacing, clear selling points, and price recall." data-duration="6">
+              <span class="template-thumb">
+                <img src="https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&fit=crop&w=900&q=80" alt="模板03封面" />
+              </span>
               <span class="command-template-tag" data-i18n="commandTemplateTag3">模板 03</span>
               <strong data-i18n="commandTemplateTitle3">社媒投放短视频</strong>
               <small data-i18n="commandTemplateDesc3">适合快节奏转化、卖点记忆和广告投放</small>
             </button>
           </div>
-        </div>
-        <p class="landing-note" data-i18n="uploadHint">上传商品图，描述你的商品信息和想要的视频风格…</p>
-        <div class="right-cards bottom-showcase">
-          <article class="mini-card card-video">
-            <div class="media-thumb">
-              <video
-                class="mock-media"
-                autoplay
-                muted
-                loop
-                playsinline
-                poster="https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=900&q=80"
-              >
-                <source src="https://cdn.coverr.co/videos/coverr-young-woman-in-a-coat-1579/1080p.mp4" type="video/mp4" />
-              </video>
-            </div>
-            <p data-i18n="cardVideoClips">视频素材</p>
-          </article>
-          <article class="mini-card card-link">
-            <div class="media-thumb">
-              <img
-                id="landingRefPreview"
-                class="mock-media"
-                src="https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=640&q=70"
-                alt="Reference image preview"
-              />
-            </div>
-            <p data-i18n="cardProductLinks">商品链接</p>
-          </article>
-          <article class="mini-card card-script">
-            <div class="media-thumb script-thumb rich-script-thumb">
-              <div class="script-head">
-                <span class="script-dot"></span>
-                <span class="script-title">SCRIPT</span>
-              </div>
-              <div class="script-line"></div>
-              <div class="script-line short"></div>
-              <div class="script-line"></div>
-              <div class="script-meta">Scene A · 通勤开场</div>
-              <div class="script-meta">Scene B · 面料细节特写</div>
-              <div class="script-meta">Scene C · 上身对比与卖点</div>
-              <div class="script-tag">Shot 1</div>
-            </div>
-            <p data-i18n="cardVideoScript">视频脚本</p>
-          </article>
-        </div>
+        </section>
         </div><!-- /.hero-inner -->
       </section>
     </main>

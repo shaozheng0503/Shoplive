@@ -119,11 +119,12 @@ def register_media_routes(
         try:
             if not str(payload.get("product_name", "")).strip():
                 return json_error("product_name 不能为空")
+            skip_category_check = bool(payload.get("skip_category_check", False))
             max_retry_on_category_mismatch = int(payload.get("category_retry_max", 2))
             max_retry_on_category_mismatch = max(0, min(max_retry_on_category_mismatch, 4))
 
             image_payload = {
-                "project_id": payload.get("project_id", "gemini-sl-20251120"),
+                "project_id": payload.get("project_id", "qy-shoplazza-02"),
                 "proxy": payload.get("proxy", ""),
                 "model": payload.get("model", "imagen-3.0-generate-002"),
                 "sample_count": int(payload.get("sample_count", 2)),
@@ -141,7 +142,7 @@ def register_media_routes(
                 judge = {"ok": False, "is_match": True, "reason": "skip_no_image"}
                 mismatch = False
                 images = dt.get("images") or []
-                if st < 400 and images:
+                if st < 400 and images and not skip_category_check:
                     judge = judge_generated_image_category(payload, images[0])
                     mismatch = not bool(judge.get("is_match", True))
                 attempts.append(

@@ -23,7 +23,7 @@ let autoJumpTimer = null;
 let progressStartedAt = 0;
 let generatedImages = [];
 let latestQualityReports = [];
-const DEFAULT_PROJECT_ID = "gemini-sl-20251120";
+const DEFAULT_PROJECT_ID = "qy-shoplazza-02";
 const BACKEND_BASE_CANDIDATES = (() => {
   const list = [];
   if (window.location?.origin && /^https?:/i.test(window.location.origin)) list.push(window.location.origin);

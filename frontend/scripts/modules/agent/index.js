@@ -36,6 +36,8 @@ const toggleScriptTab = document.getElementById("toggleScriptTab");
 const toggleVideoTab = document.getElementById("toggleVideoTab");
 const queryParams = new URLSearchParams(window.location.search);
 const SIMPLE_AGENT_MODE = true;
+const LOCKED_ASPECT_RATIO = "16:9";
+state.aspectRatio = LOCKED_ASPECT_RATIO;
 
 let thinkingNode = null;
 
@@ -401,9 +403,7 @@ function applyLang() {
   if (uploadHint) uploadHint.textContent = t("uploadHint");
   if (parseProductUrlBtn) parseProductUrlBtn.textContent = t("parseLinkBtn");
   if (productUrlInput) productUrlInput.placeholder = t("parseLinkPh");
-  const ratioLabel = document.querySelector('label[for="aspectRatioSelect"] span');
   const durationLabel = document.querySelector('label[for="durationSelect"] span');
-  if (ratioLabel) ratioLabel.textContent = t("ratioLabel");
   if (durationLabel) durationLabel.textContent = t("durationLabel");
   if (langToggleBtn) langToggleBtn.textContent = currentLang === "zh" ? "EN" : "中文";
   if (taskQueueClearBtn) taskQueueClearBtn.textContent = t("taskClearDone");
@@ -583,7 +583,7 @@ async function _runOneGrokGeneration(base, prompt, model, taskId, labelZh, label
 
 // Concat helper: accepts http URL or data: URL for each input
 async function _grokConcat(base, urlA, urlB) {
-  const body = { project_id: "gemini-sl-20251120" };
+  const body = { project_id: "qy-shoplazza-02" };
   const isHttp = (u) => /^https?:\/\//i.test(u);
   const isData = (u) => u.startsWith("data:");
   if (isHttp(urlA))       body.video_http_url_a = urlA;
@@ -1873,7 +1873,7 @@ async function analyzeImageInsight(imageItems = []) {
   return postJson(
     `${base}/api/agent/image-insight`,
     {
-      project_id: "gemini-sl-20251120",
+      project_id: "qy-shoplazza-02",
       model: "gemini-2.5-flash",
       language: currentLang,
       image_items: normalized.map((x) => ({ base64: x.base64, mime_type: x.mime })),
@@ -2096,7 +2096,6 @@ function showSummaryCard() {
         <div class="info-item"><div class="info-icon">🏷️</div><div class="info-main"><div class="info-title">${t("fBrand")}</div><input id="fBrandInfo" value="${(state.brandInfo || "").replace(/"/g, "&quot;")}" /></div></div>
         <div class="info-item"><div class="info-icon">🎨</div><div class="info-main"><div class="info-title">${t("fTpl")}</div><select id="fTemplate"><option value="clean">clean</option><option value="lifestyle">lifestyle</option><option value="premium">premium</option><option value="social">social</option></select></div></div>
         <div class="info-item"><div class="info-icon">⏱️</div><div class="info-main"><div class="info-title">${t("fDur")}</div><select id="fDuration"><option value="8">8s</option><option value="6">6s</option><option value="4">4s</option></select></div></div>
-        <div class="info-item"><div class="info-icon">📐</div><div class="info-main"><div class="info-title">${t("fRatio")}</div><input id="fAspect" value="16:9" readonly /></div></div>
         <div class="info-item"><div class="info-icon">🧍</div><div class="info-main"><div class="info-title">${t("fModel")}</div><label><input id="fNeedModel" type="checkbox" checked /> ${t("on")}</label></div></div>
       </div>
       <p class="table-hint">${t("hint")}</p>
@@ -2411,12 +2410,9 @@ function normalizeDurationForProvider(durationNum = 0, provider = "veo") {
 }
 
 function applyDetectedVideoSettings(config = {}) {
-  const ratio = String(config?.ratio || "").trim();
   const duration = String(config?.duration || "").trim();
-  if (ratio) {
-    state.aspectRatio = ratio;
-    if (aspectRatioSelect) aspectRatioSelect.value = ratio;
-  }
+  state.aspectRatio = LOCKED_ASPECT_RATIO;
+  if (aspectRatioSelect) aspectRatioSelect.value = LOCKED_ASPECT_RATIO;
   updateDurationOptions();
   if (durationSelect && duration) {
     const hasOption = Array.from(durationSelect.options || []).some((o) => o.value === duration);
@@ -2447,14 +2443,13 @@ async function submitSimplePromptGeneration(finalText = "") {
 function showPromptConfigConfirmBubble(finalText = "") {
   const text = String(finalText || "").trim();
   if (!text) return false;
-  const detectedRatio = extractAspectRatioFromPrompt(text);
+  const detectedRatio = "";
   const detectedDurationRaw = extractDurationFromPrompt(text);
   const provider = getModelProvider();
   const recommendedDuration = normalizeDurationForProvider(detectedDurationRaw, provider);
   if (!detectedRatio && !recommendedDuration) return false;
 
   const lines = [t("detectedConfigTitle")];
-  if (detectedRatio) lines.push(`- ${t("detectedConfigRatio", { value: detectedRatio })}`);
   if (recommendedDuration) {
     const adjusted = Number(detectedDurationRaw) > 0 && String(Number(detectedDurationRaw)) !== recommendedDuration;
     lines.push(`- ${adjusted
@@ -2859,68 +2854,76 @@ function isVeoRetryableLoadError(msg = "") {
 
 function buildAutoPromptDraftFromParsed(source = "image") {
   const duration = state.duration || "8";
-  const ratio = state.aspectRatio || "16:9";
-  const product = state.productName || (currentLang === "zh" ? "该商品" : "this product");
+  // 过滤掉 "ref N" 这类图片引用名，回退到通用商品名
+  const rawProduct = (state.productName || "").trim();
+  const product = rawProduct && !/^ref\s*\d+$/i.test(rawProduct)
+    ? rawProduct
+    : (currentLang === "zh" ? "该商品" : "this product");
   const business = state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion and accessories");
   const style = state.template || "clean";
   const pointList = normalizePointsList(state.sellingPoints || "");
   const focusPoints = pointList.slice(0, 2);
   const sellingText =
     focusPoints.join(currentLang === "zh" ? "；" : "; ") ||
-    (currentLang === "zh" ? "突出核心卖点与真实质感" : "highlight core selling points with realistic texture");
-  const target = state.targetUser || (currentLang === "zh" ? "目标人群" : "target audience");
-  const region = state.salesRegion || (currentLang === "zh" ? "目标地区" : "target region");
+    (currentLang === "zh" ? "核心卖点与真实质感" : "core selling points and authentic texture");
+  // 避免默认占位符直接输出
+  const rawTarget = (state.targetUser || "").trim();
+  const target = (rawTarget && rawTarget !== "目标人群" && rawTarget !== "target audience")
+    ? rawTarget
+    : (currentLang === "zh" ? "大众消费者" : "general consumers");
+  const rawRegion = (state.salesRegion || "").trim();
+  const region = (rawRegion && rawRegion !== "目标地区" && rawRegion !== "target region")
+    ? rawRegion
+    : (currentLang === "zh" ? "全球市场" : "global market");
   const modelText =
     state.needModel === false
-      ? currentLang === "zh"
-        ? "不需要模特展示"
-        : "no model showcase"
-      : currentLang === "zh"
-        ? "需要模特展示"
-        : "need model showcase";
-  const sourceHint =
+      ? currentLang === "zh" ? "纯商品镜头" : "product-only shots"
+      : currentLang === "zh" ? "模特出镜展示" : "model showcase";
+  const refHint =
     source === "image"
-      ? currentLang === "zh"
-        ? "请严格参考我上传的商品图，保持商品主体与细节一致。"
-        : "Strictly follow uploaded reference images and keep product details consistent."
-      : currentLang === "zh"
-        ? "请严格参考已解析商品信息，保持商品特征一致。"
-        : "Strictly follow parsed product information and keep product details consistent.";
+      ? currentLang === "zh" ? "严格还原商品图外观、颜色与细节。" : "Strictly replicate the uploaded product image appearance and details."
+      : currentLang === "zh" ? "严格保持商品特征一致。" : "Keep product characteristics consistent.";
   const anchorSummary = buildProductAnchorSummary(currentLang);
+  const compliance = currentLang === "zh"
+    ? "高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+    : "Clean highlight edges, controlled reflections, clear material textures, sharp structure edges, no distorted limbs/structures, no third-party logos or watermarks.";
+
   if (currentLang === "zh") {
+    const action1 = focusPoints[0] ? `${focusPoints[0]}特写` : "核心卖点特写";
+    const action2 = focusPoints[1] ? `展示${focusPoints[1]}` : "使用场景展示";
     return [
-      `[Style] ${style}，超高清商业画质，电影级影棚布光，真实可拍可剪。`,
-      `[Environment] 结合${region}审美与${business}消费场景，背景保持干净、道具适度。`,
-      `[Tone & Pacing] ${duration}秒内快慢有序，核心卖点仅聚焦1-2个：${sellingText}。`,
-      `[Camera] 轻微手持+稳定推进结合，突出产品主体与关键细节。`,
-      `[Lighting] 自然光+柔和补光，强化材质纹理与高光边缘。`,
-      `[Actions / Scenes] 商品引入 -> 使用动作 -> 卖点特写 -> 体验展示 -> 收尾CTA。`,
-      `[Background Sound] 轻节奏BGM + 合理环境音。`,
-      `[Transition / Editing] 节奏匹配剪辑，关键动作点顺滑衔接。`,
-      `[Call to Action] 以推荐动作和购买动机收口。`,
-      `基础约束：画幅${ratio}，时长${duration}秒，商品${product}，目标人群${target}，模特策略${modelText}。`,
+      `[Style] ${style}，超高清商业画质，电影级布光，真实可拍可剪。`,
+      `[Environment] ${region}${business}消费场景，背景干净，道具克制。`,
+      `[Tone & Pacing] ${duration}秒，节奏紧凑，聚焦：${sellingText}。`,
+      `[Camera] 稳定推进+局部特写，主体始终清晰。`,
+      `[Lighting] 柔光补光强化材质纹理与高光轮廓。`,
+      `[Actions / Scenes] 商品全貌引入 → ${action1} → ${action2} → ${modelText} → 购买CTA收口。`,
+      `[Background Sound] 轻节奏BGM，契合场景情绪。`,
+      `[Transition / Editing] 动作点顺滑衔接，节奏与卖点同步。`,
+      `[Call to Action] 推荐动作+购买动机收口。`,
+      `约束：${duration}秒，商品${product}，受众${target}，${modelText}。`,
       anchorSummary ? `商品锚点：${anchorSummary}。` : "",
-      sourceHint,
-      "请从4.1~4.6选择最合适的组合完成上述结构，避免空话。",
-      "合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。",
-    ].join(" ");
+      refHint,
+      compliance,
+    ].filter(Boolean).join(" ");
   }
+  const action1 = focusPoints[0] ? `${focusPoints[0]} close-up` : "key feature close-up";
+  const action2 = focusPoints[1] ? `showcase ${focusPoints[1]}` : "usage scene";
   return [
-    `[Style] ${style}; commercial ultra-HD quality and cinematic studio lighting.`,
-    `[Environment] Built for ${region} aesthetics and ${business} shopping context.`,
-    `[Tone & Pacing] ${duration}s rhythm with only 1-2 core selling points: ${sellingText}.`,
-    `[Camera] Light handheld + controlled push-ins for executable shots.`,
-    `[Lighting] Natural + soft fill, emphasize texture and edge highlights.`,
-    `[Actions / Scenes] Product intro -> usage -> selling-point close-up -> experience -> CTA close.`,
-    `[Background Sound] Light rhythmic BGM plus contextual SFX.`,
-    `[Transition / Editing] Beat-matched transitions with smooth action continuity.`,
-    `[Call to Action] End with recommendation intent and conversion hook.`,
-    `Base constraints: ratio ${ratio}, duration ${duration}s, product ${product}, audience ${target}, model strategy ${modelText}.`,
-    anchorSummary ? `${anchorSummary}.` : "",
-    sourceHint,
-    "Select the best mix from 4.1~4.6 to complete this structure.",
-    "Compliance suffix: clean highlight edges, controlled reflections, clear textures, sharp structure edges, no distorted limbs/structures, no third-party logos or watermarks.",
-  ].join(" ");
+    `[Style] ${style}; ultra-HD commercial quality, cinematic studio lighting.`,
+    `[Environment] ${region} ${business} shopping scene, clean minimal background.`,
+    `[Tone & Pacing] ${duration}s, tight rhythm focused on: ${sellingText}.`,
+    `[Camera] Controlled push-ins and close-ups, subject always sharp.`,
+    `[Lighting] Soft fill reinforcing material texture and highlight edges.`,
+    `[Actions / Scenes] Product overview → ${action1} → ${action2} → ${modelText} → CTA close.`,
+    `[Background Sound] Light rhythmic BGM matching scene mood.`,
+    `[Transition / Editing] Smooth action-aligned cuts synced to selling points.`,
+    `[Call to Action] Close with recommendation and purchase motivation.`,
+    `Constraints: ${duration}s, product ${product}, audience ${target}, ${modelText}.`,
+    anchorSummary ? `Product anchors: ${anchorSummary}.` : "",
+    refHint,
+    compliance,
+  ].filter(Boolean).join(" ");
 }
 
 function pickPlayableUrl(data) {
@@ -2950,7 +2953,7 @@ async function refreshPlayableUrlByOperation(operationName) {
     const status = await postJson(
       `${getApiBase()}/api/veo/status`,
       {
-        project_id: "gemini-sl-20251120",
+        project_id: "qy-shoplazza-02",
         model: getVeoModel(),
         operation_name: op,
       },
@@ -3014,7 +3017,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const cardPrompt = state.lastPrompt;
   const cardStoryboard = state.lastStoryboard;
   const cardDuration = String(state.duration || "8");
-  const cardAspectRatio = String(state.aspectRatio || "16:9");
   const taskSourceLabel = String(state.taskMap?.[taskId]?.sourceLabel || "").trim();
   const taskRunLabel = String(state.taskMap?.[taskId]?.title || "").trim();
   const card = document.createElement("article");
@@ -3031,7 +3033,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       ${taskRunLabel ? `<span class="msg-card-status card-source-run status-dot-info">${sanitizeInputValue(taskRunLabel)}</span>` : ""}
       ${taskSourceLabel ? `<span class="msg-card-status card-source-route status-dot-info">${sanitizeInputValue(taskSourceLabel)}</span>` : ""}
       <span class="msg-card-status status-dot-info">${t("cardDurationShort")} · ${sanitizeInputValue(cardDuration)}s</span>
-      <span class="msg-card-status status-dot-info">${t("cardRatioShort")} · ${sanitizeInputValue(cardAspectRatio)}</span>
       <span class="msg-card-status card-binding-script-name status-dot-done">${t("cardScriptNameShort")} · ${sanitizeInputValue(boundScriptSummary)}</span>
       <span class="msg-card-status card-binding-video-editor status-dot-done" hidden>${t("cardVideoEditorOpen")}</span>
       <span class="msg-card-status card-binding-script-editor status-dot-done" hidden>${t("cardScriptEditorOpen")}</span>
@@ -3303,7 +3304,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       await new Promise((r) => setTimeout(r, waitMs));
       if (elapsed < 30) continue;
       try {
-        const st = await postJson(`${base}/api/veo/status`, { project_id: "gemini-sl-20251120", model: lockedModel, operation_name: op }, 15000);
+        const st = await postJson(`${base}/api/veo/status`, { project_id: "qy-shoplazza-02", model: lockedModel, operation_name: op }, 15000);
         if (st?.transient) {
           const retryAttempts = Math.max(0, Number(st?.retry_attempts || 0));
           const waitMs = transientBackoff.apply(retryAttempts);
@@ -3357,7 +3358,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   let bridgeFrameMime = "image/png";
   try {
     const frameBody = {
-      project_id: "gemini-sl-20251120",
+      project_id: "qy-shoplazza-02",
       position: "last",
     };
     if (resA.gcs) frameBody.gcs_uri = resA.gcs;
@@ -3428,7 +3429,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
 
   let concatUrl = "";
   try {
-    const concatBody = { project_id: "gemini-sl-20251120" };
+    const concatBody = { project_id: "qy-shoplazza-02" };
     if (resA.gcs && resB.gcs) {
       concatBody.gcs_uri_a = resA.gcs;
       concatBody.gcs_uri_b = resB.gcs;
@@ -3507,11 +3508,8 @@ async function generateVideo(promptOverride = "") {
       await hydrateWorkflowTexts(false);
     }
     const finalPrompt = String(promptOverride || state.lastPrompt || buildPrompt()).trim();
-    const promptRatio = extractAspectRatioFromPrompt(finalPrompt);
-    if (promptRatio) {
-      state.aspectRatio = promptRatio;
-      if (aspectRatioSelect) aspectRatioSelect.value = promptRatio;
-    }
+    state.aspectRatio = LOCKED_ASPECT_RATIO;
+    if (aspectRatioSelect) aspectRatioSelect.value = LOCKED_ASPECT_RATIO;
     state.lastPrompt = finalPrompt;
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
     pushSystemStateMsg(t("submit"), "progress");
@@ -3521,7 +3519,7 @@ async function generateVideo(promptOverride = "") {
     const safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
     const imagePayload = buildVeoReferencePayload();
     const startBody = {
-      project_id: "gemini-sl-20251120",
+      project_id: "qy-shoplazza-02",
       model: getVeoModel(),
       prompt: safePrompt,
       sample_count: 1,
@@ -3619,7 +3617,7 @@ async function generateVideo(promptOverride = "") {
         const status = await postJson(
           `${base}/api/veo/status`,
           {
-            project_id: "gemini-sl-20251120",
+            project_id: "qy-shoplazza-02",
             model: getVeoModel(),
             operation_name: operationName,
           },
@@ -4031,13 +4029,12 @@ async function enhancePromptByAgent() {
         );
         optimized = String(retryResp?.content || "").trim();
       } catch (_secondErr) {
-        // Both LLM attempts failed — append framework draft to user's raw input
-        // so at least the user's text is preserved.
-        optimized = sanitizePromptForUser(raw + ". " + buildAutoPromptDraftFromParsed("url"));
+        // Both LLM attempts failed — use structured draft directly (avoid duplicating raw)
+        optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
       }
     }
     if (!optimized) {
-      optimized = sanitizePromptForUser(raw + ". " + buildAutoPromptDraftFromParsed("url"));
+      optimized = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
     }
     const cleaned = sanitizePromptForUser(optimized);
     chatInput.value = cleaned;
@@ -4246,22 +4243,19 @@ async function parseShopProductByUrl(inputUrl = "") {
 function consumeLandingParams() {
   const from = (queryParams.get("from") || "").trim();
   const productUrl = (queryParams.get("product_url") || "").trim();
-  const aspect = (queryParams.get("aspect_ratio") || "").trim();
   const duration = (queryParams.get("duration") || "").trim();
   const draft = (queryParams.get("draft") || "").trim();
 
   if (["landing-prompt", "landing-product-link", "landing-upload", "landing-ref"].includes(from)) {
     // 只有没有携带具体配置参数（aspect/duration/draft）时才进入大居中入口模式；
     // 带了首页设置的跳转直接用正常对话布局，避免 entry-focus 把 chatList 隐藏。
-    const hasSettings = Boolean(aspect || duration || draft || productUrl);
+    const hasSettings = Boolean(duration || draft || productUrl);
     if (!hasSettings) {
       state.entryFocusMode = true;
     }
   }
 
-  if (aspect && ["16:9", "9:16", "1:1"].includes(aspect)) {
-    state.aspectRatio = aspect;
-  }
+  state.aspectRatio = LOCKED_ASPECT_RATIO;
   if (duration && ["4", "6", "8", "10", "12", "15", "16", "18", "24"].includes(duration)) {
     state.duration = duration;
   }
@@ -4271,10 +4265,9 @@ function consumeLandingParams() {
   syncSimpleControlsFromState();
   applyWorkspaceMode();
 
-  if (from && (aspect || duration || draft)) {
+  if (from && (duration || draft)) {
     const durLabel = state.duration ? `${state.duration}s` : "";
-    const ratioLabel = state.aspectRatio || "";
-    const parts = [durLabel, ratioLabel].filter(Boolean);
+    const parts = [durLabel].filter(Boolean);
     state._landingHint = parts.length
       ? (currentLang === "zh"
           ? `已应用首页设置：${parts.join(" · ")}${draft ? "，提示词已预填。" : "。"}`
@@ -4565,6 +4558,8 @@ function scheduleLandingPrefillAfterWelcome() {
           sample_count: 1,
           aspect_ratio: state.aspectRatio || "16:9",
           location: "us-central1",
+          person_generation: "dont_allow",
+          skip_category_check: true,
           language_code: currentLang === "zh" ? "zh-CN" : "en-US",
           currency_code: "CNY",
           exchange_rate: "7.2",
@@ -4715,13 +4710,13 @@ if (aiGenerateFramesBtn) {
       const lastPrompt = `Product in lifestyle context, ${product}, model using/wearing the product, natural setting, warm lighting, 16:9 aspect ratio, cinematic quality.`;
       const [firstResp, lastResp] = await Promise.all([
         postJson(`${base}/api/media/image-generate`, {
-          project_id: "gemini-sl-20251120",
+          project_id: "qy-shoplazza-02",
           prompt: firstPrompt,
           sample_count: 1,
           aspect_ratio: "16:9",
         }, 60000),
         postJson(`${base}/api/media/image-generate`, {
-          project_id: "gemini-sl-20251120",
+          project_id: "qy-shoplazza-02",
           prompt: lastPrompt,
           sample_count: 1,
           aspect_ratio: "16:9",

@@ -1318,7 +1318,7 @@ def register_veo_routes(
                 return json_error("gcs_uri 必须是 gs:// 开头")
             key_hint = str(request.args.get("key_file") or "").strip()
             payload = {
-                "project_id": "gemini-sl-20251120",
+                "project_id": "qy-shoplazza-02",
                 "key_file": key_hint,
                 "proxy": "",
                 "model": "",

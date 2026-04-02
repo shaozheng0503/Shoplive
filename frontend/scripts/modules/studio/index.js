@@ -53,7 +53,7 @@ const proxyInput = document.getElementById("proxyInput");
 const veoModelInput = document.getElementById("veoModelInput");
 const storageUriInput = document.getElementById("storageUriInput");
 const veoDurationInput = document.getElementById("veoDurationInput");
-const veoAspectRatioInput = document.getElementById("veoAspectRatioInput");
+const LOCKED_ASPECT_RATIO = "16:9";
 const sellingPointsInput = document.getElementById("sellingPointsInput");
 const targetUserInput = document.getElementById("targetUserInput");
 const salesRegionInput = document.getElementById("salesRegionInput");
@@ -1259,7 +1259,6 @@ function buildGenerationPrompt(brief) {
 - 销售地区：${brief.region}
 - 模版风格：${brief.template}
 - 视频时长：${brief.duration}s
-- 画幅：${brief.aspectRatio}
 - 模特策略：${modelStyle}
 请输出：
 1) 镜头脚本（镜头1/镜头2/镜头3）
@@ -1663,7 +1662,7 @@ async function callBackendVeoExport(prompt) {
   const durationRaw = (veoDurationInput.value || "8").trim();
   const durationNorm = normalizeVeoDuration(durationRaw);
   const duration = durationNorm.value;
-  const aspectRatio = (veoAspectRatioInput.value || "16:9").trim();
+  const aspectRatio = LOCKED_ASPECT_RATIO;
   if (!backendUrl) throw new Error(t("errBackendUrlRequired"));
   if (!projectId) throw new Error(t("errProjectIdRequired"));
   const imageInput = await buildVeoImageInputFromAssets();
@@ -2242,7 +2241,7 @@ backendUrlInput.value =
     ? window.location.origin
     : "http://127.0.0.1:8001";
 if (llmApiBaseInput) llmApiBaseInput.value = "https://litellm.shoplazza.site";
-projectIdInput.value = "gemini-sl-20251120";
+projectIdInput.value = "qy-shoplazza-02";
 modelInput.value = "azure-gpt-5";
 veoDurationInput.value = "8";
 applyLang(currentLang);
