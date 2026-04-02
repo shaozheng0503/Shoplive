@@ -11,7 +11,7 @@ from shoplive.backend.async_executor import _TTLCache
 # Avoids re-calling LLM for identical brief + action within the same session.
 _llm_response_cache = _TTLCache(ttl_seconds=300, max_size=200)
 # Bump this when the LLM prompt template changes to invalidate stale cached responses.
-_LLM_CACHE_VERSION = "v1"
+_LLM_CACHE_VERSION = "v2"
 
 
 def _build_shoplive_script_via_llm(
@@ -60,11 +60,13 @@ def _build_shoplive_video_prompt_via_llm(
     shoplive_video_system_prompt: str,
     call_litellm_chat: Callable[..., Tuple[int, Dict]],
 ) -> Tuple[int, Dict]:
-    selling_points = [str(x or "").strip() for x in normalized.get("selling_points", []) if str(x or "").strip()]
+    from shoplive.backend.briefing import pick_core_selling_points, summarize_storyboard
+
+    selling_points = pick_core_selling_points(normalized.get("selling_points", []), limit=2)
     aspect_ratio = str(normalized.get("aspect_ratio", "16:9") or "16:9").strip()
     duration = int(normalized.get("duration", 8) or 8)
     need_model = bool(normalized.get("need_model", True))
-    script_excerpt = str(script_text or "").strip()
+    script_excerpt = summarize_storyboard(script_text, max_chars=260)
     product_anchors = normalized.get("product_anchors", {}) if isinstance(normalized.get("product_anchors", {}), dict) else {}
     user_payload = {
         "product_name": normalized.get("product_name", ""),

@@ -317,8 +317,9 @@ function scrollToTaskResult(taskId = "") {
     const recoverUrl = String(task.resultVideoUrl || state.lastVideoUrl || "").trim();
     const recoverGcs = String(task.resultGcsUri || "").trim();
     const recoverOp = String(task.resultOperationName || "").trim();
+    const recoverDuration = Number(task.resultDurationSec || 0) || null;
     if (recoverUrl) {
-      const rebuiltId = renderGeneratedVideoCard(recoverUrl, recoverGcs, recoverOp, taskId);
+      const rebuiltId = renderGeneratedVideoCard(recoverUrl, recoverGcs, recoverOp, taskId, recoverDuration);
       cardId = String(rebuiltId || "");
       card = cardId ? chatList.querySelector(`[data-task-card-id="${cardId}"]`) : null;
     }
@@ -2941,8 +2942,9 @@ function buildVideoSourceCandidates(videoUrl, gcsUri = "") {
   const direct = String(videoUrl || "").trim();
   const proxy = buildPlayableUrlFromGcs(gcsUri);
   const result = [];
-  if (proxy) result.push(proxy);
-  if (direct && direct !== proxy) result.push(direct);
+  if (direct) result.push(direct);
+  const isExportedConcatOrEdit = /\/video-edits\//.test(direct);
+  if (!isExportedConcatOrEdit && proxy && proxy !== direct) result.push(proxy);
   return result;
 }
 
@@ -3001,7 +3003,7 @@ function renderChainSummary(chainResp) {
   pushSystemReplyMsg(lines.join("\n"), { typewriter: true, speed: 20 });
 }
 
-function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "") {
+function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "", actualDurationSec = null) {
   // Always return to chat-first preview mode after a new video is produced.
   // Editors should open only when user clicks action buttons on the video card.
   state.videoEditorOpen = false;
@@ -3013,10 +3015,13 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   state.lastVideoUrl = finalPlayableUrl;
   state.canUseEditors = true;
   // Snapshot this card's context so concurrent videos don't overwrite each other
-  const cardVideoUrl = finalPlayableUrl;
+  let cardVideoUrl = finalPlayableUrl;
   const cardPrompt = state.lastPrompt;
   const cardStoryboard = state.lastStoryboard;
-  const cardDuration = String(state.duration || "8");
+  const actualDuration = Number(actualDurationSec || 0);
+  const cardDuration = actualDuration > 0
+    ? String(Math.round(actualDuration * 10) / 10)
+    : String(state.duration || "8");
   const taskSourceLabel = String(state.taskMap?.[taskId]?.sourceLabel || "").trim();
   const taskRunLabel = String(state.taskMap?.[taskId]?.title || "").trim();
   const card = document.createElement("article");
@@ -3061,10 +3066,22 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   video.src = finalPlayableUrl;
   let idx = 0;
   let refreshedByOp = false;
+  const syncResolvedVideoUrl = (resolvedUrl) => {
+    const nextUrl = String(resolvedUrl || "").trim();
+    if (!nextUrl) return;
+    cardVideoUrl = nextUrl;
+    if (state.activeVideoCardId === cardId || state.lastVideoUrl === finalPlayableUrl) {
+      state.lastVideoUrl = nextUrl;
+    }
+    if (taskId && state.taskMap?.[taskId]) {
+      updateVideoTask(taskId, { resultVideoUrl: nextUrl });
+    }
+  };
   video.addEventListener("error", async () => {
     if (idx + 1 < sourceCandidates.length) {
       idx += 1;
       const nextUrl = sourceCandidates[idx];
+      syncResolvedVideoUrl(nextUrl);
       video.src = nextUrl;
       const p = video.play();
       if (p && typeof p.catch === "function") p.catch(err => console.debug('[shoplive]', err));
@@ -3074,6 +3091,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       refreshedByOp = true;
       const refreshedUrl = await refreshPlayableUrlByOperation(operationName);
       if (refreshedUrl) {
+        syncResolvedVideoUrl(refreshedUrl);
         video.src = refreshedUrl;
         const p = video.play();
         if (p && typeof p.catch === "function") p.catch(err => console.debug('[shoplive]', err));
@@ -3096,6 +3114,19 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       "blocked",
       { error: true }
     );
+  });
+  video.addEventListener("loadedmetadata", () => {
+    const dur = Number(video.duration || 0);
+    const is16sTask = /\b16(\.0)?s\b/i.test(String(state.taskMap?.[taskId]?.title || ""))
+      || String(state.duration || "") === "16";
+    if (is16sTask && Number.isFinite(dur) && dur > 0 && dur < 14.5) {
+      pushSystemStateMsg(
+        currentLang === "zh"
+          ? `⚠️ 当前播放源时长仅 ${dur.toFixed(1)} 秒，未达到 16 秒，请重新生成或重试拼接。`
+          : `⚠️ Current playback source is only ${dur.toFixed(1)}s, below 16s. Please regenerate or retry concat.`,
+        "blocked"
+      );
+    }
   });
   surface.appendChild(video);
   setupSurfaceFullscreen(surface);
@@ -3181,6 +3212,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
       resultVideoUrl: finalPlayableUrl,
       resultGcsUri: String(gcsUri || ""),
       resultOperationName: String(operationName || ""),
+      resultDurationSec: actualDuration > 0 ? actualDuration : undefined,
     });
   }
   applyWorkspaceMode();
@@ -3428,6 +3460,8 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   scrollToBottom();
 
   let concatUrl = "";
+  let concatDurationSec = 0;
+  let concatTraceId = "";
   try {
     const concatBody = { project_id: "qy-shoplazza-02" };
     if (resA.gcs && resB.gcs) {
@@ -3447,6 +3481,8 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       try {
         const concatResp = await postJson(`${base}/api/veo/concat-segments`, concatBody, 120000);
         concatUrl = String(concatResp?.video_url || concatResp?.video_data_url || "").trim();
+        concatDurationSec = Number(concatResp?.duration_seconds || 0) || 0;
+        concatTraceId = String(concatResp?.__trace_id || "").trim();
         if (!concatUrl) {
           pushSystemStateMsg(zh
             ? "⚠️ 拼接接口返回为空，已降级展示第一段视频。"
@@ -3471,11 +3507,53 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   if (statusBubble.parentNode) statusBubble.remove();
   if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
 
-  pushSystemStateMsg(zh
-    ? `16 秒视频生成完成（2 段串行衔接）。${concatUrl ? "" : "⚠️ 拼接未完成，暂展示第一段。"}`
-    : `16s video ready (2 segments, frame-bridged).${concatUrl ? "" : " Concat incomplete, showing first segment."}`, "done");
-  updateVideoTask(taskId, { status: "done", stage: zh ? "16秒任务完成" : "16s completed" });
-  renderGeneratedVideoCard(playable, resA.gcs || resB.gcs || "", opA || "", taskId);
+  const actualDurationSec = concatUrl
+    ? (concatDurationSec > 0 ? concatDurationSec : 0)
+    : 8;
+  if (concatUrl && actualDurationSec <= 0) {
+    pushSystemStateMsg(
+      zh
+        ? `⚠️ 拼接接口未返回时长，无法确认是否为 16 秒。trace_id=${concatTraceId || "-"}`
+        : `⚠️ Concat API returned no duration, unable to verify 16s. trace_id=${concatTraceId || "-"}`,
+      "blocked"
+    );
+  }
+  const durationLooksValid = concatUrl && actualDurationSec >= 14.5;
+  const taskTitlePrefix = String(state.taskMap?.[taskId]?.title || "").split("·")[0].trim();
+  if (!durationLooksValid) {
+    pushSystemStateMsg(
+      zh
+        ? `⚠️ 当前结果实际仅约 ${actualDurationSec.toFixed(1)} 秒，未达到 16 秒拼接目标，现展示的是${concatUrl ? "异常拼接结果" : "单段视频"}。trace_id=${concatTraceId || "-"}`
+        : `⚠️ Current output is only about ${actualDurationSec.toFixed(1)}s, below the 16s target. Showing ${concatUrl ? "the short concat result" : "a single segment"}. trace_id=${concatTraceId || "-"}`,
+      "blocked"
+    );
+  }
+
+  pushSystemStateMsg(
+    durationLooksValid
+      ? (zh
+          ? `16 秒视频生成完成（2 段串行衔接，实际 ${actualDurationSec.toFixed(1)} 秒）。`
+          : `16s video ready (2 segments, frame-bridged, actual ${actualDurationSec.toFixed(1)}s).`)
+      : (zh
+          ? `视频已生成，但 16 秒拼接未达标（当前 ${actualDurationSec.toFixed(1)} 秒）。`
+          : `Video generated, but the 16s concat target was not met (current ${actualDurationSec.toFixed(1)}s).`),
+    durationLooksValid ? "done" : "blocked"
+  );
+  updateVideoTask(taskId, {
+    status: durationLooksValid ? "done" : "failed",
+    stage: durationLooksValid
+      ? (zh ? "16秒任务完成" : "16s completed")
+      : (zh ? `拼接时长异常（${actualDurationSec.toFixed(1)}秒）` : `Concat duration mismatch (${actualDurationSec.toFixed(1)}s)`),
+    title: `${taskTitlePrefix || "#?"} · ${Math.round(actualDurationSec * 10) / 10}s`,
+    resultDurationSec: actualDurationSec,
+  });
+  // When concat succeeds, bind card strictly to concat output; do NOT provide
+  // segment gcs fallback, otherwise player error-recovery may fall back to 8s segment.
+  // Also clear operationName for concat results: opA refers to the first 8s segment,
+  // so passing it would cause the error handler to replace the concat URL with an 8s video.
+  const cardBoundGcs = concatUrl ? "" : (resA.gcs || resB.gcs || "");
+  const cardOpName   = concatUrl ? "" : (opA || "");
+  renderGeneratedVideoCard(playable, cardBoundGcs, cardOpName, taskId, actualDurationSec);
 }
 
 async function generateVideo(promptOverride = "") {

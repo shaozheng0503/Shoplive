@@ -571,7 +571,7 @@ def register_video_edit_routes(
                     tail = msg[-600:] if len(msg) > 600 else msg
                     return json_error(f"ffmpeg 导出失败: {tail}", 500)
 
-            base = request.host_url.rstrip("/")
+            base = ""
             warning = ""
             if mask_text and not mask_applied:
                 warning = "当前 ffmpeg 不支持 drawtext，文字蒙版未写入导出视频"
@@ -619,7 +619,7 @@ def register_video_edit_routes(
 
             output_name = f"timeline-render-{uuid.uuid4().hex}.mp4"
             output_video = video_edit_export_dir / output_name
-            base = request.host_url.rstrip("/")
+            base = ""
 
             if async_job:
                 job_id = f"timeline-job-{uuid.uuid4().hex}"
@@ -1003,7 +1003,7 @@ def register_video_edit_routes(
                 if result.returncode != 0:
                     return json_error(f"ffmpeg overlay 失败: {result.stderr[-300:]}", 500, error_code="FFMPEG_OVERLAY_FAILED")
 
-            base_url = request.host_url.rstrip("/")
+            base_url = ""
             return jsonify({
                 "ok": True,
                 "video_url": f"{base_url}/video-edits/{output_name}",

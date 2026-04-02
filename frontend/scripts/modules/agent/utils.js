@@ -5,6 +5,21 @@ export function getApiBase() {
   return origin;
 }
 
+/**
+ * Convert a possibly-relative video URL to an absolute URL suitable for
+ * sending to the backend (which needs http(s):// or data: URLs to download).
+ *
+ * Backend-served export files use relative paths like /video-edits/xxx.mp4
+ * so the browser resolves them correctly regardless of the server's bind address
+ * (0.0.0.0 vs 127.0.0.1). When the frontend forwards the URL to the backend for
+ * further editing, we must re-attach the origin.
+ */
+export function toAbsoluteVideoUrl(url) {
+  if (!url) return url;
+  if (url.startsWith("/")) return `${getApiBase()}${url}`;
+  return url;
+}
+
 export async function postJson(url, body, timeout = 30000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
@@ -16,6 +31,10 @@ export async function postJson(url, body, timeout = 30000) {
       signal: ctrl.signal,
     });
     const data = await resp.json();
+    const traceId = resp.headers.get("X-Trace-Id") || "";
+    if (data && typeof data === "object" && traceId) {
+      data.__trace_id = traceId;
+    }
     if (!resp.ok) throw new Error(data?.error || `HTTP ${resp.status}`);
     return data;
   } finally {

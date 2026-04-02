@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { currentLang, t } from './i18n.js';
-import { getApiBase, postJson, postSse } from './utils.js';
+import { getApiBase, toAbsoluteVideoUrl, postJson, postSse } from './utils.js';
 
 // Callbacks injected by index.js to break circular dependencies
 let _pushSystemStateMsg = () => null;
@@ -42,7 +42,7 @@ export async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
   _pushSystemStateMsg(t("speedRangeApplying", { start: startSec.toFixed(1), end: endSec.toFixed(1), speed: spd }), "progress");
   try {
     const base = getApiBase();
-    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: state.videoEdit }, 240000);
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
@@ -53,7 +53,8 @@ export async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
     _pushSystemStateMsg(t("speedRangeApplied", { start: startSec.toFixed(1), end: endSec.toFixed(1) }), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
-    _pushSystemStateMsg(t("speedIntentFailed"), "blocked");
+    const msg = String(_e?.message || "").trim();
+    _pushSystemStateMsg(msg ? `${t("speedIntentFailed")}（${msg}）` : t("speedIntentFailed"), "blocked");
   }
 }
 
@@ -68,7 +69,7 @@ export async function applyColorGradingToCurrentVideo({ bright = 0, sat = 0, hue
   _pushSystemStateMsg(t("colorIntentApplying"), "progress");
   try {
     const base = getApiBase();
-    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: state.videoEdit }, 240000);
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
@@ -95,7 +96,7 @@ export async function applyBgmEditToCurrentVideo({ action, volume }) {
   _pushSystemStateMsg(t("bgmIntentApplying"), "progress");
   try {
     const base = getApiBase();
-    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: state.lastVideoUrl, edits: state.videoEdit }, 240000);
+    const resp = await postJson(`${base}/api/video/edit/export`, { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: state.videoEdit }, 240000);
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
@@ -129,6 +130,15 @@ export function pushVideoUrlToHistory() {
   if (!state.lastVideoUrl) return;
   state.videoUrlHistory = [...(state.videoUrlHistory || []), state.lastVideoUrl].slice(-10);
   _saveVideoHistory();
+}
+
+function _getLoadedVideoDurationSec() {
+  const videos = Array.from(document.querySelectorAll(".video-edit-surface video"));
+  for (const video of videos) {
+    const dur = Number(video?.duration || 0);
+    if (Number.isFinite(dur) && dur > 0) return dur;
+  }
+  return 0;
 }
 
 /**
@@ -168,7 +178,9 @@ export async function applyTrimToCurrentVideo({ start, end }) {
     return;
   }
   const s = Math.max(0, Number(start) || 0);
-  const e = Math.max(s + 0.1, Number(end) || s + 3);
+  const loadedDuration = _getLoadedVideoDurationSec();
+  const rawEnd = Math.max(s + 0.1, Number(end) || s + 3);
+  const e = loadedDuration > 0 ? Math.min(rawEnd, loadedDuration) : rawEnd;
   const bubble = _pushSystemStateMsg(t("trimIntentApplying", { start: s.toFixed(1), end: e.toFixed(1) }), "progress");
   pushVideoUrlToHistory();
   try {
@@ -177,11 +189,12 @@ export async function applyTrimToCurrentVideo({ start, end }) {
     const initResp = await postJson(
       `${base}/api/video/timeline/render`,
       {
-        source_video_url: state.lastVideoUrl,
+        source_video_url: toAbsoluteVideoUrl(state.lastVideoUrl),
         tracks: [{
           label: "Video", track_type: "video", enabled: true, muted: false, order: 0,
           segments: [{ left: 0, width: 100, start_seconds: s, end_seconds: e, source_index: 0 }],
         }],
+        duration_seconds: loadedDuration > 0 ? loadedDuration : undefined,
         async_job: true,
       },
       30000
@@ -198,7 +211,8 @@ export async function applyTrimToCurrentVideo({ start, end }) {
   } catch (_e) {
     state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1); // rollback on fail
     _saveVideoHistory();
-    _pushSystemStateMsg(t("trimIntentFailed"), "blocked");
+    const msg = String(_e?.message || "").trim();
+    _pushSystemStateMsg(msg ? `${t("trimIntentFailed")}（${msg}）` : t("trimIntentFailed"), "blocked");
   }
 }
 
@@ -208,8 +222,14 @@ export async function applyMultiTrimToCurrentVideo({ segments }) {
     _pushSystemStateMsg(t("trimIntentNoVideo"), "blocked");
     return;
   }
+  const loadedDuration = _getLoadedVideoDurationSec();
   const segs = (segments || [])
-    .map((s) => ({ start: Math.max(0, Number(s.start) || 0), end: Math.max(0.1, Number(s.end) || 0.1) }))
+    .map((s) => {
+      const start = Math.max(0, Number(s.start) || 0);
+      const rawEnd = Math.max(start + 0.1, Number(s.end) || 0.1);
+      const end = loadedDuration > 0 ? Math.min(rawEnd, loadedDuration) : rawEnd;
+      return { start, end };
+    })
     .filter((s) => s.end > s.start);
   if (!segs.length) return;
   const zh = currentLang === "zh";
@@ -223,7 +243,7 @@ export async function applyMultiTrimToCurrentVideo({ segments }) {
     const initResp = await postJson(
       `${base}/api/video/timeline/render`,
       {
-        source_video_url: state.lastVideoUrl,
+        source_video_url: toAbsoluteVideoUrl(state.lastVideoUrl),
         tracks: [{
           label: "Video", track_type: "video", enabled: true, muted: false, order: 0,
           segments: segs.map((s, i) => ({
@@ -234,6 +254,7 @@ export async function applyMultiTrimToCurrentVideo({ segments }) {
             source_index: 0,
           })),
         }],
+        duration_seconds: loadedDuration > 0 ? loadedDuration : undefined,
         async_job: true,
       },
       30000
@@ -250,7 +271,8 @@ export async function applyMultiTrimToCurrentVideo({ segments }) {
   } catch (_e) {
     state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1);
     _saveVideoHistory();
-    _pushSystemStateMsg(t("trimIntentFailed"), "blocked");
+    const msg = String(_e?.message || "").trim();
+    _pushSystemStateMsg(msg ? `${t("trimIntentFailed")}（${msg}）` : t("trimIntentFailed"), "blocked");
   }
 }
 
@@ -275,7 +297,7 @@ export function applySubtitleStyleToCurrentVideo({ color, position }) {
     const base = getApiBase();
     const resp = await postJson(
       `${base}/api/video/edit/export`,
-      { video_url: state.lastVideoUrl, edits: state.videoEdit },
+      { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: state.videoEdit },
       240000
     );
     const exportedUrl = String(resp?.video_url || "").trim();
@@ -346,7 +368,7 @@ export async function applyAsrSubtitlesToCurrentVideo() {
   const bubble = _pushSystemStateMsg(zh ? "🎙️ 正在识别视频语音，请稍候…" : "🎙️ Transcribing video audio…", "progress");
   try {
     const base = getApiBase();
-    const resp = await postJson(`${base}/api/video/asr`, { video_url: state.lastVideoUrl }, 150000);
+    const resp = await postJson(`${base}/api/video/asr`, { video_url: toAbsoluteVideoUrl(state.lastVideoUrl) }, 150000);
     const subs = Array.isArray(resp?.subtitles) ? resp.subtitles : [];
     if (!subs.length) {
       const bodyEl = bubble?.querySelector("[data-msg-body]");
@@ -386,7 +408,7 @@ export async function applyAsrSubtitlesToCurrentVideo() {
         pushVideoUrlToHistory();
         const exportResp = await postJson(
           `${base2}/api/video/edit/export`,
-          { video_url: state.lastVideoUrl, edits: editsWithSubs },
+          { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: editsWithSubs },
           300000
         );
         const url = String(exportResp?.video_url || "").trim();
@@ -476,7 +498,7 @@ export async function applyImageOverlayToCurrentVideo({ scale = 0.35, position =
     const resp = await postJson(
       `${base}/api/video/overlay-image`,
       {
-        video_url: state.lastVideoUrl,
+        video_url: toAbsoluteVideoUrl(state.lastVideoUrl),
         image_base64: imageBase64,
         image_mime_type: imageMime,
         overlay_scale: scale,
@@ -549,7 +571,7 @@ export async function applySubtitleToCurrentVideo(intent = {}) {
     const base = getApiBase();
     const resp = await postJson(
       `${base}/api/video/edit/export`,
-      { video_url: state.lastVideoUrl, edits: state.videoEdit },
+      { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: state.videoEdit },
       240000
     );
     const exportedUrl = String(resp?.video_url || "").trim();
@@ -588,7 +610,7 @@ export async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     const resp = await postJson(
       `${base}/api/video/edit/export`,
       {
-        video_url: state.lastVideoUrl,
+        video_url: toAbsoluteVideoUrl(state.lastVideoUrl),
         edits: state.videoEdit,
       },
       240000
@@ -605,6 +627,7 @@ export async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     _pushSystemStateMsg(t("speedIntentApplied", { speed: normalized.toFixed(2).replace(/\.00$/, "") }), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
-    _pushSystemStateMsg(t("speedIntentFailed"), "blocked");
+    const msg = String(_e?.message || "").trim();
+    _pushSystemStateMsg(msg ? `${t("speedIntentFailed")}（${msg}）` : t("speedIntentFailed"), "blocked");
   }
 }

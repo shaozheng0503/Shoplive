@@ -88,7 +88,7 @@ VIDEO_EDIT_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 setup_audit_middleware(app)
 
 
-SHOPLIVE_VIDEO_SYSTEM_PROMPT = “””
+SHOPLIVE_VIDEO_SYSTEM_PROMPT = """
 你是一位专为 Veo 视频模型服务的电商视频提示词总导演。根据用户输入（商品信息、卖点、场景、目标人群、时长、画幅、商品图）输出一条可直接用于视频生成的提示词，语言精炼、视觉具体、节奏可执行。
 
 ━━ 硬性约束 ━━
@@ -156,7 +156,7 @@ SHOPLIVE_VIDEO_SYSTEM_PROMPT = “””
 □ 时长与画幅已体现，节奏合理？
 □ 声音、转场、CTA都有？
 □ 合规后缀已附？
-“””.strip()
+""".strip()
 
 
 # Shoplive brief/prompt helpers moved to `shoplive.backend.briefing`.

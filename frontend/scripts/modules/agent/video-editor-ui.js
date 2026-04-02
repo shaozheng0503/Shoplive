@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { currentLang, t } from './i18n.js';
-import { getApiBase, postJson } from './utils.js';
+import { getApiBase, toAbsoluteVideoUrl, postJson } from './utils.js';
 
 // Callbacks injected by index.js (avoids circular deps)
 let _openEditorPanel = () => {};
@@ -1364,7 +1364,7 @@ export function renderVideoEditor() {
       const resp = await postJson(
         `${base}/api/video/edit/export`,
         {
-          video_url: state.lastVideoUrl,
+          video_url: toAbsoluteVideoUrl(state.lastVideoUrl),
           edits: state.videoEdit,
         },
         240000

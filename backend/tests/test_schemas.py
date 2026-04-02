@@ -91,7 +91,7 @@ class TestImageInsightRequest:
 
     def test_inherits_common_payload_defaults(self):
         req = ImageInsightRequest()
-        assert req.project_id == "gemini-sl-20251120"
+        assert req.project_id == "qy-shoplazza-02"
         assert req.key_file == ""
         assert req.proxy == ""
 
@@ -211,7 +211,7 @@ class TestVeoStatusRequest:
 
     def test_inherits_common_defaults(self):
         req = VeoStatusRequest(operation_name="op-name")
-        assert req.project_id == "gemini-sl-20251120"
+        assert req.project_id == "qy-shoplazza-02"
 
 
 # ---------------------------------------------------------------------------

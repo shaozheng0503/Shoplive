@@ -1,6 +1,7 @@
 import base64
 import os
 import random
+import subprocess
 import tempfile
 import time
 import re
@@ -1439,6 +1440,21 @@ def register_veo_routes(
                     _write_video_data_url_to_file(data_url_b, seg_b_path)
                 concat_path = tmp_dir / "concat_out.mp4"
                 concat_videos_ffmpeg([seg_a_path, seg_b_path], concat_path)
+                duration_probe = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(concat_path),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    concat_duration_seconds = float((duration_probe.stdout or "").strip() or 0.0)
+                except Exception:
+                    concat_duration_seconds = 0.0
                 final_data = concat_path.read_bytes()
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -1451,8 +1467,10 @@ def register_veo_routes(
                     out_name = f"concat-{_uuid.uuid4().hex}.mp4"
                     out_file = video_export_dir / out_name
                     out_file.write_bytes(final_data)
-                    base_url = request.host_url.rstrip("/")
-                    concat_video_url = f"{base_url}/video-edits/{out_name}"
+                    # Use a relative path so the browser resolves it against the
+                    # page origin. request.host_url can return http://0.0.0.0:…
+                    # when Flask is bound to 0.0.0.0, which browsers cannot load.
+                    concat_video_url = f"/video-edits/{out_name}"
                 except Exception:
                     pass
 
@@ -1474,7 +1492,11 @@ def register_veo_routes(
                 status="success",
                 duration_ms=_dur_ms,
             )
-            resp_body = {"ok": True, "video_data_url": data_url}
+            resp_body = {
+                "ok": True,
+                "video_data_url": data_url,
+                "duration_seconds": round(concat_duration_seconds, 3),
+            }
             if concat_video_url:
                 resp_body["video_url"] = concat_video_url
             return jsonify(resp_body)
@@ -1720,7 +1742,7 @@ def register_veo_routes(
                             out_name = f"split-{total_seconds}s-partial-{_uuid.uuid4().hex}.mp4"
                             out_file = video_export_dir / out_name
                             out_file.write_bytes(partial_data)
-                            partial_video_url = f"{request.host_url.rstrip('/')}/video-edits/{out_name}"
+                            partial_video_url = f"/video-edits/{out_name}"
                         except Exception:
                             pass
                     audit_log.record(
@@ -1785,7 +1807,7 @@ def register_veo_routes(
                     out_name = f"split-{total_seconds}s-{_uuid.uuid4().hex}.mp4"
                     out_file = video_export_dir / out_name
                     out_file.write_bytes(final_data)
-                    video_url = f"{request.host_url.rstrip('/')}/video-edits/{out_name}"
+                    video_url = f"/video-edits/{out_name}"
                 except Exception:
                     pass
 

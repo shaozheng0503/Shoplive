@@ -5,10 +5,12 @@ Tests run against a real Flask test client using ffmpeg-generated synthetic
 videos — no external API calls (GCP, LiteLLM) are made.
 
 Covered endpoints:
-  POST /api/video/edit/export          – colour grading, speed, text, BGM, batch subtitles
+  POST /api/video/edit/export          – colour grading, speed, text, maskColor,
+                                         timeline mask visibility, BGM, batch subtitles
   POST /api/video/asr                  – Gemini video transcription (mocked)
-  POST /api/video/overlay-image        – ffmpeg image overlay
-  POST /api/video/timeline/render      – segment clip & concat (sync + async)
+  POST /api/video/overlay-image        – ffmpeg image overlay (+ image_url via mocked fetch)
+  POST /api/video/timeline/render      – segment clip & concat (sync + async),
+                                         multi-source (source_videos + source_index)
   GET  /api/video/timeline/render/status
   POST /api/video/timeline/render/cancel
 """
@@ -214,6 +216,33 @@ class TestVideoEditExport:
         assert isinstance(d["mask_applied"], bool)
         if not DRAWTEXT_AVAILABLE:
             assert d.get("warning")  # must explain why mask was skipped
+
+    def test_mask_color_custom(self, client, vid_silent):
+        """Custom maskColor is accepted (hex); export succeeds."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Brand", "maskColor": "#ffcc00"},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_mask_track_hidden_skips_drawtext(self, client, vid_silent):
+        """When timeline mask track is not visible, maskText must not be burned in."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "Hidden overlay",
+                "timeline": {
+                    "trackState": {
+                        "mask": {"visible": False, "locked": False},
+                    },
+                },
+            },
+        })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["mask_applied"] is False
 
     def test_timeline_ranged_edits_combined(self, client, vid_audio, bgm):
         r = client.post(self.EP, json={
@@ -425,6 +454,41 @@ class TestTimelineRenderSync:
         d = r.get_json()
         assert r.status_code == 200
         assert d["segments_rendered"] == 1  # only video track segment
+
+    def test_multi_source_two_clips(self, client, vid_audio, vid_silent):
+        """source_videos + source_index: concat trims from two different data-URL clips."""
+        r = client.post(self.EP, json={
+            "source_videos": [vid_audio, vid_silent],
+            "duration_seconds": 3.0,
+            "tracks": [{
+                "label": "Video",
+                "track_type": "video",
+                "segments": [
+                    {"start_seconds": 0.0, "end_seconds": 1.0, "source_index": 0},
+                    {"start_seconds": 0.5, "end_seconds": 1.5, "source_index": 1},
+                ],
+            }],
+        })
+        d = r.get_json()
+        assert r.status_code == 200
+        assert d["ok"] is True
+        assert d["segments_rendered"] == 2
+        assert d.get("source_count") == 2
+        assert d["video_url"].endswith(".mp4")
+
+    def test_source_videos_without_primary_url(self, client, vid_audio):
+        """Only source_videos is required; source_video_url may be omitted."""
+        r = client.post(self.EP, json={
+            "source_videos": [vid_audio],
+            "duration_seconds": 3.0,
+            "tracks": [{
+                "label": "Video",
+                "track_type": "video",
+                "segments": [{"left": 0, "width": 100}],
+            }],
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +948,31 @@ class TestVideoOverlayImage:
             "video_url": vid_silent,
             "image_base64": tiny_png,
             "overlay_position": "invalid-position",
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_overlay_image_url_fetches_via_helper(self, client, vid_silent, tiny_png):
+        """image_url path uses fetch_image_as_base64 — mock network, no real HTTP."""
+        from unittest.mock import patch
+        with patch(
+            "shoplive.backend.common.helpers.fetch_image_as_base64",
+            return_value=(tiny_png, "image/png"),
+        ):
+            r = client.post(self.EP, json={
+                "video_url": vid_silent,
+                "image_url": "https://cdn.example.com/product.png",
+            })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["video_url"].endswith(".mp4")
+
+    def test_overlay_padding(self, client, vid_silent, tiny_png):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "image_base64": tiny_png,
+            "padding": 8,
         })
         assert r.status_code == 200
         assert r.get_json()["ok"] is True

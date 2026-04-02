@@ -20,6 +20,11 @@ def _normalize_list(raw, limit: int = 6) -> List[str]:
     return list(dict.fromkeys(vals))[:limit]
 
 
+def pick_core_selling_points(raw_points, limit: int = 2) -> List[str]:
+    vals = [str(x or "").strip() for x in (raw_points or []) if str(x or "").strip()]
+    return list(dict.fromkeys(vals))[:limit]
+
+
 def normalize_product_anchors(raw) -> Dict:
     payload = raw if isinstance(raw, dict) else {}
     return {
@@ -72,6 +77,67 @@ def render_product_anchor_text(anchors: Dict, *, lang: str = "zh") -> str:
             if lang == "zh" else f"Do not drift to: {', '.join(normalized['avoid_elements'])}"
         )
     return "；".join(lines) if lang == "zh" else ". ".join(lines)
+
+
+def render_compact_product_anchor_text(anchors: Dict, *, lang: str = "zh") -> str:
+    normalized = normalize_product_anchors(anchors)
+    detail_candidates = list(
+        dict.fromkeys((normalized["keep_elements"] or []) + (normalized["key_details"] or []))
+    )[:4]
+    lines = []
+    if normalized["category"]:
+        lines.append(
+            f"品类锁定：{normalized['category']}"
+            if lang == "zh" else f"Lock category: {normalized['category']}"
+        )
+    if normalized["colors"]:
+        lines.append(
+            f"颜色锁定：{'、'.join(normalized['colors'][:3])}"
+            if lang == "zh" else f"Lock colors: {', '.join(normalized['colors'][:3])}"
+        )
+    if normalized["materials"]:
+        lines.append(
+            f"材质锁定：{'、'.join(normalized['materials'][:3])}"
+            if lang == "zh" else f"Lock materials: {', '.join(normalized['materials'][:3])}"
+        )
+    if normalized["silhouette"]:
+        lines.append(
+            f"廓形锁定：{normalized['silhouette']}"
+            if lang == "zh" else f"Lock silhouette: {normalized['silhouette']}"
+        )
+    if detail_candidates:
+        lines.append(
+            f"保留细节：{'、'.join(detail_candidates)}"
+            if lang == "zh" else f"Keep details: {', '.join(detail_candidates)}"
+        )
+    if normalized["avoid_elements"]:
+        lines.append(
+            f"禁止偏移：{'、'.join(normalized['avoid_elements'][:3])}"
+            if lang == "zh" else f"Avoid drift: {', '.join(normalized['avoid_elements'][:3])}"
+        )
+    return "；".join(lines) if lang == "zh" else ". ".join(lines)
+
+
+def summarize_storyboard(script_text: str, *, max_chars: int = 320) -> str:
+    text = str(script_text or "").strip()
+    if not text:
+        return ""
+    kept = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        if not re.match(r"^(镜头[123]|shot\s*[123])", line, re.IGNORECASE):
+            continue
+        line = re.sub(r"商品锚点：.*", "", line).strip(" 。；")
+        if line:
+            kept.append(line)
+        if len(kept) >= 3:
+            break
+    summary = "；".join(kept)
+    if not summary:
+        summary = re.sub(r"\s+", " ", text.replace("\n", "；")).strip("； ")
+    return summary[:max_chars].rstrip("；，,。 ")
 
 
 def normalize_duration_seconds(raw) -> int:
@@ -267,7 +333,7 @@ def selfcheck_script(script_text: str) -> Dict:
 
 
 def build_shoplive_video_prompt_template(normalized: Dict, script_text: str) -> str:
-    points = [str(x or "").strip() for x in normalized.get("selling_points", []) if str(x or "").strip()]
+    points = pick_core_selling_points(normalized.get("selling_points", []), limit=2)
     points_text = "；".join(points) if points else "核心卖点"
     target_user = normalized.get("target_user", "") or "目标用户"
     region = normalized.get("sales_region", "") or "目标地区"
@@ -277,24 +343,22 @@ def build_shoplive_video_prompt_template(normalized: Dict, script_text: str) -> 
     total_duration = int(normalized.get("total_duration", duration) or duration)
     aspect = normalized.get("aspect_ratio", "16:9") or "16:9"
     need_model = "需要模特展示" if bool(normalized.get("need_model", True)) else "不需要模特展示"
-    script_hint = str(script_text or "").strip()[:600]
-    anchor_text = render_product_anchor_text(normalized.get("product_anchors", {}), lang="zh")
+    script_hint = summarize_storyboard(script_text)
+    anchor_text = render_compact_product_anchor_text(normalized.get("product_anchors", {}), lang="zh")
     brand_direction = normalized.get("brand_direction", "") or "默认品牌表达"
     return (
-        f"{aspect} 超高清商业画质，电影级影棚布光。"
-        f"商品：{product}。主卖点仅聚焦1-2个：{points_text}。"
-        f"目标人群：{target_user}；销售地区：{region}；风格模板：{template}；品牌方向：{brand_direction}；模特策略：{need_model}；单段时长：{duration}秒。"
-        + (f" 目标总时长：{total_duration}秒（通过8秒分段延展）。" if total_duration in {16, 24} else "")
-        + (f" 商品锚点：{anchor_text}。" if anchor_text else "")
-        + "镜头组织遵循动态节奏，优先使用 1 个主框架 + 1 个辅助框架（4.1~4.6），"
-        + "把卖点转化为可执行镜头动作、光影、环境与情绪锚点，不写空话。必须严格保持商品颜色、材质、轮廓与关键结构一致，禁止漂移到其他品类。"
-        + (f" 参考分镜脚本：{script_hint}。" if script_hint else "")
+        f"{aspect} 画幅，{duration}秒电商短片。商品：{product}。核心卖点聚焦：{points_text}。"
+        f"风格：{template}；品牌调性：{brand_direction}；人群与区域：{target_user}（{region}）；{need_model}。"
+        + (f" 目标总时长：{total_duration}秒，按8秒分段连续衔接，前后段镜头不重复。" if total_duration in {16, 24} else "")
+        + (f" 一致性约束：{anchor_text}。" if anchor_text else "")
+        + (f" 镜头规划：{script_hint}。" if script_hint else "")
+        + " 要求：镜头真实可拍，动作与转场自然，严格保持商品颜色、材质、轮廓与关键结构，不漂移到其他品类。"
         + " 合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
     )
 
 
 def build_shoplive_agent_enhance_template(normalized: Dict, raw_prompt: str = "", script_text: str = "") -> str:
-    points = normalized.get("selling_points", []) or []
+    points = pick_core_selling_points(normalized.get("selling_points", []), limit=2)
     points_text = "；".join(points) if points else "突出核心卖点"
     product = normalized.get("product_name", "") or "该商品"
     target_user = normalized.get("target_user", "") or "目标用户"
@@ -303,9 +367,9 @@ def build_shoplive_agent_enhance_template(normalized: Dict, raw_prompt: str = ""
     duration = int(normalized.get("duration", DEFAULT_VIDEO_DURATION) or DEFAULT_VIDEO_DURATION)
     total_duration = int(normalized.get("total_duration", duration) or duration)
     aspect = normalized.get("aspect_ratio", "16:9") or "16:9"
-    story_hint = str(script_text or "").strip()[:500]
+    story_hint = summarize_storyboard(script_text, max_chars=260)
     base_prompt = str(raw_prompt or "").strip()
-    anchor_text = render_product_anchor_text(normalized.get("product_anchors", {}), lang="zh")
+    anchor_text = render_compact_product_anchor_text(normalized.get("product_anchors", {}), lang="zh")
     brand_direction = normalized.get("brand_direction", "") or "默认品牌表达"
     return (
         "你是一位电商视频提示词优化专家。请把用户原始提示词改写为一条可直接用于视频生成的最终提示词。\n"
