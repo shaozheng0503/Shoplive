@@ -654,6 +654,213 @@ class VideoTimelineRenderRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Jimeng (即梦) Video / Image Generation
+# ---------------------------------------------------------------------------
+
+class JimengVideoRequest(BaseModel):
+    """Generate a video using Jimeng (即梦) API — ByteDance proxy at http://43.163.110.48.
+
+    Supports text-to-video, image-to-video, and first-last-frame video.
+    Credit cost: 3.5-pro = 3 credits/call, 3.0 = 2 credits/call.
+
+    Example:
+        {
+            "prompt": "一只可爱的小猫在草地上玩耍",
+            "model": "3.5-pro",
+            "ratio": "16:9",
+            "duration": 5
+        }
+    """
+    prompt: str = Field(
+        description="视频描述提示词。Example: '一只可爱的小猫在草地上玩耍'",
+    )
+    model: Literal["3.5-pro", "3.0"] = Field(
+        default="3.5-pro",
+        description="模型版本。3.5-pro (3积分/次，最佳质量), 3.0 (2积分/次，标准质量).",
+    )
+    ratio: str = Field(
+        default="16:9",
+        description="视频比例。支持 '1:1', '9:16', '16:9'.",
+    )
+    duration: Literal[5, 10] = Field(
+        default=5,
+        description="视频时长（秒），支持 5 或 10。",
+    )
+    resolution: str = Field(
+        default="720p",
+        description="分辨率，目前仅支持 720p。",
+    )
+    image_url: Optional[str] = Field(
+        default=None,
+        description="参考图片 URL（图生视频首帧）。图片需小于 2MB。",
+    )
+    image_base64: Optional[str] = Field(
+        default=None,
+        description="参考图片 base64（图生视频首帧，带或不带 data: 前缀）。",
+    )
+    last_frame_url: Optional[str] = Field(
+        default=None,
+        description="末帧图片 URL（首尾帧视频）。需同时提供 image_url/image_base64。",
+    )
+    last_frame_base64: Optional[str] = Field(
+        default=None,
+        description="末帧图片 base64（首尾帧视频）。",
+    )
+    proxy: str = Field(
+        default="",
+        description="HTTP 代理 URL（下载外网视频文件时使用）。Example: 'http://127.0.0.1:7890'",
+    )
+
+
+class JimengImageRequest(BaseModel):
+    """Generate images using Jimeng (即梦) image API.
+
+    Credit cost: 1 credit/call (jimeng-4.x, 5.0), 2 credits (nanobanana, 4K +2).
+
+    Example:
+        {
+            "prompt": "一只可爱的小猫在草地上玩耍",
+            "model": "jimeng-5.0",
+            "ratio": "16:9"
+        }
+    """
+    prompt: str = Field(
+        default="",
+        description="图片描述提示词。",
+    )
+    model: str = Field(
+        default="jimeng-5.0",
+        description="模型名称。支持: jimeng-5.0, jimeng-4.6, jimeng-4.5, jimeng-4.1, jimeng-4.0, nanobanana.",
+    )
+    ratio: str = Field(
+        default="1:1",
+        description="图片比例。支持 '1:1', '9:16', '16:9'.",
+    )
+    resolution: str = Field(
+        default="2k",
+        description="分辨率。2k (默认) 或 4k (+2积分)。nanobanana 固定 1k。",
+    )
+    image_url: Optional[str] = Field(
+        default=None,
+        description="参考图片 URL（图生图）。",
+    )
+    image_base64: Optional[str] = Field(
+        default=None,
+        description="参考图片 base64（图生图）。",
+    )
+    proxy: str = Field(
+        default="",
+        description="HTTP 代理 URL。",
+    )
+
+
+# ---------------------------------------------------------------------------
+# LTX-Video Generation
+# ---------------------------------------------------------------------------
+
+class LtxvGenerateRequest(BaseModel):
+    """Generate a video using LTX-Video 2.3 via Lightricks API (api.ltx.video).
+
+    Supports text-to-video and image-to-video (provide image_url/image_base64).
+    The API is synchronous — returns the MP4 file directly.
+
+    Duration limits:
+      ltx-2-3-fast + 1080p  → up to 20s
+      all other models/res  → up to 10s
+
+    Example:
+        {
+            "prompt": "A woman walks gracefully in a sunlit forest, slow motion",
+            "duration": 5,
+            "resolution": "1920x1080"
+        }
+    """
+    prompt: str = Field(
+        description="Detailed video prompt: subject, action, lighting, style. "
+                    "Example: 'Close-up of a luxury watch rotating on dark velvet, studio lighting, macro'.",
+    )
+    model: str = Field(
+        default="ltx-2-3-pro",
+        description="Model name. Options: ltx-2-3-pro (best quality, ≤10s), "
+                    "ltx-2-3-fast (faster, up to 20s at 1080p), "
+                    "ltx-2-pro, ltx-2-fast.",
+    )
+    duration: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Duration in seconds. Max 20s for ltx-2-3-fast at 1080p; max 10s for all other models/resolutions.",
+    )
+    resolution: str = Field(
+        default="1920x1080",
+        description="Output resolution. Landscape: 1920x1080, 2560x1440, 3840x2160. "
+                    "Portrait (ltx-2.3 only): 1080x1920, 1440x2560, 2160x3840.",
+    )
+    fps: int = Field(
+        default=24,
+        description="Frame rate. 24 (default), 25, or 50 (smooth slow-motion, ltx-2.3 only).",
+    )
+    generate_audio: bool = Field(
+        default=True,
+        description="Whether to auto-generate ambient audio. Default true.",
+    )
+    camera_motion: Optional[str] = Field(
+        default=None,
+        description="Camera movement preset. Options: dolly_in, dolly_out, dolly_left, dolly_right, "
+                    "jib_up, jib_down, static, focus_shift. Leave empty for auto.",
+    )
+    image_url: Optional[str] = Field(
+        default=None,
+        description="First-frame image URL for image-to-video mode.",
+    )
+    image_base64: Optional[str] = Field(
+        default=None,
+        description="First-frame image as base64 (with or without data: prefix) for image-to-video.",
+    )
+    last_frame_url: Optional[str] = Field(
+        default=None,
+        description="Last-frame image URL for first-to-last-frame control. ltx-2.3 models only.",
+    )
+    last_frame_base64: Optional[str] = Field(
+        default=None,
+        description="Last-frame image as base64. ltx-2.3 models only.",
+    )
+
+
+class LtxvExtendRequest(BaseModel):
+    """Extend an existing LTX-Video video (pro models only).
+
+    Example:
+        {
+            "video_url": "http://127.0.0.1:8000/api/ltxv/download/ltxv_xxx.mp4",
+            "duration": 5,
+            "prompt": "Continue the scene with a slow pan right"
+        }
+    """
+    video_url: str = Field(
+        description="URL of the source video to extend. Must be publicly accessible or a local /api/ltxv/download/* URL.",
+    )
+    duration: int = Field(
+        default=5,
+        ge=2,
+        le=20,
+        description="Seconds to extend by (2–20).",
+    )
+    prompt: Optional[str] = Field(
+        default=None,
+        description="Optional description of the extended content.",
+    )
+    mode: Literal["end", "start"] = Field(
+        default="end",
+        description="Append to the end ('end') or prepend to the start ('start').",
+    )
+    model: str = Field(
+        default="ltx-2-3-pro",
+        description="Pro model for extend. Options: ltx-2-3-pro, ltx-2-pro.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Image Generation
 # ---------------------------------------------------------------------------
 
@@ -731,4 +938,8 @@ TOOL_SCHEMAS: Dict[str, type] = {
     "export_edited_video": VideoEditExportRequest,
     "render_video_timeline": VideoTimelineRenderRequest,
     "generate_product_image": ShopliveImageGenerateRequest,
+    "generate_video_ltxv": LtxvGenerateRequest,
+    "extend_video_ltxv": LtxvExtendRequest,
+    "generate_video_jimeng": JimengVideoRequest,
+    "generate_image_jimeng": JimengImageRequest,
 }

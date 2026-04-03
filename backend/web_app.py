@@ -68,6 +68,8 @@ from shoplive.backend.api.veo_api import register_veo_routes
 from shoplive.backend.api.media_api import register_media_routes
 from shoplive.backend.api.video_edit_api import register_video_edit_routes
 from shoplive.backend.api.tabcode_api import register_tabcode_routes
+from shoplive.backend.api.ltxv_api import register_ltxv_routes
+from shoplive.backend.api.jimeng_api import register_jimeng_routes
 from shoplive.backend.tool_registry import build_tool_manifest, get_tools_by_skill, get_tools_by_tags
 from shoplive.backend.skills import get_skill_by_id, list_skills_summary
 from shoplive.backend.mcp_adapter import (
@@ -237,6 +239,18 @@ register_video_edit_routes(
     video_edit_export_dir=VIDEO_EDIT_EXPORT_DIR,
 )
 register_tabcode_routes(app)
+register_jimeng_routes(
+    app,
+    json_error=json_error,
+    build_proxies=build_proxies,
+)
+register_ltxv_routes(
+    app,
+    json_error=json_error,
+    build_proxies=build_proxies,
+    fetch_image_as_base64=fetch_image_as_base64,
+    video_export_dir=VIDEO_EDIT_EXPORT_DIR,
+)
 
 # ---------------------------------------------------------------------------
 # Tool Manifest API (Article: "LLM 友好的接口设计")

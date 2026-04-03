@@ -354,6 +354,10 @@ class TestToolSchemasRegistry:
             "render_video_timeline",
             "generate_product_image",
             "agent_run",
+            "generate_video_ltxv",
+            "extend_video_ltxv",
+            "generate_video_jimeng",
+            "generate_image_jimeng",
         }
         assert expected == set(TOOL_SCHEMAS.keys())
 

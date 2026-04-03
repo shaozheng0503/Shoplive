@@ -396,6 +396,61 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
         ],
     },
 
+    # === Skill: LTX-Video Generation ===
+    {
+        "name": "generate_video_ltxv",
+        "display_name": "Generate Video (LTX-Video)",
+        "description": (
+            "Generate a video using Lightricks LTX-Video (ltxv) model. "
+            "Supports text-to-video and image-to-video (provide image_url or image_base64). "
+            "Returns a video URL when done. Much faster than Veo for short clips. "
+            "Use when Veo is unavailable or for rapid prototyping."
+        ),
+        "endpoint": "POST /api/ltxv/generate",
+        "tags": ["video", "generation", "ltxv", "lightricks"],
+        "skill": "video_generation",
+        "parameters": {
+            "prompt": {"type": "string", "required": True, "description": "Detailed video description."},
+            "duration": {"type": "integer", "description": "Duration in seconds (1–20). Max 20 for ltx-2-3-fast at 1080p; 10 for others."},
+            "resolution": {"type": "string", "description": "Resolution e.g. 1920x1080, 1080x1920 (portrait). Default 1920x1080."},
+            "model": {"type": "string", "description": "ltx-2-3-pro (default), ltx-2-3-fast, ltx-2-pro, ltx-2-fast."},
+            "camera_motion": {"type": "string", "description": "dolly_in/out, dolly_left/right, jib_up/down, static, focus_shift."},
+            "image_url": {"type": "string", "description": "First-frame image URL for image-to-video."},
+            "last_frame_url": {"type": "string", "description": "Last-frame image URL (ltx-2.3 only)."},
+            "generate_audio": {"type": "boolean", "description": "Auto-generate ambient audio. Default true."},
+        },
+        "output_summary": {
+            "status": "completed",
+            "video_url": "Local /api/ltxv/download/<file> URL",
+            "resolution": "Actual resolution used",
+            "duration": "Actual duration in seconds",
+        },
+        "next_tools": [
+            "After generation → pass video_url to export_edited_video for color/BGM post-processing",
+            "To make longer video → call extend_video_ltxv with the video_url",
+        ],
+    },
+    {
+        "name": "extend_video_ltxv",
+        "display_name": "Extend Video (LTX-Video)",
+        "description": (
+            "Append or prepend seconds to an existing LTX-Video generated video. "
+            "Requires a pro model (ltx-2-3-pro or ltx-2-pro)."
+        ),
+        "endpoint": "POST /api/ltxv/extend",
+        "tags": ["video", "extend", "ltxv"],
+        "skill": "video_generation",
+        "parameters": {
+            "video_url": {"type": "string", "required": True, "description": "URL of the source video."},
+            "duration": {"type": "integer", "description": "Seconds to extend by (2–20). Default 5."},
+            "prompt": {"type": "string", "description": "Optional description of the extended content."},
+            "mode": {"type": "string", "description": "'end' (default) or 'start'."},
+        },
+        "output_summary": {
+            "status": "completed",
+            "video_url": "Local /api/ltxv/download/<file> URL for the extended video",
+        },
+    },
     # === Skill: Image Generation ===
     {
         "name": "generate_product_image",
@@ -452,7 +507,7 @@ SKILL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             "run_video_workflow(build_export_prompt) → generate_video or chain_video_segments → "
             "check_video_status."
         ),
-        "tools": ["run_video_workflow", "generate_video", "chain_video_segments", "check_video_status", "extend_video"],
+        "tools": ["run_video_workflow", "generate_video", "chain_video_segments", "check_video_status", "extend_video", "generate_video_ltxv"],
         "typical_flow": [
             "1. run_video_workflow(action='validate') → check brief completeness",
             "2. run_video_workflow(action='generate_script') → create storyboard script",

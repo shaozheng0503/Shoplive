@@ -19,3 +19,4 @@ __pycache__/
 # Runtime-generated video exports
 video_edits/
 shoplive_video_edits/
+video_cases/

@@ -28,6 +28,105 @@
         </div>
       </header>
 
+      <!-- ===== LTX-Video Section ===== -->
+      <section class="ltxv-shell lab-shell">
+        <aside class="panel ltxv-form-panel">
+          <div class="ltxv-header">
+            <div class="ltxv-badge">AI VIDEO</div>
+            <h2 class="ltxv-title">LTX-2.3 视频生成</h2>
+            <p class="muted">文字 / 图片 → 高质量视频，最长 20 秒</p>
+          </div>
+
+          <label>视频描述</label>
+          <textarea id="ltxvPrompt" rows="3" placeholder="描述内容、场景、光线、镜头动作。例：一只手缓缓拿起精品手表，深色绒布背景，微距特写，工作室灯光。"></textarea>
+
+          <label>首帧图片（可选，用于图生视频）</label>
+          <div class="ltxv-upload-row">
+            <input id="ltxvImageInput" type="file" accept="image/*" style="display:none" />
+            <button type="button" id="ltxvImagePickBtn" class="ghost-btn">选择图片</button>
+            <span id="ltxvImageName" class="muted" style="font-size:12px">未选择</span>
+            <button type="button" id="ltxvImageClearBtn" class="ghost-btn" style="display:none">✕</button>
+          </div>
+
+          <label>模型</label>
+          <div class="ltxv-model-row">
+            <button type="button" class="ltxv-opt-btn active" data-ltxv-model="ltx-2-3-pro">2.3 Pro<span class="ltxv-opt-sub">最佳质量 ≤10s</span></button>
+            <button type="button" class="ltxv-opt-btn" data-ltxv-model="ltx-2-3-fast">2.3 Fast<span class="ltxv-opt-sub">速度优先 ≤20s</span></button>
+          </div>
+
+          <label>画幅方向</label>
+          <div class="ltxv-ratio-row">
+            <button type="button" class="ltxv-opt-btn active" data-ltxv-ratio="16:9" data-ltxv-res="1920x1080">
+              <span class="ltxv-ratio-icon ltxv-landscape">▬</span> 横版 16:9
+            </button>
+            <button type="button" class="ltxv-opt-btn" data-ltxv-ratio="9:16" data-ltxv-res="1080x1920">
+              <span class="ltxv-ratio-icon ltxv-portrait">▮</span> 竖版 9:16
+            </button>
+          </div>
+
+          <div class="ltxv-row-2col">
+            <div>
+              <label>时长 <span id="ltxvDurationLabel" class="ltxv-val-badge">5s</span></label>
+              <input id="ltxvDuration" type="range" min="1" max="10" value="5" step="1" class="ltxv-slider" />
+              <div class="ltxv-slider-limits"><span>1s</span><span id="ltxvDurationMax">10s</span></div>
+            </div>
+            <div>
+              <label>帧率</label>
+              <div class="ltxv-fps-row">
+                <button type="button" class="ltxv-opt-btn active" data-ltxv-fps="24">24fps</button>
+                <button type="button" class="ltxv-opt-btn" data-ltxv-fps="50">50fps</button>
+              </div>
+            </div>
+          </div>
+
+          <label>镜头运动（可选）</label>
+          <select id="ltxvCamera" class="ltxv-select">
+            <option value="">自动</option>
+            <option value="dolly_in">推镜 dolly in</option>
+            <option value="dolly_out">拉镜 dolly out</option>
+            <option value="dolly_left">左移 dolly left</option>
+            <option value="dolly_right">右移 dolly right</option>
+            <option value="jib_up">上升 jib up</option>
+            <option value="jib_down">下降 jib down</option>
+            <option value="static">固定机位 static</option>
+            <option value="focus_shift">焦点转移 focus shift</option>
+          </select>
+
+          <label class="ltxv-audio-label">
+            <input id="ltxvAudio" type="checkbox" checked />
+            自动生成环境音效
+          </label>
+
+          <button id="ltxvGenerateBtn" class="primary-btn large">生成视频</button>
+        </aside>
+
+        <section class="panel ltxv-result-panel">
+          <div class="ltxv-result-header">
+            <h3>生成结果</h3>
+            <span id="ltxvResultMeta" class="muted"></span>
+          </div>
+
+          <div class="progress-wrap" id="ltxvProgressWrap" style="display:none">
+            <div id="ltxvProgressBar" class="progress-bar ltxv-progress-anim"></div>
+          </div>
+          <p id="ltxvStatusText" class="muted ltxv-status">等待生成…</p>
+
+          <div id="ltxvResultArea" class="ltxv-result-area">
+            <div class="ltxv-placeholder">
+              <div class="ltxv-placeholder-icon">▶</div>
+              <p class="muted">生成后视频将在此处播放</p>
+            </div>
+          </div>
+
+          <div id="ltxvActions" class="ltxv-actions" style="display:none">
+            <a id="ltxvDownloadBtn" class="ghost-btn" download>下载视频</a>
+            <button id="ltxvExtendBtn" class="ghost-btn">延长视频 +5s</button>
+            <button id="ltxvToStudioBtn" class="ghost-btn">发送到编辑台</button>
+          </div>
+        </section>
+      </section>
+      <!-- ===== /LTX-Video Section ===== -->
+
       <section class="lab-shell">
         <aside class="panel form-panel">
           <div class="stepper">
@@ -91,5 +190,6 @@
     </main>
 
     <script type="module" src="/scripts/entry/image-lab.main.js"></script>
+    <script type="module" src="/scripts/modules/ltxv/index.js"></script>
   </body>
 </html>
