@@ -1,6 +1,7 @@
 import base64
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import time
@@ -1855,3 +1856,310 @@ def register_veo_routes(
         """Generate a 12s video: LLM splits prompt → 2×6s parallel generation → ffmpeg concat.
         Designed for models like Grok that support 6s per generation."""
         return _api_generate_split_video(segment_seconds=6)
+
+    # ------------------------------------------------------------------
+    # POST /api/veo/local-chain
+    # 本地续写链：segment1 → 提取末帧 → segment2(首帧=末帧) → crossfade 拼接
+    # 不需要 GCS，视觉连续性远优于并行硬切
+    # ------------------------------------------------------------------
+    def _poll_inline_video(
+        *,
+        project_id: str,
+        model: str,
+        token: str,
+        proxy: str,
+        operation_name: str,
+        poll_interval_seconds: int = 8,
+        max_wait_seconds: int = 720,
+        initial_wait_seconds: int = 30,
+    ) -> Tuple[bytes, Dict]:
+        """Poll until video is ready, return (mp4_bytes, raw_data).
+
+        Works for inline-video responses (no storage_uri needed).
+        """
+        started = time.time()
+        if initial_wait_seconds > 0:
+            time.sleep(min(initial_wait_seconds, max_wait_seconds))
+        while time.time() - started <= max_wait_seconds:
+            _, _, op_data = _call_fetch_predict_operation(
+                project_id=project_id, model=model, token=token,
+                proxy=proxy, operation_name=operation_name,
+            )
+            # Check inline videos first (returns list of dicts with "base64" key)
+            inline = extract_inline_videos(op_data)
+            if inline:
+                raw = base64.b64decode(inline[0]["base64"])
+                return raw, op_data
+            # Check GCS URIs
+            uris = _extract_video_uris(op_data)
+            if uris:
+                # Download from GCS
+                tmp = Path(tempfile.mktemp(suffix=".mp4"))
+                try:
+                    download_gcs_blob_to_file(uris[0], tmp, "", project_id)
+                    return tmp.read_bytes(), op_data
+                finally:
+                    tmp.unlink(missing_ok=True)
+            # Check error
+            err = (op_data.get("error", {}).get("message")
+                   or op_data.get("response", {}).get("error", {}).get("message") or "")
+            if op_data.get("done") and err:
+                raise RuntimeError(f"Veo generation failed: {err}")
+            time.sleep(poll_interval_seconds)
+        raise TimeoutError(f"Veo poll timeout (>{max_wait_seconds}s)")
+
+    def _extract_last_frame(mp4_bytes: bytes) -> Tuple[str, str]:
+        """Extract last frame from MP4 bytes, return (base64, mime_type)."""
+        tmp_video = Path(tempfile.mktemp(suffix=".mp4"))
+        tmp_frame = Path(tempfile.mktemp(suffix=".png"))
+        try:
+            tmp_video.write_bytes(mp4_bytes)
+            # Get duration
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(tmp_video)],
+                capture_output=True, text=True, timeout=10,
+            )
+            dur = float(probe.stdout.strip() or "0")
+            if dur <= 0:
+                raise ValueError("Cannot probe video duration")
+            # Seek to last frame
+            seek_to = max(0, dur - 0.05)
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", f"{seek_to:.3f}", "-i", str(tmp_video),
+                 "-frames:v", "1", "-q:v", "2", str(tmp_frame)],
+                capture_output=True, timeout=15, check=True,
+            )
+            frame_bytes = tmp_frame.read_bytes()
+            b64 = base64.b64encode(frame_bytes).decode()
+            return b64, "image/png"
+        finally:
+            tmp_video.unlink(missing_ok=True)
+            tmp_frame.unlink(missing_ok=True)
+
+    def _crossfade_concat(seg1_bytes: bytes, seg2_bytes: bytes, crossfade_dur: float = 0.5) -> bytes:
+        """Concatenate two MP4 segments with crossfade transition."""
+        tmpdir = Path(tempfile.mkdtemp(prefix="veo_localchain_"))
+        try:
+            p1 = tmpdir / "seg1.mp4"
+            p2 = tmpdir / "seg2.mp4"
+            out = tmpdir / "final.mp4"
+            p1.write_bytes(seg1_bytes)
+            p2.write_bytes(seg2_bytes)
+
+            # Probe seg1 duration for xfade offset
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(p1)],
+                capture_output=True, text=True, timeout=10,
+            )
+            dur1 = float(probe.stdout.strip() or "8")
+            offset = max(0, dur1 - crossfade_dur)
+
+            # xfade video + acrossfade audio
+            cmd = [
+                "ffmpeg", "-y", "-i", str(p1), "-i", str(p2),
+                "-filter_complex",
+                f"[0:v][1:v]xfade=transition=fade:duration={crossfade_dur}:offset={offset}[vout];"
+                f"[0:a][1:a]acrossfade=d={crossfade_dur}[aout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                # Fallback: concat without audio crossfade (some Veo videos have no audio)
+                cmd_fallback = [
+                    "ffmpeg", "-y", "-i", str(p1), "-i", str(p2),
+                    "-filter_complex",
+                    f"[0:v][1:v]xfade=transition=fade:duration={crossfade_dur}:offset={offset}[vout]",
+                    "-map", "[vout]",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                    "-an",
+                    "-movflags", "+faststart",
+                    str(out),
+                ]
+                subprocess.run(cmd_fallback, capture_output=True, timeout=120, check=True)
+
+            return out.read_bytes()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # Continuation prompt prefix — instructs the model to seamlessly continue
+    # from the provided first frame, preserving visual identity.
+    _CONTINUATION_PREFIX = (
+        "Seamlessly continue from the provided first frame. "
+        "Maintain identical lighting, color palette, camera style, "
+        "and subject appearance throughout. "
+    )
+
+    @app.post("/api/veo/local-chain")
+    def api_veo_local_chain():
+        """Generate 16/24s video locally: seg1 → extract last frame → seg2(image mode) → crossfade.
+
+        No GCS needed. Visual continuity via last-frame-as-first-frame.
+
+        Optimizations over generate-16s:
+        1. Continuation prompt: seg2+ gets explicit "continue from first frame" instruction
+        2. Image mode: seg2 uses last frame of seg1 as first frame (not blind parallel)
+        3. Crossfade: smooth fade transition instead of hard cut
+        4. Fast polling: reduced initial wait for fast models
+
+        Required: prompt
+        Optional: model, aspect_ratio, target_total_seconds (16|24), crossfade_seconds
+        """
+        _t0 = time.monotonic()
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, model = parse_common_payload(payload)
+            prompt = (payload.get("prompt") or "").strip()
+            if not prompt:
+                return json_error("prompt 不能为空")
+            if not model:
+                model = "veo-3.1-fast-generate-001"
+
+            aspect_ratio = (payload.get("aspect_ratio") or "9:16").strip()
+            target_total = int(payload.get("target_total_seconds", 16))
+            crossfade_dur = float(payload.get("crossfade_seconds", 0.5))
+            num_segments = max(2, target_total // 8)
+
+            # Adaptive polling: fast models need less initial wait
+            is_fast = "fast" in model.lower()
+            initial_wait = 15 if is_fast else 25
+            poll_interval = 6
+
+            # Split prompt for segments
+            try:
+                parts = split_prompt_for_16s(prompt)
+                prompt_a = parts.get("part1", prompt)
+                prompt_b_raw = parts.get("part2", prompt)
+            except Exception:
+                prompt_a = prompt
+                prompt_b_raw = prompt
+
+            token = get_access_token(key_file, proxy)
+            base_params = {"sampleCount": 1, "durationSeconds": 8, "aspectRatio": aspect_ratio}
+
+            segments_bytes: list = []
+            seg_times: list = []
+
+            # === Segment 1: text-to-video ===
+            seg1_t0 = time.time()
+            body1 = {
+                "instances": [{"prompt": prompt_a}],
+                "parameters": dict(base_params),
+            }
+            sc, ok, data1 = _call_predict_long_running(
+                project_id=project_id, model=model, token=token, proxy=proxy, body=body1,
+            )
+            if not ok:
+                return json_error(f"Segment 1 submit failed (status={sc}): {data1}", 502)
+            op1 = data1.get("name", "")
+
+            seg1_bytes, _ = _poll_inline_video(
+                project_id=project_id, model=model, token=token, proxy=proxy,
+                operation_name=op1, initial_wait_seconds=initial_wait,
+                poll_interval_seconds=poll_interval,
+            )
+            segments_bytes.append(seg1_bytes)
+            seg_times.append(round(time.time() - seg1_t0, 1))
+
+            # === Segment 2+: image-to-video (last frame continuation) ===
+            for seg_idx in range(1, num_segments):
+                seg_t0 = time.time()
+                last_frame_b64, last_frame_mime = _extract_last_frame(segments_bytes[-1])
+
+                # Build continuation prompt: prefix + segment-specific content
+                if seg_idx == 1:
+                    seg_prompt = _CONTINUATION_PREFIX + prompt_b_raw
+                else:
+                    seg_prompt = (
+                        _CONTINUATION_PREFIX
+                        + f"This is part {seg_idx + 1} of the scene. "
+                        + prompt_b_raw
+                    )
+
+                instance = {
+                    "prompt": seg_prompt,
+                    "image": {
+                        "bytesBase64Encoded": last_frame_b64,
+                        "mimeType": last_frame_mime,
+                    },
+                }
+                body_n = {"instances": [instance], "parameters": dict(base_params)}
+                sc, ok, data_n = _call_predict_long_running(
+                    project_id=project_id, model=model, token=token, proxy=proxy, body=body_n,
+                )
+                if not ok:
+                    return json_error(f"Segment {seg_idx + 1} submit failed (status={sc}): {data_n}", 502)
+                op_n = data_n.get("name", "")
+
+                seg_bytes, _ = _poll_inline_video(
+                    project_id=project_id, model=model, token=token, proxy=proxy,
+                    operation_name=op_n, initial_wait_seconds=initial_wait,
+                    poll_interval_seconds=poll_interval,
+                )
+                segments_bytes.append(seg_bytes)
+                seg_times.append(round(time.time() - seg_t0, 1))
+
+            # === Crossfade concat ===
+            if len(segments_bytes) == 2:
+                final_bytes = _crossfade_concat(segments_bytes[0], segments_bytes[1], crossfade_dur)
+            else:
+                # Multi-segment: sequential crossfade
+                acc = segments_bytes[0]
+                for i in range(1, len(segments_bytes)):
+                    acc = _crossfade_concat(acc, segments_bytes[i], crossfade_dur)
+                final_bytes = acc
+
+            # Save to export dir
+            out_name = f"veo_chain_{uuid.uuid4().hex[:10]}.mp4"
+            out_path = video_export_dir / out_name
+            out_path.write_bytes(final_bytes)
+
+            total_dur = round(time.monotonic() - _t0, 1)
+            audit_log.record(
+                tool="generate_video",
+                action="veo_local_chain",
+                input_summary={
+                    "model": model,
+                    "segments": num_segments,
+                    "target_total_seconds": target_total,
+                    "prompt_length": len(prompt),
+                },
+                output_summary={
+                    "ok": True,
+                    "file": out_name,
+                    "file_size_kb": len(final_bytes) // 1024,
+                    "segment_times": seg_times,
+                },
+                status="success",
+                duration_ms=int(total_dur * 1000),
+            )
+
+            return jsonify({
+                "ok": True,
+                "status": "completed",
+                "video_url": f"/video_edits/{out_name}",
+                "filename": out_name,
+                "model": model,
+                "segments": num_segments,
+                "segment_times_seconds": seg_times,
+                "crossfade_seconds": crossfade_dur,
+                "total_elapsed_seconds": total_dur,
+                "file_size_kb": len(final_bytes) // 1024,
+                "method": "local-chain: seg1(text) → last_frame → seg2(image) → crossfade",
+            })
+        except TimeoutError as e:
+            return json_error(str(e), 504, "Increase max_wait_seconds or try a shorter prompt.")
+        except Exception as e:
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="generate_video", action="veo_local_chain",
+                input_summary={"prompt_length": len(str(payload.get("prompt") or ""))},
+                output_summary={"error": str(e)[:120]},
+                status="error", error_code="VEO_LOCAL_CHAIN_FAILED", duration_ms=_dur_ms,
+            )
+            return json_error(f"Local chain failed: {e}", 500)
