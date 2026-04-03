@@ -258,8 +258,14 @@ export function setupSurfaceFullscreen(surface) {
   btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>`;
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    const req = surface.requestFullscreen || surface.webkitRequestFullscreen;
-    if (req) req.call(surface).catch(err => console.debug("[shoplive]", err));
+    const video = surface.querySelector("video");
+    const reqVideo = video?.requestFullscreen || video?.webkitRequestFullscreen;
+    if (reqVideo) {
+      reqVideo.call(video).catch(err => console.debug("[shoplive]", err));
+      return;
+    }
+    const reqSurface = surface.requestFullscreen || surface.webkitRequestFullscreen;
+    if (reqSurface) reqSurface.call(surface).catch(err => console.debug("[shoplive]", err));
   });
   surface.appendChild(btn);
   // Global fullscreenchange in index.js handles inline-style reset and applyVideoEditsToPreview.
@@ -331,6 +337,17 @@ const MASK_FONTS = {
   impact:  '"Impact","Arial Black",sans-serif',
   rounded: '"PingFang SC","Hiragino Maru Gothic Pro",sans-serif',
   mono:    '"SF Mono","Consolas","Courier New",monospace',
+};
+
+const BGM_PRESETS = {
+  elegant:   "/assets/audio/bgm-elegant.mp3",
+  daily:     "/assets/audio/bgm-daily.mp3",
+  piano:     "/assets/audio/bgm-piano.mp3",
+  energetic: "/assets/audio/bgm-energetic.mp3",
+  happy:     "/assets/audio/bgm-happy.mp3",
+  calm:      "/assets/audio/bgm-calm.mp3",
+  trendy:    "/assets/audio/bgm-trendy.mp3",
+  romantic:  "/assets/audio/bgm-romantic.mp3",
 };
 
 export function applyVideoEditsToPreview() {
@@ -418,8 +435,10 @@ export function applyVideoEditsToPreview() {
       bgmAudio.hidden = true;
       surface.appendChild(bgmAudio);
     }
-    const shouldUseLocalBgm = Boolean(fx.bgmExtract && fx.localBgmUrl && bgmActive);
-    if (!shouldUseLocalBgm) {
+    const presetBgmUrl = BGM_PRESETS[fx.bgmMood] || "";
+    const activeBgmUrl = fx.localBgmUrl || presetBgmUrl;
+    const shouldUseBgm = Boolean(fx.bgmExtract && activeBgmUrl && bgmActive);
+    if (!shouldUseBgm) {
       video.muted = false;
       bgmAudio.pause();
       if (bgmAudio.getAttribute("src")) {
@@ -430,8 +449,8 @@ export function applyVideoEditsToPreview() {
       }
       return;
     }
-    if (bgmAudio.getAttribute("src") !== fx.localBgmUrl) {
-      bgmAudio.setAttribute("src", fx.localBgmUrl);
+    if (bgmAudio.getAttribute("src") !== activeBgmUrl) {
+      bgmAudio.setAttribute("src", activeBgmUrl);
       try {
         bgmAudio.load();
       } catch (_e) {}
@@ -573,6 +592,10 @@ export function renderVideoEditor() {
               <option value="daily">${t("bgmMoodDaily")}</option>
               <option value="trendy">${t("bgmMoodTrendy")}</option>
               <option value="piano">${t("bgmMoodPiano")}</option>
+              <option value="energetic">${t("bgmMoodEnergetic")}</option>
+              <option value="happy">${t("bgmMoodHappy")}</option>
+              <option value="calm">${t("bgmMoodCalm")}</option>
+              <option value="romantic">${t("bgmMoodRomantic")}</option>
             </select></label>
             <label>${t("bgmReplace")}<select id="bgmReplaceModeSelect">
               <option value="auto">${t("bgmReplaceAuto")}</option>
@@ -594,7 +617,7 @@ export function renderVideoEditor() {
           `;
   const maxSec = getVideoDurationSec();
   const videoBlock = state.lastVideoUrl
-    ? `<div class="video-edit-surface"><video controls controlslist="nofullscreen" src="${state.lastVideoUrl}"></video></div>`
+    ? `<div class="video-edit-surface"><video controls src="${state.lastVideoUrl}"></video></div>`
     : `<div class="empty-video">${currentLang === "zh" ? "暂无视频，请先生成一次视频。" : "No video yet. Generate one first."}</div>`;
   document.getElementById("videoEditorPanel").innerHTML = `
     <div class="editor-head">

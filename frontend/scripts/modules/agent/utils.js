@@ -1,7 +1,10 @@
 export function getApiBase() {
   const { protocol, hostname, port, origin } = window.location;
-  if (protocol === "file:") return "http://127.0.0.1:8000";
-  if ((hostname === "127.0.0.1" || hostname === "localhost") && !port) return "http://127.0.0.1:8000";
+  // Default to 8765 for local Shoplive backend.
+  // 8000 is often occupied by unrelated local services, which can cause
+  // requests to hit the wrong backend and produce auth errors.
+  if (protocol === "file:") return "http://127.0.0.1:8765";
+  if ((hostname === "127.0.0.1" || hostname === "localhost") && !port) return "http://127.0.0.1:8765";
   return origin;
 }
 

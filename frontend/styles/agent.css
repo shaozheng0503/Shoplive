@@ -3435,6 +3435,13 @@ body {
   background: linear-gradient(180deg, #edf5ff, #deebff);
 }
 
+/* Fullscreen focus mode: keep only player surface visible */
+.workspace .chat-list .video-msg.is-player-focus .msg-card-meta,
+.workspace .chat-list .video-msg.is-player-focus .video-msg-title,
+.workspace .chat-list .video-msg.is-player-focus .video-actions {
+  display: none !important;
+}
+
 /* video-edit-surface inside chat list: let video determine height */
 .video-edit-surface {
   position: relative;
@@ -4192,6 +4199,43 @@ body {
   display: none;
 }
 
+/* ── Centered conversation layout (logo top-left) ─────────────────────── */
+.agent-page {
+  align-items: stretch !important;
+}
+
+.agent-topbar {
+  width: 100% !important;
+  max-width: none !important;
+  justify-content: flex-start !important;
+  gap: 14px;
+}
+
+.agent-topbar .top-actions {
+  margin-left: auto;
+}
+
+/* Keep chat area in a centered narrow column instead of full-width */
+.workspace.mode-chat {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: stretch !important;
+  width: 100% !important;
+}
+
+.workspace.mode-chat .chat-shell {
+  width: min(680px, 100%) !important;
+  max-width: 680px !important;
+  margin: 0 auto !important;
+}
+
+@media (max-width: 900px) {
+  .workspace.mode-chat .chat-shell {
+    width: min(100%, 100%) !important;
+    max-width: none !important;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    CHAT BUBBLE ENHANCEMENTS
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -4635,4 +4679,784 @@ body {
 }
 .edit-cmd-chip:active {
   background: rgba(210, 224, 255, 0.8);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SHOPLAZZA CLEAN THEME  —  light, minimal, conversational
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Page background: white + subtle warm gradient top-left ── */
+body {
+  background:
+    radial-gradient(900px 700px at -12% -8%, rgba(255, 180, 155, 0.14), transparent 52%),
+    radial-gradient(600px 500px at 108% 5%, rgba(200, 220, 255, 0.1), transparent 50%),
+    #ffffff !important;
+  color: #1a1a1a;
+}
+
+/* ── Topbar: bright white card ── */
+.agent-topbar {
+  height: 60px !important;
+  background: rgba(255,255,255,0.96) !important;
+  border: 1px solid rgba(0,0,0,0.07) !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06) !important;
+  border-radius: 14px !important;
+}
+
+.brand strong { color: #111 !important; font-size: 15px !important; }
+.brand span { color: #888 !important; }
+.lang-btn {
+  border: 1px solid #e0e0e0 !important;
+  background: #fafafa !important;
+  color: #444 !important;
+}
+.back-link { color: #555 !important; }
+
+/* ── Chat shell: pure white ── */
+.workspace .chat-shell {
+  background: #ffffff !important;
+  border: 1px solid rgba(0,0,0,0.07) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06) !important;
+  border-radius: 16px !important;
+}
+
+/* decorative top shimmer: off */
+.workspace .chat-shell::before { display: none !important; }
+
+/* ── Chat list: clean, no grid ── */
+.workspace .chat-list {
+  background: transparent !important;
+  padding: 28px 28px 180px !important;
+  gap: 20px !important;
+}
+
+/* ── AI / system messages: no bubble, plain text ── */
+.workspace .msg.system:not(.video-msg):not(.form-card):not(.typing) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0 4px !important;
+  max-width: min(72%, 680px) !important;
+  color: #1a1a1a !important;
+  font-size: 14.5px !important;
+  line-height: 1.65 !important;
+  backdrop-filter: none !important;
+}
+
+/* hide card-meta header in plain messages */
+.workspace .msg.system:not(.video-msg):not(.form-card):not(.typing) .msg-card-meta {
+  display: none !important;
+}
+
+/* ── User messages: soft gray pill ── */
+.workspace .msg.user {
+  background: #f2f2f2 !important;
+  border: none !important;
+  border-radius: 20px 20px 6px 20px !important;
+  color: #111 !important;
+  box-shadow: none !important;
+  font-size: 14.5px !important;
+  line-height: 1.6 !important;
+  max-width: min(68%, 600px) !important;
+  padding: 11px 16px !important;
+}
+.workspace .msg.user::before { display: none !important; }
+
+/* ── Typing indicator: clean ── */
+.workspace .msg.typing {
+  background: #f5f5f5 !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: #666 !important;
+  border-radius: 16px !important;
+  min-width: 80px !important;
+}
+.workspace .msg.typing::before { display: none !important; }
+.typing-dots i { background: #aaa !important; }
+
+/* ── Option buttons: horizontal pill chips ── */
+.workspace .option-list {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  margin-top: 12px !important;
+}
+
+.workspace .option-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: unset !important;
+  padding: 7px 16px !important;
+  border-radius: 999px !important;
+  background: rgba(37, 99, 235, 0.06) !important;
+  border: 1px solid rgba(37, 99, 235, 0.22) !important;
+  color: #2563eb !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  box-shadow: none !important;
+  text-align: left !important;
+  white-space: nowrap !important;
+}
+.workspace .option-btn:hover {
+  background: rgba(37, 99, 235, 0.12) !important;
+  border-color: rgba(37, 99, 235, 0.4) !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+.workspace .option-btn strong {
+  display: inline !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: inherit !important;
+  margin: 0 !important;
+}
+.workspace .option-btn small { display: none !important; }
+
+/* ── 换一批 / refresh option button ── */
+.workspace .option-btn.option-more-btn,
+.option-more-btn {
+  background: transparent !important;
+  border: 1px dashed rgba(0,0,0,0.18) !important;
+  color: #666 !important;
+}
+.workspace .option-btn.option-more-btn:hover {
+  background: #f5f5f5 !important;
+  color: #333 !important;
+}
+
+/* ── Skip/jump links (跳过 style) ── */
+.workspace .msg.system .skip-link,
+.workspace .msg.system a[data-skip],
+.compact-skip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #555;
+  font-size: 13px;
+  text-decoration: none;
+  margin-top: 10px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* ── Form cards: light, clean ── */
+.workspace .msg.form-card {
+  background: #ffffff !important;
+  border: 1px solid #eaeaea !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06) !important;
+  border-radius: 16px !important;
+}
+.workspace .msg.form-card::before,
+.workspace .msg.form-card::after { display: none !important; }
+.workspace .msg.form-card > div:first-child { color: #111 !important; }
+.workspace .msg.form-card .summary-card {
+  background: #f9f9f9 !important;
+  border: 1px solid #e8e8e8 !important;
+  box-shadow: none !important;
+}
+.workspace .msg.form-card .info-item {
+  background: #ffffff !important;
+  border: 1px solid #e8e8e8 !important;
+  box-shadow: none !important;
+}
+.workspace .msg.form-card .info-icon { background: #f0f4ff !important; }
+.workspace .msg.form-card .info-title { color: #888 !important; }
+.workspace .msg.form-card .info-value { color: #111 !important; }
+
+/* ── Composer: minimal white, simple controls ── */
+.composer.composer-compact {
+  background: #ffffff !important;
+  border: 1px solid #e0e0e0 !important;
+  box-shadow: 0 -1px 0 rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.08) !important;
+  border-radius: 16px !important;
+  margin: 0 12px 12px !important;
+  gap: 8px !important;
+}
+.composer.composer-compact::before { display: none !important; }
+
+.composer.composer-compact #chatInput {
+  border: 1px solid #e8e8e8 !important;
+  border-radius: 10px !important;
+  background: #fafafa !important;
+  color: #111 !important;
+  font-size: 14px !important;
+  min-height: 56px !important;
+}
+.composer.composer-compact #chatInput::placeholder { color: #aaa !important; }
+.composer.composer-compact #chatInput:focus {
+  border-color: #c0c0c0 !important;
+  box-shadow: none !important;
+}
+
+/* Send button: round dark arrow */
+.composer.composer-compact #sendBtn {
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  background: #111 !important;
+  box-shadow: none !important;
+  font-size: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+.composer.composer-compact #sendBtn::after {
+  content: "↑";
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+/* hide original text, keep only icon */
+.composer.composer-compact #sendBtn { font-size: 0 !important; }
+.composer.composer-compact #sendBtn::after { font-size: 18px !important; }
+
+.composer.composer-compact #sendBtn:hover:not(:disabled) {
+  background: #333 !important;
+  transform: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+.composer.composer-compact #sendBtn:disabled {
+  background: #ccc !important;
+  opacity: 1 !important;
+}
+
+/* In centered-chat layout, composer should match chat column width exactly */
+.workspace.mode-chat .chat-shell > .composer.composer-compact {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  border-radius: 0 0 16px 16px !important;
+}
+
+/* ── Final flat layout override (match natural screenshot style) ───────── */
+.workspace.mode-chat .chat-shell {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+.workspace.mode-chat .chat-shell::before {
+  display: none !important;
+}
+
+.workspace.mode-chat .chat-list {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+}
+
+/* Hide video-card top meta strip and title (keep player + actions) */
+.workspace.mode-chat .chat-list .video-msg .msg-card-meta,
+.workspace.mode-chat .chat-list .video-msg .video-msg-title {
+  display: none !important;
+}
+
+.workspace.mode-chat .chat-shell > .composer.composer-compact {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+}
+
+/* Wider center column on desktop */
+.workspace.mode-chat .chat-shell {
+  width: min(820px, 100%) !important;
+  max-width: 820px !important;
+}
+
+/* Enhance button: ghost style */
+.composer.composer-compact #enhancePromptBtn {
+  background: #f5f5f5 !important;
+  border: 1px solid #e0e0e0 !important;
+  color: #555 !important;
+  box-shadow: none !important;
+  border-radius: 999px !important;
+  height: 34px !important;
+  min-width: auto !important;
+  font-size: 12px !important;
+}
+.composer.composer-compact #enhancePromptBtn:hover:not(:disabled) {
+  background: #ebebeb !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Upload / attach button */
+.composer.composer-compact #uploadBtn {
+  width: 34px !important;
+  height: 34px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  background: #f0f0f0 !important;
+  border: 1px solid #e0e0e0 !important;
+  color: #555 !important;
+  box-shadow: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 18px !important;
+}
+
+/* compact-config-row: align send to right */
+.composer.composer-compact .compact-config-row {
+  align-items: center !important;
+}
+
+/* hint text */
+.composer.composer-compact .compact-hint { color: #999 !important; }
+
+/* ── Msg hover action bar: subtle ── */
+.workspace .msg-hover-bar {
+  background: rgba(255,255,255,0.9) !important;
+  border: 1px solid #e8e8e8 !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+  border-radius: 8px !important;
+}
+.workspace .msg-action-btn {
+  color: #555 !important;
+  background: transparent !important;
+  border: none !important;
+}
+.workspace .msg-action-btn:hover { background: #f0f0f0 !important; }
+
+/* ── Video message: clean ── */
+.workspace .video-msg video,
+.video-msg video {
+  border: 1px solid #e8e8e8 !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+/* ── Scrollbar: minimal ── */
+.workspace .chat-list::-webkit-scrollbar { width: 5px !important; }
+.workspace .chat-list::-webkit-scrollbar-thumb {
+  background: #ddd !important;
+  border-radius: 999px !important;
+}
+
+/* Hide right scrollbar in centered chat mode (keep scrolling behavior) */
+.workspace.mode-chat .chat-list {
+  scrollbar-width: none !important;      /* Firefox */
+  -ms-overflow-style: none !important;   /* Legacy Edge/IE */
+}
+.workspace.mode-chat .chat-list::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+
+/* ── Status chips (done/progress/blocked): keep but muted ── */
+.workspace .msg-card-status {
+  font-size: 11px !important;
+  border-radius: 999px !important;
+  padding: 3px 10px !important;
+  background: #f5f5f5 !important;
+  border: 1px solid #e0e0e0 !important;
+  color: #666 !important;
+  box-shadow: none !important;
+}
+
+/* ── Step badge ── */
+.workspace .msg-card-step {
+  background: #f0f4ff !important;
+  border: 1px solid #d8e3ff !important;
+  color: #4462c8 !important;
+  box-shadow: none !important;
+}
+
+/* ── Error messages: clean red ── */
+.workspace .msg.error,
+.workspace .msg.system.msg-kind-status.status-tone-blocked:not(.video-msg):not(.form-card):not(.typing) {
+  background: #fff5f5 !important;
+  border: 1px solid #fdd !important;
+  color: #c0392b !important;
+  box-shadow: none !important;
+  padding: 12px 16px !important;
+  border-radius: 12px !important;
+}
+
+/* ── Action chip buttons (edit video etc): clean ── */
+.action-chip-primary {
+  background: #f0f5ff !important;
+  border-color: #c8d8f5 !important;
+  color: #2d5be3 !important;
+}
+.action-chip-secondary {
+  background: #f5f5f5 !important;
+  border-color: #e0e0e0 !important;
+  color: #555 !important;
+}
+
+/* ── Summary/insight cards: aligned with clean theme ── */
+.workspace .msg-card-meta-reply .msg-card-label,
+.workspace .msg-card-meta-status .msg-card-label,
+.workspace .msg-card-meta-guide .msg-card-label {
+  color: #999 !important;
+  opacity: 1 !important;
+}
+.workspace .msg-card-label::before { background: #ccc !important; box-shadow: none !important; }
+
+/* show card-meta in form cards (needed for context) */
+.workspace .msg.form-card .msg-card-meta { display: flex !important; }
+
+/* ── msgIn animation: gentle fade only ── */
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Composer button final normalization ────────────────────────────────── */
+.workspace.mode-chat .composer.composer-compact #uploadBtn,
+.workspace.mode-chat .composer.composer-compact #toggleProductUrlBtn,
+.workspace.mode-chat .composer.composer-compact #toggleFrameBtn,
+.workspace.mode-chat .composer.composer-compact #enhancePromptBtn {
+  width: auto !important;
+  min-width: 72px !important;
+  height: 34px !important;
+  padding: 0 12px !important;
+  border-radius: 999px !important;
+  border: 1px solid #3f86ff !important;
+  background: #3f86ff !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  writing-mode: horizontal-tb !important;
+  white-space: nowrap !important;
+}
+
+.workspace.mode-chat .composer.composer-compact #sendBtn {
+  width: auto !important;
+  min-width: 88px !important;
+  height: 34px !important;
+  padding: 0 14px !important;
+  border-radius: 999px !important;
+  border: 1px solid #3f86ff !important;
+  background: #3f86ff !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  font-size: 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  writing-mode: horizontal-tb !important;
+  white-space: nowrap !important;
+}
+
+.workspace.mode-chat .composer.composer-compact #sendBtn::after {
+  content: none !important;
+}
+
+.workspace.mode-chat .composer.composer-compact #uploadBtn:hover:not(:disabled),
+.workspace.mode-chat .composer.composer-compact #toggleProductUrlBtn:hover:not(:disabled),
+.workspace.mode-chat .composer.composer-compact #toggleFrameBtn:hover:not(:disabled),
+.workspace.mode-chat .composer.composer-compact #enhancePromptBtn:hover:not(:disabled) {
+  background: #2f74f0 !important;
+  border-color: #2f74f0 !important;
+}
+
+.workspace.mode-chat .composer.composer-compact #sendBtn:hover:not(:disabled) {
+  background: #2f74f0 !important;
+  border-color: #2f74f0 !important;
+}
+
+/* ── Task queue: unified bright-blue palette ─────────────────────────────── */
+.workspace.mode-chat #taskQueuePanel.task-queue-panel {
+  border: 1px solid #d8e6ff !important;
+  background: #f4f8ff !important;
+  box-shadow: none !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-queue-title {
+  color: #2f66cc !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-queue-clear-btn {
+  border: 1px solid #bfd6ff !important;
+  background: #eaf3ff !important;
+  color: #2f66cc !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-item {
+  border: 1px solid #d7e5ff !important;
+  background: #f6faff !important;
+  box-shadow: none !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-item.running,
+.workspace.mode-chat #taskQueuePanel .task-item.done {
+  border-color: #cfe0ff !important;
+  background: #f3f8ff !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-item.failed {
+  border-color: #f3c8cf !important;
+  background: #fff5f7 !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-item strong {
+  color: #234b96 !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-item small {
+  color: #4e6ea8 !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-state-badge,
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-info,
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-progress,
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-done {
+  border-color: #bfd6ff !important;
+  background: #eaf3ff !important;
+  color: #2f66cc !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-blocked {
+  border-color: #efbcc5 !important;
+  background: #fff1f4 !important;
+  color: #b1495a !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .action-chip-view {
+  border-color: #3f86ff !important;
+  background: #3f86ff !important;
+  color: #fff !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .action-chip-danger {
+  border-color: #efbcc5 !important;
+  background: #fff1f4 !important;
+  color: #b1495a !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .action-chip-btn:hover {
+  transform: none !important;
+}
+
+/* ── Final responsive top + centered column tune ───────────────────────── */
+:root {
+  --agent-chat-col-max: clamp(760px, 64vw, 980px);
+}
+
+.agent-page {
+  padding: clamp(8px, 1.5vw, 18px) clamp(10px, 2vw, 24px) !important;
+}
+
+/* Make top area feel natural: aligned with content column and adaptive */
+.agent-topbar {
+  width: min(var(--agent-chat-col-max), calc(100vw - 2 * clamp(10px, 2vw, 24px))) !important;
+  max-width: var(--agent-chat-col-max) !important;
+  margin: 0 auto 10px !important;
+  height: 52px !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.04) !important;
+}
+
+.workspace.mode-chat .chat-shell {
+  width: min(var(--agent-chat-col-max), calc(100vw - 2 * clamp(10px, 2vw, 24px))) !important;
+  max-width: var(--agent-chat-col-max) !important;
+}
+
+@media (max-width: 900px) {
+  .agent-topbar,
+  .workspace.mode-chat .chat-shell {
+    width: calc(100vw - 20px) !important;
+    max-width: none !important;
+  }
+}
+
+/* ── Split editors polish: UI + typography ───────────────────────────────── */
+.workspace.has-editors .script-panel,
+.workspace.has-editors .video-panel {
+  font-family: "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  border: 1px solid #dbe6f7 !important;
+  background: #f8fbff !important;
+  box-shadow: none !important;
+  border-radius: 14px !important;
+  padding: 12px !important;
+}
+
+.workspace.has-editors .script-panel .editor-head,
+.workspace.has-editors .video-panel .editor-head {
+  margin-bottom: 10px !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid #e7eefb !important;
+}
+
+.workspace.has-editors .script-panel .editor-head strong,
+.workspace.has-editors .video-panel .editor-head strong {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #2b4371 !important;
+  letter-spacing: 0.01em !important;
+}
+
+.workspace.has-editors .script-panel .editor-hint,
+.workspace.has-editors .video-panel .editor-hint,
+.workspace.has-editors .script-panel .editor-note,
+.workspace.has-editors .video-panel .editor-note {
+  color: #647da8 !important;
+  font-size: 12px !important;
+}
+
+.workspace.has-editors .script-panel .editor-label,
+.workspace.has-editors .video-panel .editor-label,
+.workspace.has-editors .video-panel .editor-section > label,
+.workspace.has-editors .video-panel .range-grid label {
+  color: #435c89 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+.workspace.has-editors .script-panel .editor-textarea,
+.workspace.has-editors .video-panel input[type="text"],
+.workspace.has-editors .video-panel select {
+  border: 1px solid #cad9f2 !important;
+  background: #ffffff !important;
+  color: #20314f !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+.workspace.has-editors .video-panel .editor-section,
+.workspace.has-editors .video-panel .module-panel,
+.workspace.has-editors .video-panel .timeline-section {
+  border: 1px solid #d7e3f6 !important;
+  background: #fdfefe !important;
+  border-radius: 12px !important;
+}
+
+.workspace.has-editors .video-panel .module-switch-btn {
+  border: 1px solid #c7d8f4 !important;
+  background: #f3f8ff !important;
+  color: #35588f !important;
+}
+
+.workspace.has-editors .video-panel .module-switch-btn.is-active {
+  border-color: #9dbff7 !important;
+  background: #e8f2ff !important;
+  color: #244a86 !important;
+  box-shadow: none !important;
+}
+
+.workspace.has-editors .video-panel .video-preview-wrap {
+  border: 1px solid #d5e3fa !important;
+  border-radius: 12px !important;
+}
+
+.workspace.has-editors .video-panel .mask-preset-card {
+  border: 1px solid #cfe0fa !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+
+.workspace.has-editors .video-panel .mask-preset-card:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.workspace.has-editors .video-panel .timeline-actions button,
+.workspace.has-editors .video-panel .editor-actions .action-chip-btn,
+.workspace.has-editors .script-panel .editor-actions .action-chip-btn,
+.workspace.has-editors .video-panel .editor-close-btn,
+.workspace.has-editors .script-panel .editor-close-btn {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+}
+
+/* Advanced polish for split editors: subtle title strip + cleaner hierarchy */
+.workspace.has-editors .script-panel,
+.workspace.has-editors .video-panel {
+  position: relative !important;
+  background: #ffffff !important;
+}
+
+.workspace.has-editors .script-panel::before,
+.workspace.has-editors .video-panel::before {
+  content: "" !important;
+  position: absolute !important;
+  left: 0 !important;
+  right: 0 !important;
+  top: 0 !important;
+  height: 3px !important;
+  background: linear-gradient(90deg, #4f8eff, #8db8ff) !important;
+  border-radius: 14px 14px 0 0 !important;
+  opacity: 0.9 !important;
+  pointer-events: none !important;
+}
+
+.workspace.has-editors .script-panel .editor-head,
+.workspace.has-editors .video-panel .editor-head {
+  padding-top: 2px !important;
+}
+
+.workspace.has-editors .script-panel .editor-close-btn,
+.workspace.has-editors .video-panel .editor-close-btn {
+  border: 1px solid #c9dcfa !important;
+  background: #f2f7ff !important;
+  color: #3b5f97 !important;
+  border-radius: 999px !important;
+  padding: 5px 10px !important;
+  box-shadow: none !important;
+}
+
+.workspace.has-editors .script-panel .editor-close-btn:hover,
+.workspace.has-editors .video-panel .editor-close-btn:hover {
+  background: #e9f2ff !important;
+  border-color: #b8d0f8 !important;
+}
+
+.workspace.has-editors .video-panel .editor-section h4 {
+  margin: 0 0 10px !important;
+  padding-left: 9px !important;
+  border-left: 3px solid #9ec1ff !important;
+  color: #2e4e82 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+
+.workspace.has-editors .script-panel .editor-textarea {
+  min-height: 210px !important;
+}
+
+.workspace.has-editors .script-panel .editor-textarea,
+.workspace.has-editors .video-panel input[type="text"],
+.workspace.has-editors .video-panel select {
+  transition: border-color 0.16s ease, box-shadow 0.16s ease !important;
+}
+
+.workspace.has-editors .script-panel .editor-textarea:focus,
+.workspace.has-editors .video-panel input[type="text"]:focus,
+.workspace.has-editors .video-panel select:focus {
+  outline: none !important;
+  border-color: #8db1f3 !important;
+  box-shadow: 0 0 0 3px rgba(92, 144, 235, 0.14) !important;
+}
+
+.workspace.has-editors .video-panel .timeline-section .kf-track,
+.workspace.has-editors .video-panel .timeline-section .kf-ruler {
+  background-color: #f5f9ff !important;
+  border-color: #d7e5fb !important;
+}
+
+.workspace.has-editors .video-panel .timeline-section .timeline-pending-tip {
+  background: #eef5ff !important;
+  border: 1px solid #cfe0fb !important;
+  color: #3f5f95 !important;
 }

@@ -223,6 +223,10 @@ export function updateToolbarIndicator() {
 }
 
 export function buildSegmentedStoryboard(segCount = 1) {
+  const partName = (idx) => {
+    const letter = String.fromCharCode(65 + Math.max(0, Number(idx) || 0));
+    return currentLang === "zh" ? `脚本 ${letter}` : `Script ${letter}`;
+  };
   const points = _normalizePointsList(state.sellingPoints);
   const fallback = currentLang === "zh" ? "突出产品核心卖点" : "Highlight core product value";
   if (segCount <= 1) {
@@ -242,7 +246,7 @@ export function buildSegmentedStoryboard(segCount = 1) {
   for (let s = 0; s < segCount; s++) {
     const chunk = points.slice(s * half, (s + 1) * half);
     if (!chunk.length) chunk.push(fallback);
-    const segLabel = currentLang === "zh" ? `第${s + 1}段（8秒）` : `Segment ${s + 1} (8s)`;
+    const segLabel = partName(s);
     const lines = chunk.map((p, idx) =>
       currentLang === "zh"
         ? `镜头${idx + 1}：${p}，面向「${state.targetUser || "目标人群"}」。`
@@ -254,6 +258,7 @@ export function buildSegmentedStoryboard(segCount = 1) {
 }
 
 export function buildStoryboardFromPromptSegments(prompts = [], segDuration = 8) {
+  void segDuration;
   const list = Array.isArray(prompts)
     ? prompts.map((p) => String(p || "").trim()).filter(Boolean)
     : [];
@@ -261,9 +266,8 @@ export function buildStoryboardFromPromptSegments(prompts = [], segDuration = 8)
   if (list.length === 1) return list[0];
   return list
     .map((p, i) => {
-      const label = currentLang === "zh"
-        ? `[第${i + 1}段（${segDuration}秒）]`
-        : `[Segment ${i + 1} (${segDuration}s)]`;
+      const letter = String.fromCharCode(65 + i);
+      const label = currentLang === "zh" ? `[脚本 ${letter}]` : `[Script ${letter}]`;
       return `${label}\n${p}`;
     })
     .join("\n\n");
@@ -272,8 +276,12 @@ export function buildStoryboardFromPromptSegments(prompts = [], segDuration = 8)
 export function parseStoryboardSegments(storyboardText = "") {
   const raw = String(storyboardText || "").trim();
   if (!raw) return [];
-  const parts = raw
-    .split(/\n*\[(?:第\d+段（\d+秒）|Segment \d+ \(\d+s\))\]\s*/g)
+  const normalized = raw.replace(
+    /\n*\[(?:第\d+段（\d+秒）|Segment \d+ \(\d+s\)|脚本\s*[A-Z]|Script\s*[A-Z]|Part\s*[A-Z])\]\s*/gi,
+    "\n@@SPLIT@@\n"
+  );
+  const parts = normalized
+    .split("@@SPLIT@@")
     .map((s) => s.trim())
     .filter(Boolean);
   return parts;
@@ -281,13 +289,11 @@ export function parseStoryboardSegments(storyboardText = "") {
 
 export function getBoundScriptSummary(storyboardText = "") {
   const parts = parseStoryboardSegments(storyboardText);
-  if (parts.length > 1) {
-    return currentLang === "zh" ? `${parts.length} 段分镜` : `${parts.length} scenes`;
-  }
+  if (parts.length > 1) return currentLang === "zh" ? "脚本已就绪" : "Script ready";
   const raw = String((parts[0] || storyboardText || "")).trim();
   const firstLine = raw.split("\n").map((s) => s.trim()).find(Boolean) || "";
   if (!firstLine) {
-    return currentLang === "zh" ? "单段脚本" : "single scene";
+    return currentLang === "zh" ? "脚本已就绪" : "Script ready";
   }
   return firstLine.length > 20 ? `${firstLine.slice(0, 20)}…` : firstLine;
 }
@@ -305,13 +311,12 @@ export function renderScriptEditor() {
     : buildSegmentedStoryboard(segCount);
 
   const durationLabel = currentLang === "zh" ? "视频时长" : "Duration";
-  const segmentLabel = currentLang === "zh" ? "分镜段" : "Segment";
-
   let segmentHtml = "";
   for (let i = 0; i < segCount; i++) {
+    const letter = String.fromCharCode(65 + i);
     const title = segCount > 1
-      ? (currentLang === "zh" ? `${segmentLabel} ${i + 1}（8秒）` : `${segmentLabel} ${i + 1} (8s)`)
-      : (currentLang === "zh" ? "分镜脚本" : "Storyboard");
+      ? (currentLang === "zh" ? `脚本 ${letter}` : `Script ${letter}`)
+      : (currentLang === "zh" ? "脚本" : "Script");
     segmentHtml += `
       <label class="editor-label">${title}</label>
       <textarea id="storyboardSeg${i}" class="editor-textarea" rows="6">${_sanitizeInputValue(segments[i] || "")}</textarea>
@@ -330,7 +335,7 @@ export function renderScriptEditor() {
         <option value="4" ${dur === 4 ? "selected" : ""}>4${currentLang === "zh" ? "秒" : "s"}</option>
         <option value="6" ${dur === 6 ? "selected" : ""}>6${currentLang === "zh" ? "秒" : "s"}</option>
         <option value="8" ${dur === 8 ? "selected" : ""}>8${currentLang === "zh" ? "秒" : "s"}</option>
-        <option value="16" ${dur === 16 ? "selected" : ""}>16${currentLang === "zh" ? "秒（2段拼接）" : "s (2 segments)"}</option>
+        <option value="16" ${dur === 16 ? "selected" : ""}>16${currentLang === "zh" ? "秒" : "s"}</option>
       </select>
     </div>
     ${segmentHtml}
@@ -365,7 +370,8 @@ export function renderScriptEditor() {
     }
     if (currentSegCount > 1) {
       state.lastStoryboard = segs.map((s, i) => {
-        const label = currentLang === "zh" ? `[第${i + 1}段（8秒）]` : `[Segment ${i + 1} (8s)]`;
+        const letter = String.fromCharCode(65 + i);
+        const label = currentLang === "zh" ? `[脚本 ${letter}]` : `[Script ${letter}]`;
         return `${label}\n${s}`;
       }).join("\n\n");
     } else {

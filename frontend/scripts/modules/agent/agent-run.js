@@ -37,7 +37,7 @@ export async function callAgentRunAndRender(prompt) {
     parse_product_url:      zh ? "解析商品链接" : "Parse product URL",
     analyze_product_image:  zh ? "分析商品图"   : "Analyze image",
     run_video_workflow:     zh ? "运行视频工作流": "Run workflow",
-    chain_video_segments:   zh ? "拼接视频片段" : "Chain segments",
+    chain_video_segments:   zh ? "长时长视频处理" : "Long-duration processing",
   };
   const tools = state.lastVideoUrl
     ? ["export_edited_video", "render_video_timeline", "generate_product_image"]

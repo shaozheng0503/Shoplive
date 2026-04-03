@@ -366,6 +366,19 @@ def register_video_edit_routes(
             bgm_extract = bool(edits.get("bgmExtract"))
             bgm_volume = _clamp_num(edits.get("bgmVolume", 70), 0, 100, 70) / 100.0
             local_bgm_data_url = str(edits.get("localBgmDataUrl") or "").strip()
+            bgm_mood = str(edits.get("bgmMood") or "elegant").strip()
+            _AUDIO_DIR = Path(__file__).parent.parent.parent / "frontend" / "assets" / "audio"
+            _BGM_PRESET_FILES = {
+                "elegant":   _AUDIO_DIR / "bgm-elegant.mp3",
+                "daily":     _AUDIO_DIR / "bgm-daily.mp3",
+                "piano":     _AUDIO_DIR / "bgm-piano.mp3",
+                "energetic": _AUDIO_DIR / "bgm-energetic.mp3",
+                "happy":     _AUDIO_DIR / "bgm-happy.mp3",
+                "calm":      _AUDIO_DIR / "bgm-calm.mp3",
+                "trendy":    _AUDIO_DIR / "bgm-trendy.mp3",
+                "romantic":  _AUDIO_DIR / "bgm-romantic.mp3",
+            }
+            bgm_preset_path = _BGM_PRESET_FILES.get(bgm_mood)
 
             sat = _clamp_num((100 + sat_val * 3) / 100.0, 0.2, 2.6, 1.0)
             bright = _clamp_num((100 + vibrance_val * 2 - 100) / 100.0, -0.6, 1.2, 0.0)
@@ -417,6 +430,8 @@ def register_video_edit_routes(
                         suffix = ".m4a"
                     bgm_file = tmp_dir_path / f"bgm{suffix}"
                     bgm_file.write_bytes(base64.b64decode(bgm_b64))
+                elif bgm_extract and bgm_preset_path and bgm_preset_path.exists():
+                    bgm_file = bgm_preset_path
 
                 motion_enable_expr = _build_time_enable_expr(motion_ranges)
                 if motion_mode == "ranged" and motion_enable_expr:
@@ -527,11 +542,8 @@ def register_video_edit_routes(
                 else:
                     bgm_volume_filter = f"volume={_fmt_float(bgm_volume, 3)}"
 
-                if use_bgm and has_input_audio:
-                    filter_parts.append(f"[0:a]{atempo}[a0]")
-                    filter_parts.append(f"[1:a]{bgm_volume_filter},{atempo}[a1]")
-                    filter_parts.append("[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]")
-                elif use_bgm and not has_input_audio:
+                if use_bgm:
+                    # Replace original audio with BGM (discard original audio track)
                     filter_parts.append(f"[1:a]{bgm_volume_filter},{atempo}[aout]")
                 elif has_input_audio:
                     filter_parts.append(f"[0:a]{atempo}[aout]")
