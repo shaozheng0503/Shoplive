@@ -372,37 +372,18 @@ def build_shoplive_agent_enhance_template(normalized: Dict, raw_prompt: str = ""
     anchor_text = render_compact_product_anchor_text(normalized.get("product_anchors", {}), lang="zh")
     brand_direction = normalized.get("brand_direction", "") or "默认品牌表达"
     return (
-        "你是一位电商视频提示词优化专家。请把用户原始提示词改写为一条可直接用于视频生成的最终提示词。\n"
-        + "你必须严格遵循如下视频 prompt 框架，并按框架字段组织语义：\n"
-        + "4.1 产品口播：\n"
-        + "- [Style] [Environment] [Tone & Pacing] [Camera] [Lighting]\n"
-        + "- [Actions/Scenes]：主体动作 -> 产品特写 -> 使用演示 -> 情绪展示 -> 收尾\n"
-        + "- [Background Sound] [Transition/Editing] [Call to Action]\n"
-        + "4.2 UGC评测：\n"
-        + "- 真实手持/POV、快节奏、生活化高代入\n"
-        + "- 结构：主体出场 -> 产品特写 -> 使用演示 -> 前后对比(可选) -> 总结推荐\n"
-        + "4.3 痛点与解决：\n"
-        + "- Shot1 正确示范 -> Shot2 痛点示范 -> Shot3 解决细节 -> Shot4 性能特写 -> Shot5 推荐收尾\n"
-        + "4.4 产品演示：\n"
-        + "- 极简电影感写实，强调流程可视化与日常仪式感\n"
-        + "- 结构：产品引入 -> 使用动作 -> 特写卖点 -> 体验展示 -> 收尾CTA\n"
-        + "4.5 前后对比：\n"
-        + "- 现代达人带货风格，高饱和商业滤镜，真实亲测感\n"
-        + "- 结构：展示 -> 痛点/对比 -> 使用质感 -> 效果展示 -> 收尾CTA\n"
-        + "4.6 故事讲述：\n"
-        + "- [Style] [Scene] [Cinematography] [Lighting & Color] [Mood & Tone]\n"
-        + "- 叙事强调镜头连贯、情绪弧线、产品价值与场景关系\n"
-        + "根据商品与卖点自动选择最合适的1种主框架 + 1种辅助框架，不要同时铺满所有框架。\n"
-        + f"约束：单段时长={duration}秒，目标总时长={total_duration}秒，画幅={aspect}，商品={product}，目标人群={target_user}，地区={region}，风格模板={template}，品牌方向={brand_direction}。\n"
-        + f"核心卖点：{points_text}。\n"
-        + (f"商品锚点：{anchor_text}\n" if anchor_text else "")
-        + (f"参考分镜：{story_hint}\n" if story_hint else "")
-        + (f"用户原始提示词：{base_prompt}\n" if base_prompt else "用户原始提示词：无\n")
-        + "输出要求：\n"
-        + "- 只输出最终一条提示词正文，不要解释。\n"
-        + "- 优先保证商品一致性、真实感、镜头可执行性。若给了商品锚点，必须锁定颜色、材质、轮廓和关键细节，不得改成其他品类。\n"
-        + "- 最终提示词中要显式覆盖：Style/Environment/Tone & Pacing/Camera/Lighting/Actions/Background Sound/Transition/CTA。\n"
-        + "- 单段时长是4/6/8秒；若总时长是16/24秒，按8秒片段链式延展。卖点只聚焦1-2个，节奏要可拍可剪。\n"
-        + "- 必须包含合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
+        "你是一位电商视频提示词优化专家。将用户原始提示词重写为“短而可执行”的单条成片提示词。\n"
+        + f"约束：画幅={aspect}；单段时长={duration}s；目标总时长={total_duration}s；商品={product}；人群={target_user}；地区={region}；模板={template}；品牌={brand_direction}。\n"
+        + f"核心卖点仅保留1-2个：{points_text}。\n"
+        + (f"商品锚点：{anchor_text}。\n" if anchor_text else "")
+        + (f"参考分镜：{story_hint}。\n" if story_hint else "")
+        + (f"原始提示词：{base_prompt}。\n" if base_prompt else "原始提示词：无。\n")
+        + "输出规则：\n"
+        + "1) 只输出最终提示词正文，不解释，不分点，不要Markdown；\n"
+        + "2) 长度控制在 220~420 中文字符（或 80~160 英文词）；\n"
+        + "3) 必须包含：Style/Environment/Tone& Pacing/Camera/Lighting/Actions/Background Sound/Transition/CTA；\n"
+        + "4) 镜头动作必须可拍可剪，避免抽象空话；\n"
+        + "5) 严格锁定商品颜色、材质、轮廓和关键细节，不得漂移品类；\n"
+        + "6) 结尾附上合规后缀：高光边缘干净，反光可控，材质纹理清晰，结构边缘锐利，不出现畸形手或错误结构，不出现他牌标识或水印。"
     )
 

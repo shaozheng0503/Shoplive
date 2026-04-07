@@ -20,3 +20,6 @@ __pycache__/
 video_edits/
 shoplive_video_edits/
 video_cases/
+
+# Runtime cache (preset image base64 etc.)
+backend/cache/

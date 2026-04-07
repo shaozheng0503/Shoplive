@@ -668,7 +668,7 @@ class JimengVideoRequest(BaseModel):
             "prompt": "一只可爱的小猫在草地上玩耍",
             "model": "3.5-pro",
             "ratio": "16:9",
-            "duration": 5
+            "duration": 10
         }
     """
     prompt: str = Field(
@@ -683,8 +683,8 @@ class JimengVideoRequest(BaseModel):
         description="视频比例。支持 '1:1', '9:16', '16:9'.",
     )
     duration: Literal[5, 10] = Field(
-        default=5,
-        description="视频时长（秒），支持 5 或 10。",
+        default=10,
+        description="视频时长（秒），支持 5 或 10；默认 10。",
     )
     resolution: str = Field(
         default="720p",

@@ -48,54 +48,72 @@
             <button type="button" id="ltxvImageClearBtn" class="ghost-btn" style="display:none">✕</button>
           </div>
 
-          <label>模型</label>
-          <div class="ltxv-model-row">
-            <button type="button" class="ltxv-opt-btn active" data-ltxv-model="ltx-2-3-pro">2.3 Pro<span class="ltxv-opt-sub">最佳质量 ≤10s</span></button>
-            <button type="button" class="ltxv-opt-btn" data-ltxv-model="ltx-2-3-fast">2.3 Fast<span class="ltxv-opt-sub">速度优先 ≤20s</span></button>
-          </div>
-
-          <label>画幅方向</label>
-          <div class="ltxv-ratio-row">
-            <button type="button" class="ltxv-opt-btn active" data-ltxv-ratio="16:9" data-ltxv-res="1920x1080">
-              <span class="ltxv-ratio-icon ltxv-landscape">▬</span> 横版 16:9
+          <label>视频引擎</label>
+          <div class="ltxv-engine-row">
+            <button type="button" class="ltxv-opt-btn active" data-engine="comfyui-ltxv">
+              LTX 2.3<span class="ltxv-opt-sub">6–20s 自定义时长</span>
             </button>
-            <button type="button" class="ltxv-opt-btn" data-ltxv-ratio="9:16" data-ltxv-res="1080x1920">
-              <span class="ltxv-ratio-icon ltxv-portrait">▮</span> 竖版 9:16
+            <button type="button" class="ltxv-opt-btn" data-engine="veo">
+              Veo 3.1 Fast<span class="ltxv-opt-sub">8s / 16s 续写</span>
             </button>
           </div>
 
-          <div class="ltxv-row-2col">
-            <div>
-              <label>时长 <span id="ltxvDurationLabel" class="ltxv-val-badge">5s</span></label>
-              <input id="ltxvDuration" type="range" min="1" max="10" value="5" step="1" class="ltxv-slider" />
-              <div class="ltxv-slider-limits"><span>1s</span><span id="ltxvDurationMax">10s</span></div>
+          <!-- LTX settings -->
+          <div id="ltxvSettings">
+            <label>模型</label>
+            <div class="ltxv-model-row">
+              <button type="button" class="ltxv-opt-btn active" data-ltxv-model="LTX-2 (Pro)">LTX-2 Pro<span class="ltxv-opt-sub">最佳质量</span></button>
+              <button type="button" class="ltxv-opt-btn" data-ltxv-model="LTX-2 (Fast)">LTX-2 Fast<span class="ltxv-opt-sub">速度优先</span></button>
             </div>
-            <div>
-              <label>帧率</label>
-              <div class="ltxv-fps-row">
-                <button type="button" class="ltxv-opt-btn active" data-ltxv-fps="24">24fps</button>
-                <button type="button" class="ltxv-opt-btn" data-ltxv-fps="50">50fps</button>
+
+            <label>画幅方向</label>
+            <div class="ltxv-ratio-row">
+              <button type="button" class="ltxv-opt-btn active" data-ltxv-orient="landscape">横版 16:9</button>
+              <button type="button" class="ltxv-opt-btn" data-ltxv-orient="portrait">竖版 9:16</button>
+            </div>
+
+            <label>分辨率</label>
+            <div class="ltxv-ratio-row">
+              <button type="button" class="ltxv-opt-btn active" data-ltxv-res="1920x1080">1080p</button>
+              <button type="button" class="ltxv-opt-btn" data-ltxv-res="2560x1440">1440p</button>
+              <button type="button" class="ltxv-opt-btn" data-ltxv-res="3840x2160">4K</button>
+            </div>
+
+            <div class="ltxv-row-2col">
+              <div>
+                <label>时长 <span id="ltxvDurationLabel" class="ltxv-val-badge">10s</span></label>
+                <input id="ltxvDuration" type="range" min="6" max="20" value="10" step="2" class="ltxv-slider" />
+                <div class="ltxv-slider-limits"><span>6s</span><span id="ltxvDurationMax">20s</span></div>
+              </div>
+              <div>
+                <label>帧率</label>
+                <div class="ltxv-fps-row">
+                  <button type="button" class="ltxv-opt-btn active" data-ltxv-fps="25">25fps</button>
+                  <button type="button" class="ltxv-opt-btn" data-ltxv-fps="50">50fps</button>
+                </div>
               </div>
             </div>
+
+            <label class="ltxv-audio-label">
+              <input id="ltxvAudio" type="checkbox" />
+              自动生成环境音效
+            </label>
           </div>
 
-          <label>镜头运动（可选）</label>
-          <select id="ltxvCamera" class="ltxv-select">
-            <option value="">自动</option>
-            <option value="dolly_in">推镜 dolly in</option>
-            <option value="dolly_out">拉镜 dolly out</option>
-            <option value="dolly_left">左移 dolly left</option>
-            <option value="dolly_right">右移 dolly right</option>
-            <option value="jib_up">上升 jib up</option>
-            <option value="jib_down">下降 jib down</option>
-            <option value="static">固定机位 static</option>
-            <option value="focus_shift">焦点转移 focus shift</option>
-          </select>
+          <!-- Veo settings -->
+          <div id="veoSettings" style="display:none">
+            <label>画幅方向</label>
+            <div class="ltxv-ratio-row">
+              <button type="button" class="ltxv-opt-btn active" data-veo-ratio="9:16">竖版 9:16</button>
+              <button type="button" class="ltxv-opt-btn" data-veo-ratio="16:9">横版 16:9</button>
+            </div>
 
-          <label class="ltxv-audio-label">
-            <input id="ltxvAudio" type="checkbox" checked />
-            自动生成环境音效
-          </label>
+            <label>时长</label>
+            <div class="ltxv-model-row">
+              <button type="button" class="ltxv-opt-btn active" data-veo-dur="8">8 秒<span class="ltxv-opt-sub">单段直出</span></button>
+              <button type="button" class="ltxv-opt-btn" data-veo-dur="16">16 秒<span class="ltxv-opt-sub">续写拼接</span></button>
+            </div>
+          </div>
 
           <button id="ltxvGenerateBtn" class="primary-btn large">生成视频</button>
         </aside>

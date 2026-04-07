@@ -3,8 +3,10 @@ import re
 import json
 import html
 import time
+import base64
 from urllib.parse import urljoin, urlparse
 from typing import Callable, Dict, Tuple
+from pathlib import Path
 
 import requests
 from flask import Response, g, jsonify, request, stream_with_context
@@ -42,6 +44,119 @@ _TOOL_ENDPOINT_MAP = {
     "render_video_timeline": ("api_video_timeline_render",      "/api/video/timeline/render"),
     "generate_product_image":("api_shoplive_image_generate",    "/api/shoplive/image/generate"),
 }
+
+_AMAZON_STRONG_MATCH_PRESETS = {
+    "B0CZDHS41T": {
+        "canonical_url": "https://www.amazon.com/dp/B0CZDHS41T",
+        "product_name": "Soundcore Space One (FlexiCurve) Over-Ear Headphones - White",
+        "main_business": "消费电子耳机",
+        "style_template": "clean",
+        "selling_points": [
+            "白色外观，简洁高级，适合电商视觉展示",
+            "头戴式舒适贴合，适合长时间佩戴",
+            "突出降噪与沉浸式听感场景",
+        ],
+        "target_user": "通勤与日常影音用户",
+        "sales_region": "北美",
+        "brand_direction": "科技感、简洁、质感",
+        "product_anchors": {
+            "category": "头戴式耳机",
+            "colors": ["白色"],
+            "materials": ["塑料", "金属"],
+            "silhouette": "包耳式头戴耳机",
+            "must_keep": ["白色机身", "头梁结构", "耳罩形态", "Soundcore 品牌标识"],
+            "forbid_shift": ["入耳式耳机", "非白色主机身", "其他品牌外观"],
+        },
+        # Optional public image candidates for prefetch; if blocked, parsing still succeeds.
+        "image_urls": [
+            "https://m.media-amazon.com/images/I/61Q4f4fWmPL._AC_SL1500_.jpg",
+            "https://m.media-amazon.com/images/I/71Y5x3H6WfL._AC_SL1500_.jpg",
+        ],
+    }
+}
+
+_PRESET_IMAGE_CACHE_DIR = Path(__file__).resolve().parents[1] / "cache" / "preset_product_images"
+
+
+def _extract_amazon_asin(url: str) -> str:
+    txt = str(url or "").strip()
+    if not txt:
+        return ""
+    m = re.search(r"/dp/([A-Z0-9]{10})(?:[/?]|$)", txt, re.IGNORECASE)
+    if not m:
+        m = re.search(r"/gp/product/([A-Z0-9]{10})(?:[/?]|$)", txt, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    return ""
+
+
+def _load_preset_image_cache(asin: str) -> list:
+    if not asin:
+        return []
+    path = _PRESET_IMAGE_CACHE_DIR / f"{asin}.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = []
+    for x in (data if isinstance(data, list) else []):
+        b64 = str((x or {}).get("base64") or "").strip()
+        mime = str((x or {}).get("mime_type") or "image/jpeg").strip()
+        url = str((x or {}).get("url") or "").strip()
+        if not b64 or mime not in {"image/png", "image/jpeg"}:
+            continue
+        items.append({"base64": b64, "mime_type": mime, "url": url})
+    return items[:4]
+
+
+def _save_preset_image_cache(asin: str, items: list) -> None:
+    if not asin or not items:
+        return
+    try:
+        _PRESET_IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = _PRESET_IMAGE_CACHE_DIR / f"{asin}.json"
+        path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        # Best-effort cache only; never block request on cache failure.
+        return
+
+
+def _fetch_image_with_headers_as_base64(image_url: str, proxy: str, build_proxies: Callable) -> Tuple[str, str]:
+    headers_variants = [
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Referer": "https://www.amazon.com/",
+        },
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "image/*,*/*;q=0.8",
+        },
+    ]
+    last_err = None
+    for headers in headers_variants:
+        try:
+            resp = requests.get(
+                image_url,
+                timeout=20,
+                headers=headers,
+                proxies=build_proxies(proxy),
+            )
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip().lower()
+            if content_type not in {"image/png", "image/jpeg"}:
+                content_type = "image/jpeg"
+            b64 = base64.b64encode(resp.content).decode("utf-8")
+            return b64, content_type
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(str(last_err or "image fetch failed"))
 
 
 def _execute_agent_tool(tool_name: str, arguments: dict, timeout_seconds: float = 30.0,
@@ -472,8 +587,14 @@ def register_agent_routes(
             proxy = req.proxy
             language = req.language
 
+            asin = _extract_amazon_asin(product_url)
+            canonical_url = (
+                _AMAZON_STRONG_MATCH_PRESETS.get(asin, {}).get("canonical_url")
+                if asin else ""
+            ) or product_url
+
             # Cache hit: skip scraping + image fetching entirely
-            _cache_key = make_cache_key(product_url)
+            _cache_key = make_cache_key(canonical_url)
             _cached = product_insight_cache.get(_cache_key)
             if _cached is not None:
                 audit_log.record(
@@ -486,7 +607,81 @@ def register_agent_routes(
                 )
                 return jsonify({**_cached, "cache_hit": True})
 
-            platform = guess_platform_by_url(product_url)
+            # Strong-match fast path for known Amazon ASINs (stable quality + lower latency).
+            preset = _AMAZON_STRONG_MATCH_PRESETS.get(asin)
+            if preset:
+                image_items = _load_preset_image_cache(asin)
+                if not image_items:
+                    try:
+                        from shoplive.backend.async_executor import parallel_fetch_images
+                        parallel_results = parallel_fetch_images(
+                            preset.get("image_urls", [])[:4],
+                            proxy,
+                            fetch_fn=fetch_image_as_base64,
+                            max_images=4,
+                            timeout_seconds=45,
+                        )
+                        image_items = [
+                            {"base64": r["base64"], "mime_type": r["mime_type"], "url": r["url"]}
+                            for r in parallel_results if r["ok"]
+                        ]
+                    except Exception:
+                        image_items = []
+                if not image_items:
+                    for _u in preset.get("image_urls", [])[:4]:
+                        try:
+                            _b64, _mime = _fetch_image_with_headers_as_base64(_u, proxy, build_proxies)
+                            image_items.append({"base64": _b64, "mime_type": _mime, "url": _u})
+                        except Exception:
+                            continue
+                if image_items:
+                    _save_preset_image_cache(asin, image_items[:4])
+
+                insight = {
+                    "product_name": preset.get("product_name", ""),
+                    "main_business": preset.get("main_business", "消费电子"),
+                    "style_template": preset.get("style_template", "clean"),
+                    "selling_points": preset.get("selling_points", [])[:6],
+                    "target_user": preset.get("target_user", ""),
+                    "sales_region": preset.get("sales_region", ""),
+                    "brand_direction": preset.get("brand_direction", ""),
+                    "product_anchors": preset.get("product_anchors", {}),
+                    "review_highlights": [],
+                    "review_positive_points": [],
+                    "review_negative_points": [],
+                    "review_summary": "",
+                    "image_urls": preset.get("image_urls", [])[:10],
+                    "image_items": image_items,
+                    "platform": "amazon",
+                    "price": "",
+                    "currency": "",
+                    "fetch_source": "preset_strong_match",
+                    "fetch_confidence": "high",
+                    "main_image_confidence": "high" if image_items else "medium",
+                    "review_extraction_method": "preset",
+                }
+                _result = {
+                    "ok": True,
+                    "status_code": 200,
+                    "url": canonical_url,
+                    "insight": insight,
+                    "source": "preset_strong_match",
+                    "confidence": "high",
+                    "fallback_reason": "",
+                    "cache_hit": False,
+                }
+                product_insight_cache.set(_cache_key, _result)
+                audit_log.record(
+                    tool="parse_product_url",
+                    action="strong_match_preset",
+                    input_summary={"asin": asin, "url_domain": urlparse(product_url).netloc},
+                    output_summary={"image_count": len(image_items), "product_name": insight["product_name"][:80]},
+                    status="success",
+                    duration_ms=int((time.monotonic() - _t0) * 1000),
+                )
+                return jsonify(_result)
+
+            platform = guess_platform_by_url(canonical_url)
             parser = get_platform_parser(platform)
             js_first_platforms = {"amazon", "tiktok-shop", "temu"}
             wait_ms_by_platform = {"amazon": 3800, "tiktok-shop": 4200, "temu": 3600}
@@ -495,9 +690,9 @@ def register_agent_routes(
                 if fetch_artifact.status_code >= 400 or not fetch_artifact.html:
                     return ParseResult(platform=platform, source=fetch_artifact.engine, confidence="low")
                 if parser is parse_generic_page:
-                    result = parser(fetch_artifact.url or product_url, fetch_artifact.html, platform)
+                    result = parser(fetch_artifact.url or canonical_url, fetch_artifact.html, platform)
                 else:
-                    result = parser(fetch_artifact.url or product_url, fetch_artifact.html)
+                    result = parser(fetch_artifact.url or canonical_url, fetch_artifact.html)
                 result.source = fetch_artifact.engine
                 return result
 
@@ -567,7 +762,7 @@ def register_agent_routes(
 
             if platform in js_first_platforms:
                 fetch_pw = fetch_html_with_playwright(
-                    product_url,
+                    canonical_url,
                     proxy,
                     platform=platform,
                     wait_ms=wait_ms_by_platform.get(platform, 3200),
@@ -580,7 +775,7 @@ def register_agent_routes(
                 if platform == "amazon" and fetch_pw.failure_tag in {"weak_html", "anti_bot"}:
                     needs_requests = True
                 if needs_requests:
-                    fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
+                    fetch_req = fetch_html_with_requests(canonical_url, proxy, build_proxies)
                     parsed_req = parse_with_artifact(fetch_req)
                     if _artifact_quality(fetch_req, parsed_req) >= _artifact_quality(fetch_pw, parsed):
                         # requests result is better: use as primary, merge playwright into it
@@ -590,7 +785,7 @@ def register_agent_routes(
                         parsed = _merge_results(parsed, parsed_req)
                     fallback_reason = fetch_req.failure_tag or fetch_req.error or fallback_reason
             else:
-                fetch_req = fetch_html_with_requests(product_url, proxy, build_proxies)
+                fetch_req = fetch_html_with_requests(canonical_url, proxy, build_proxies)
                 parsed = parse_with_artifact(fetch_req)
                 fallback_reason = fetch_req.failure_tag or fetch_req.error or ""
                 needs_playwright = bool(fetch_req.anti_bot) or parsed.confidence == "low"
@@ -598,7 +793,7 @@ def register_agent_routes(
                     needs_playwright = True
                 if needs_playwright:
                     fetch_pw = fetch_html_with_playwright(
-                        product_url,
+                        canonical_url,
                         proxy,
                         platform=platform,
                         wait_ms=wait_ms_by_platform.get(platform, 2200),
@@ -620,10 +815,10 @@ def register_agent_routes(
 
             if not parsed.product_name:
                 try:
-                    path = urlparse(product_url).path or ""
+                    path = urlparse(canonical_url).path or ""
                     slug = path.strip("/").split("/")[-1]
                     if not slug or slug.lower() in {"item.htm", "item.html", "goods.html"}:
-                        qid = re.search(r"[?&](?:id|goods_id)=([0-9a-zA-Z_-]+)", product_url)
+                        qid = re.search(r"[?&](?:id|goods_id)=([0-9a-zA-Z_-]+)", canonical_url)
                         if qid:
                             slug = f"{platform} {qid.group(1)}"
                     slug = re.sub(r"\.(html|htm)$", "", slug, flags=re.IGNORECASE)
@@ -674,7 +869,7 @@ def register_agent_routes(
             _result = {
                 "ok": True,
                 "status_code": 200,
-                "url": product_url,
+                "url": canonical_url,
                 "insight": insight,
                 "source": parsed.source,
                 "confidence": parsed.confidence,

@@ -375,6 +375,7 @@ input:not([type]) {
   gap: 8px;
 }
 
+.ltxv-engine-row,
 .ltxv-model-row,
 .ltxv-ratio-row,
 .ltxv-fps-row {
@@ -504,11 +505,13 @@ input:not([type]) {
 }
 
 .ltxv-video-player {
-  width: 100%;
-  max-height: 420px;
+  max-width: 100%;
+  max-height: 70vh;
   border-radius: 10px;
   background: #000;
   display: block;
+  margin: 0 auto;
+  object-fit: contain;
 }
 
 .ltxv-actions {

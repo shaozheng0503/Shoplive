@@ -4119,6 +4119,8 @@ async function parseShopProductByUrl(inputUrl = "") {
     const firstUrlMatch = cleaned.match(/https?:\/\/[^\s]+/i);
     const picked = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : cleaned;
     if (/^www\./i.test(picked)) return `https://${picked}`;
+    // Allow bare domains like amazon.com/xxx by auto-prepending scheme.
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/|$)/i.test(picked)) return `https://${picked}`;
     return picked;
   };
   const inferProductNameFromUrl = (rawUrl = "") => {
