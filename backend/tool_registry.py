@@ -319,6 +319,7 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                     "vibrance (float -1.0–1.0), "
                     "temp (float -1.0–1.0, color temperature warm/cool), "
                     "tint (float -1.0–1.0), "
+                    "contrast (float -30 to 30, direct contrast boost, 0=no change), "
                     "fadeIn (float 0–3.0, seconds of fade-in from black at the start), "
                     "fadeOut (float 0–3.0, seconds of fade-out to black at the end), "
                     "maskText (string, text to burn into the video frame — use this field name exactly, NOT 'text_overlay'), "

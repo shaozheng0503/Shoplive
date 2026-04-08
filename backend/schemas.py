@@ -490,6 +490,7 @@ class VideoEditExportRequest(BaseModel):
             "vibrance (-30 to 30, brightness/vibrance), "
             "temp (-30 to 30, colour temperature), "
             "tint (-30 to 30, colour tint/hue), "
+            "contrast (-30 to 30, direct contrast boost independent of temp), "
             "fadeIn (0-3.0 s, fade-in duration at start), "
             "fadeOut (0-3.0 s, fade-out duration at end), "
             "maskText (text overlay string), "
