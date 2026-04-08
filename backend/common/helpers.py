@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import random
 import re
 import subprocess
 import tempfile
@@ -133,11 +134,19 @@ def download_video_to_file(video_url: str, output_file: Path, proxy: str):
         output_file.write_bytes(decoded)
         return
     if raw.startswith("http://") or raw.startswith("https://"):
+        _MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
         resp = requests.get(raw, timeout=180, proxies=build_proxies(proxy), stream=True)
         resp.raise_for_status()
+        content_length = int(resp.headers.get("Content-Length") or 0)
+        if content_length and content_length > _MAX_VIDEO_BYTES:
+            raise ValueError(f"视频文件过大 ({content_length / 1e9:.1f} GB)，超出下载上限 2 GB")
+        downloaded = 0
         with output_file.open("wb") as f:
             for chunk in resp.iter_content(chunk_size=1024 * 256):
                 if chunk:
+                    downloaded += len(chunk)
+                    if downloaded > _MAX_VIDEO_BYTES:
+                        raise ValueError("视频下载中途超出大小上限 2 GB")
                     f.write(chunk)
         return
     raise ValueError("video_url 仅支持 http(s) 或 data:video/* base64")
@@ -469,14 +478,14 @@ def call_litellm_chat(
                 if _is_retryable_litellm_status(resp):
                     last_retryable_status = resp.status_code
                     if total_attempt < total_attempt_slots:
-                        time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                        time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)) * (0.5 + random.random() * 0.5))
                         continue
                 data = _safe_response_body(resp)
                 return resp.status_code, {"ok": resp.ok, "status_code": resp.status_code, "response": data}
             except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 last_exception = e
                 if total_attempt < total_attempt_slots:
-                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)) * (0.5 + random.random() * 0.5))
                     continue
 
     if last_exception is not None:
@@ -542,7 +551,7 @@ def call_litellm_chat_stream(
                     if _is_retryable_litellm_status(resp):
                         last_retryable_status = resp.status_code
                         if total_attempt < total_attempt_slots:
-                            time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                            time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)) * (0.5 + random.random() * 0.5))
                             continue
                     if not resp.ok:
                         content_type = (resp.headers.get("content-type", "") or "").lower()
@@ -590,7 +599,7 @@ def call_litellm_chat_stream(
             except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 last_exception = e
                 if total_attempt < total_attempt_slots:
-                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)))
+                    time.sleep(0.8 * (2 ** min(total_attempt - 1, 4)) * (0.5 + random.random() * 0.5))
                     continue
 
     if last_exception is not None:

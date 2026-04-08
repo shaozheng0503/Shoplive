@@ -279,6 +279,9 @@ export function setupMaskDrag(surface) {
   surface.dataset.maskDragBound = "1";
   let dragging = false;
   let startX, startY, startPx, startPy;
+  // Slider refs cached once on pointerdown — avoids 4× querySelector per move frame
+  let _xr = null, _yr = null, _xv = null, _yv = null;
+
   surface.addEventListener("pointerdown", (ev) => {
     const overlay = surface.querySelector(".video-subtitle-overlay");
     if (!overlay) return;
@@ -292,32 +295,46 @@ export function setupMaskDrag(surface) {
     startPx = ev.clientX;
     startPy = ev.clientY;
     overlay.style.cursor = "grabbing";
+    // Cache panel element refs once per drag (panel may not be open)
+    const panel = document.getElementById("videoEditorPanel");
+    _xr = panel?.querySelector("#maskXRange") ?? null;
+    _yr = panel?.querySelector("#maskYRange") ?? null;
+    _xv = panel?.querySelector("#maskXVal") ?? null;
+    _yv = panel?.querySelector("#maskYVal") ?? null;
   });
+
   surface.addEventListener("pointermove", (ev) => {
     if (!dragging) return;
     const sr = surface.getBoundingClientRect();
-    const dx = ((ev.clientX - startPx) / sr.width) * 100;
-    const dy = ((ev.clientY - startPy) / sr.height) * 100;
-    state.videoEdit.x = Math.max(0, Math.min(95, startX + dx));
-    state.videoEdit.y = Math.max(0, Math.min(95, startY + dy));
-    applyVideoEditsToPreview();
-    // Sync sliders + display values in editor panel if open
-    const xr = document.getElementById("videoEditorPanel")?.querySelector("#maskXRange");
-    const yr = document.getElementById("videoEditorPanel")?.querySelector("#maskYRange");
-    const xv = document.getElementById("videoEditorPanel")?.querySelector("#maskXVal");
-    const yv = document.getElementById("videoEditorPanel")?.querySelector("#maskYVal");
-    const rx = Math.round(state.videoEdit.x);
-    const ry = Math.round(state.videoEdit.y);
-    if (xr) xr.value = String(rx);
-    if (yr) yr.value = String(ry);
-    if (xv) xv.textContent = `${rx}%`;
-    if (yv) yv.textContent = `${ry}%`;
+    const nx = Math.max(0, Math.min(95, startX + ((ev.clientX - startPx) / sr.width) * 100));
+    const ny = Math.max(0, Math.min(95, startY + ((ev.clientY - startPy) / sr.height) * 100));
+    state.videoEdit.x = nx;
+    state.videoEdit.y = ny;
+    // Fast path: only move the overlay element — skip full applyVideoEditsToPreview()
+    // (which does DOM traversal, filter recompute, BGM sync, etc. on every frame).
+    // Full sync happens once on pointerup.
+    const overlay = surface.querySelector(".video-subtitle-overlay");
+    if (overlay) {
+      overlay.style.left = `${nx}%`;
+      overlay.style.top = `${ny}%`;
+    }
+    // Update cached slider refs (no querySelector per frame)
+    const rx = Math.round(nx);
+    const ry = Math.round(ny);
+    if (_xr) _xr.value = String(rx);
+    if (_yr) _yr.value = String(ry);
+    if (_xv) _xv.textContent = `${rx}%`;
+    if (_yv) _yv.textContent = `${ry}%`;
   });
+
   const endDrag = () => {
     if (!dragging) return;
     dragging = false;
+    _xr = _yr = _xv = _yv = null;  // release cached refs
     const overlay = surface.querySelector(".video-subtitle-overlay");
     if (overlay) overlay.style.cursor = "grab";
+    // One full sync after drag ends to apply any side-effects (export state etc.)
+    applyVideoEditsToPreview();
   };
   surface.addEventListener("pointerup", endDrag);
   surface.addEventListener("pointercancel", endDrag);
@@ -399,7 +416,9 @@ export function applyVideoEditsToPreview() {
     const hue = colorActive ? clampNum(Number(fx.tint || 0) * 1.8, -45, 45) : 0;
     video.playbackRate = speed;
     video.volume = bgmVolume;
-    video.style.filter = `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`;
+    // Skip style recalculation when filter hasn't changed (common during position drags)
+    const _newFilter = `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`;
+    if (video.style.filter !== _newFilter) video.style.filter = _newFilter;
 
     surface.querySelector(".video-bgm-badge")?.remove();
 

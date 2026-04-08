@@ -2,6 +2,15 @@ import { state } from './state.js';
 import { currentLang, t } from './i18n.js';
 import { getApiBase, toAbsoluteVideoUrl, postJson, postSse } from './utils.js';
 
+// ---------------------------------------------------------------------------
+// Single global dispatcher for inline onclick= handlers in dynamic HTML.
+// Replaces the old per-operation window[`__xxx_${id}`] pattern which leaked
+// one global key per call and was never cleaned up.
+// ---------------------------------------------------------------------------
+const _cbRegistry = new Map();
+window.__shopliveCb = (key) => { _cbRegistry.get(key)?.(); };
+const _cbCleanup = (...keys) => keys.forEach((k) => _cbRegistry.delete(k));
+
 // Callbacks injected by index.js to break circular dependencies
 let _pushSystemStateMsg = () => null;
 let _pushSystemGuideMsg = () => null;
@@ -311,7 +320,8 @@ export function applySubtitleStyleToCurrentVideo({ color, position }) {
   };
 
   const confirmId = `preview-confirm-${Date.now()}`;
-  window[`__previewConfirm_${confirmId}`] = async () => {
+  _cbRegistry.set(`${confirmId}:ok`, async () => {
+    _cbCleanup(`${confirmId}:ok`, `${confirmId}:cancel`);
     const fn = state.pendingEditExport;
     state.pendingEditExport = null;
     document.getElementById(confirmId)?.remove();
@@ -323,17 +333,18 @@ export function applySubtitleStyleToCurrentVideo({ color, position }) {
     } catch (_e) {
       _pushSystemStateMsg(t("subtitleStyleExportFail"), "blocked");
     }
-  };
-  window[`__previewCancel_${confirmId}`] = () => {
+  });
+  _cbRegistry.set(`${confirmId}:cancel`, () => {
+    _cbCleanup(`${confirmId}:ok`, `${confirmId}:cancel`);
     state.pendingEditExport = null;
     document.getElementById(confirmId)?.remove();
     _pushSystemStateMsg(t("subtitleStyleCancelled"), "done");
-  };
+  });
 
   _pushSystemGuideMsg(
     `${t("subtitleStyleApplied")} <span id="${confirmId}" style="display:inline-flex;gap:6px;margin-top:6px;">` +
-    `<button class="action-chip-btn" onclick="window['__previewConfirm_${confirmId}']()">${t("subtitleStyleConfirmBtn")}</button>` +
-    `<button class="action-chip-btn" onclick="window['__previewCancel_${confirmId}']()">${t("subtitleStyleCancelBtn")}</button>` +
+    `<button class="action-chip-btn" onclick="window.__shopliveCb('${confirmId}:ok')">${t("subtitleStyleConfirmBtn")}</button>` +
+    `<button class="action-chip-btn" onclick="window.__shopliveCb('${confirmId}:cancel')">${t("subtitleStyleCancelBtn")}</button>` +
     `</span>`
   );
 }
@@ -389,7 +400,9 @@ export async function applyAsrSubtitlesToCurrentVideo() {
     if (subs.length > 8) lines.push(`… (+${subs.length - 8} more)`);
     const listHtml = lines.map((l) => `<div style="font-size:12px;opacity:0.85;margin:2px 0">${l}</div>`).join("");
 
-    window[`__asrApply_${confirmId}`] = async () => {
+    _cbRegistry.set(`${confirmId}:apply`, async () => {
+      // apply is one-time — clean up both keys
+      _cbCleanup(`${confirmId}:apply`, `${confirmId}:copy`);
       document.getElementById(confirmId)?.remove();
       const applyBubble = _pushSystemStateMsg(
         zh ? `🖊️ 正在将 ${subs.length} 条字幕批量写入视频…` : `🖊️ Burning ${subs.length} subtitles into video…`,
@@ -430,19 +443,20 @@ export async function applyAsrSubtitlesToCurrentVideo() {
         if (bodyEl2) bodyEl2.textContent = zh ? "❌ 字幕写入失败" : "❌ Subtitle burn failed";
         applyBubble?.classList.replace("status-tone-progress", "status-tone-blocked");
       }
-    };
-    window[`__asrCopy_${confirmId}`] = () => {
+    });
+    // copy is idempotent — keep in registry so user can press it multiple times
+    _cbRegistry.set(`${confirmId}:copy`, () => {
       const text = subs.map((s) => `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text}`).join("\n");
       navigator.clipboard?.writeText(text).then(() => {
         _pushSystemStateMsg(zh ? "已复制字幕到剪贴板" : "Subtitles copied to clipboard", "done");
       });
-    };
+    });
 
     _pushSystemGuideMsg(
       `${zh ? "🎙️ 识别到以下字幕：" : "🎙️ Detected subtitles:"}\n${listHtml}` +
       `<span id="${confirmId}" style="display:inline-flex;gap:6px;margin-top:8px;">` +
-      `<button class="action-chip-btn" onclick="window['__asrApply_${confirmId}']()">${zh ? "全部写入视频" : "Burn all"}</button>` +
-      `<button class="action-chip-btn" onclick="window['__asrCopy_${confirmId}']()">${zh ? "复制全部" : "Copy all"}</button>` +
+      `<button class="action-chip-btn" onclick="window.__shopliveCb('${confirmId}:apply')">${zh ? "全部写入视频" : "Burn all"}</button>` +
+      `<button class="action-chip-btn" onclick="window.__shopliveCb('${confirmId}:copy')">${zh ? "复制全部" : "Copy all"}</button>` +
       `</span>`
     );
   } catch (e) {
