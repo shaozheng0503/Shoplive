@@ -25,7 +25,7 @@ from flask import g, jsonify, request, send_from_directory
 from shoplive.backend.audit import audit_log
 
 _DEFAULT_COMFYUI_URL = "https://development-452-9smwwyd2-8188.550w.link"
-_POLL_INTERVAL = 5
+_POLL_INTERVAL = 2   # lowered from 5 s — ComfyUI is local/LAN, round-trip ~10ms
 _MAX_WAIT = 1200  # 20 min — queue wait + generation for 16s
 
 

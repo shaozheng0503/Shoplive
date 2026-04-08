@@ -174,7 +174,9 @@ def register_veo_routes(
 
     def _vertex_post(url: str, headers: Dict, body: Dict, proxy: str) -> requests.Response:
         sess = _get_vertex_session(proxy)
-        return sess.post(url, headers=headers, json=body, timeout=90,
+        # (connect_timeout=15s, read_timeout=90s) — fail fast on unreachable host,
+        # but give the API time to respond once connected.
+        return sess.post(url, headers=headers, json=body, timeout=(15, 90),
                          proxies=build_proxies(proxy))
 
     def _call_predict_long_running(*, project_id: str, model: str, token: str, proxy: str, body: Dict):
@@ -210,6 +212,10 @@ def register_veo_routes(
         data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
         return resp.status_code, resp.ok, data
 
+    # Adaptive poll intervals: start fast (3 s) to catch quick completions,
+    # then slow down to reduce API quota usage.  Index = poll attempt number.
+    _POLL_ADAPTIVE = [3, 5, 8, 12, 12]  # seconds; last value repeats
+
     def _poll_video_ready(
         *,
         project_id: str,
@@ -217,17 +223,19 @@ def register_veo_routes(
         token: str,
         proxy: str,
         operation_name: str,
-        poll_interval_seconds: int = 6,
+        poll_interval_seconds: int = 6,   # kept for callers that pass it explicitly
         max_wait_seconds: int = 720,
-        initial_wait_seconds: int = int(os.environ.get("VEO_POLL_INITIAL_WAIT", "20")),
+        initial_wait_seconds: int = int(os.environ.get("VEO_POLL_INITIAL_WAIT", "12")),
     ):
         started = time.time()
         last_data = {}
-        # Veo requires at least ~30s to start generating; skip early polls to
-        # conserve API quota (saves 3-5 wasted calls per video).
+        # Veo needs ~20-30 s to start generating; skip early polls to save quota.
+        # Lowered default from 20 s → 12 s: a few extra 404s cost less than the
+        # extra 8 s of perceived latency.
         if initial_wait_seconds > 0:
             time.sleep(min(initial_wait_seconds, max_wait_seconds))
-        current_interval = float(poll_interval_seconds)
+        poll_count = 0
+        current_interval = float(_POLL_ADAPTIVE[0])
         while time.time() - started <= max_wait_seconds:
             resp_code, _, op_data = _call_fetch_predict_operation(
                 project_id=project_id,
@@ -247,11 +255,12 @@ def register_veo_routes(
                 return video_uris[0], op_data
             if op_data.get("done") and op_error:
                 raise RuntimeError(op_error)
-            # Exponential backoff on transient errors (429 / 5xx)
+            # Exponential back-off on transient errors; adaptive ramp otherwise.
             if resp_code in (429, 500, 502, 503, 504):
                 current_interval = min(current_interval * 1.5, 60.0)
             else:
-                current_interval = float(poll_interval_seconds)
+                current_interval = float(_POLL_ADAPTIVE[min(poll_count, len(_POLL_ADAPTIVE) - 1)])
+            poll_count += 1
             time.sleep(max(1, current_interval))
         raise TimeoutError(f"Veo operation 超时（>{max_wait_seconds}s）: {operation_name}")
 
@@ -1872,17 +1881,19 @@ def register_veo_routes(
         token: str,
         proxy: str,
         operation_name: str,
-        poll_interval_seconds: int = 8,
+        poll_interval_seconds: int = 8,   # kept for call-site compatibility
         max_wait_seconds: int = 720,
-        initial_wait_seconds: int = 30,
+        initial_wait_seconds: int = 12,   # lowered from 30 s — same model, same SLA as GCS path
     ) -> Tuple[bytes, Dict]:
         """Poll until video is ready, return (mp4_bytes, raw_data).
 
         Works for inline-video responses (no storage_uri needed).
+        Uses the same adaptive polling schedule as _poll_video_ready.
         """
         started = time.time()
         if initial_wait_seconds > 0:
             time.sleep(min(initial_wait_seconds, max_wait_seconds))
+        poll_count = 0
         while time.time() - started <= max_wait_seconds:
             _, _, op_data = _call_fetch_predict_operation(
                 project_id=project_id, model=model, token=token,
@@ -1908,7 +1919,9 @@ def register_veo_routes(
                    or op_data.get("response", {}).get("error", {}).get("message") or "")
             if op_data.get("done") and err:
                 raise RuntimeError(f"Veo generation failed: {err}")
-            time.sleep(poll_interval_seconds)
+            interval = float(_POLL_ADAPTIVE[min(poll_count, len(_POLL_ADAPTIVE) - 1)])
+            poll_count += 1
+            time.sleep(interval)
         raise TimeoutError(f"Veo poll timeout (>{max_wait_seconds}s)")
 
     def _extract_last_frame(mp4_bytes: bytes) -> Tuple[str, str]:

@@ -119,40 +119,60 @@ class _TokenCache:
     Implements the article's "Secretless" concept:
     - Tokens are cached and reused until near expiry
     - Auto-refresh on access when within TTL buffer
-    - Thread-safe with lock protection
+    - Thread-safe with lock protection; concurrent requests for the same key_file
+      wait for the first refresh instead of all triggering independent refreshes
     - Metrics tracking for observability
     """
 
     def __init__(self, ttl_buffer_seconds: int = 120):
         self._lock = threading.Lock()
-        self._cache: Dict[str, Dict] = {}  # key_file -> {creds, token, expiry, proxy}
+        self._cache: Dict[str, Dict] = {}  # key_file -> {token, expiry, refreshed_at}
         self._ttl_buffer = ttl_buffer_seconds
         self._stats = {"hits": 0, "misses": 0, "refreshes": 0}
+        # Per-key refresh events: other threads wait on the event instead of
+        # triggering a second concurrent token refresh for the same key_file.
+        self._refreshing: Dict[str, threading.Event] = {}
 
     def get_token(self, key_file: str, proxy: str, timeout_seconds: int = 20) -> str:
         """Get a valid access token, using cache when possible."""
-        cache_key = key_file
-        now = time.time()
+        while True:
+            now = time.time()
+            with self._lock:
+                cached = self._cache.get(key_file)
+                if cached and cached.get("token") and cached.get("expiry", 0) > now + self._ttl_buffer:
+                    self._stats["hits"] += 1
+                    return cached["token"]
+                # Another thread is already refreshing this key — wait for it.
+                if key_file in self._refreshing:
+                    ev = self._refreshing[key_file]
+                else:
+                    # We won the race — register ourselves as the refresher.
+                    ev = threading.Event()
+                    self._refreshing[key_file] = ev
+                    self._stats["misses"] += 1
+                    break  # exit loop, proceed to refresh below
 
-        with self._lock:
-            cached = self._cache.get(cache_key)
-            if cached and cached.get("token") and cached.get("expiry", 0) > now + self._ttl_buffer:
-                self._stats["hits"] += 1
-                return cached["token"]
-            self._stats["misses"] += 1
+            # Release lock and wait for the in-progress refresh to finish.
+            ev.wait(timeout=timeout_seconds + 5)
+            # Loop back: the cache should now be warm; if not, retry.
 
-        # Cache miss or expired — refresh
-        token = self._refresh_token(key_file, proxy, timeout_seconds)
-
-        with self._lock:
-            self._cache[cache_key] = {
-                "token": token,
-                "expiry": now + 3500,  # Google tokens typically valid for 3600s
-                "refreshed_at": now,
-            }
-            self._stats["refreshes"] += 1
-
-        return token
+        # Only one thread per key_file reaches here at a time.
+        try:
+            token = self._refresh_token(key_file, proxy, timeout_seconds)
+            now = time.time()
+            with self._lock:
+                self._cache[key_file] = {
+                    "token": token,
+                    "expiry": now + 3500,  # Google tokens valid ~3600 s
+                    "refreshed_at": now,
+                }
+                self._stats["refreshes"] += 1
+            return token
+        finally:
+            # Signal waiting threads and remove the in-progress marker.
+            with self._lock:
+                self._refreshing.pop(key_file, None)
+            ev.set()
 
     def _refresh_token(self, key_file: str, proxy: str, timeout_seconds: int) -> str:
         """Refresh the token using the original multi-proxy strategy."""
