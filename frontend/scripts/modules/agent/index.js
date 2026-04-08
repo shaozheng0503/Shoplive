@@ -32,6 +32,14 @@ const composerCompact = document.querySelector(".composer.composer-compact");
 const workspaceToolbar = document.querySelector(".workspace-toolbar");
 const scriptEditorPanel = document.getElementById("scriptEditorPanel");
 const videoEditorPanel = document.getElementById("videoEditorPanel");
+
+// Pause chat-card videos that scroll out of view; resume when they return.
+// Prevents off-screen videos from consuming GPU decode + memory bandwidth.
+const _chatVideoObserver = new IntersectionObserver((entries) => {
+  entries.forEach(({ target: v, isIntersecting }) => {
+    if (!isIntersecting && !v.paused) v.pause();
+  });
+}, { rootMargin: "120px" }); // 120px buffer: pause slightly before fully off-screen
 const toggleScriptTab = document.getElementById("toggleScriptTab");
 const toggleVideoTab = document.getElementById("toggleVideoTab");
 const queryParams = new URLSearchParams(window.location.search);
@@ -3044,6 +3052,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   // properties here to avoid overriding the .workspace .chat-list .video-msg video rule.
   video.style.cssText = "display:block;object-fit:contain;border-radius:14px;background:#000;";
   video.src = finalPlayableUrl;
+  _chatVideoObserver.observe(video); // pause when scrolled out of view
   let idx = 0;
   let refreshedByOp = false;
   const syncResolvedVideoUrl = (resolvedUrl) => {

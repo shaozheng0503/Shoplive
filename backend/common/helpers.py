@@ -109,9 +109,13 @@ def parse_generic_data_url(data_url: str, accepted_prefix: str) -> Tuple[str, st
 
 def escape_drawtext_text(value: str) -> str:
     txt = str(value or "")
+    # Strip control characters and zero-width Unicode that confuse ffmpeg's
+    # drawtext parser (RTL marks, BOM, zero-width joiners, etc.)
+    txt = "".join(c for c in txt if ord(c) >= 32 or c == "\t")
     txt = txt.replace("\\", "\\\\")
     txt = txt.replace(":", "\\:")
     txt = txt.replace("'", "\\'")
+    txt = txt.replace('"', '\\"')   # double-quotes break drawtext filter string
     txt = txt.replace("%", "\\%")
     txt = txt.replace("\n", "\\n")
     return txt
@@ -1314,6 +1318,7 @@ def download_gcs_blob_to_file(
     output_path: Path,
     key_file: str,
     project_id: str = "qy-shoplazza-02",
+    _max_attempts: int = 3,
 ) -> Path:
     m = re.match(r"^gs://([^/]+)/(.+)$", gcs_uri)
     if not m:
@@ -1322,8 +1327,16 @@ def download_gcs_blob_to_file(
     # Reuse the lru_cache'd client to avoid re-reading the key file on every download
     client = _get_gcs_client(key_file)
     blob = client.bucket(bucket_name).blob(blob_name)
-    blob.download_to_filename(str(output_path))
-    return output_path
+    last_exc: Exception = RuntimeError("download_gcs_blob_to_file: no attempts made")
+    for attempt in range(_max_attempts):
+        try:
+            blob.download_to_filename(str(output_path))
+            return output_path
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _max_attempts - 1:
+                time.sleep((0.5 + random.random() * 0.5) * (attempt + 1))
+    raise last_exc
 
 
 def _build_prompt_split_system(segment_duration: int, total_duration: int) -> str:

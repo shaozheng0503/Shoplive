@@ -3,6 +3,7 @@ import re
 import json
 import html
 import logging
+import threading
 import time
 import base64
 from urllib.parse import urljoin, urlparse
@@ -17,6 +18,11 @@ from shoplive.backend.async_executor import get_executor
 
 from shoplive.backend.audit import audit_log
 from shoplive.backend.async_executor import make_cache_key, product_insight_cache
+
+# Per-URL in-flight events: prevents concurrent requests for the same product URL
+# from each launching a full scrape + LLM analysis independently.
+_insight_inflight: dict = {}
+_insight_inflight_lock = threading.Lock()
 from shoplive.backend.validation import validate_request
 from shoplive.backend.schemas import (
     AgentChatRequest,
@@ -610,6 +616,23 @@ def register_agent_routes(
                 )
                 return jsonify({**_cached, "cache_hit": True})
 
+            # Concurrent-request deduplication: if another thread is already scraping
+            # this URL, wait for it to finish and return the cached result instead of
+            # launching a second parallel scrape (saves scraper quota + LLM cost).
+            _inflight_ev = None
+            with _insight_inflight_lock:
+                if _cache_key in _insight_inflight:
+                    _inflight_ev = _insight_inflight[_cache_key]
+                else:
+                    _insight_inflight[_cache_key] = threading.Event()
+
+            if _inflight_ev is not None:
+                _inflight_ev.wait(timeout=120)
+                _cached = product_insight_cache.get(_cache_key)
+                if _cached is not None:
+                    return jsonify({**_cached, "cache_hit": True, "deduped": True})
+                # Other thread failed — fall through to our own attempt
+
             # Strong-match fast path for known Amazon ASINs (stable quality + lower latency).
             preset = _AMAZON_STRONG_MATCH_PRESETS.get(asin)
             if preset:
@@ -674,6 +697,9 @@ def register_agent_routes(
                     "cache_hit": False,
                 }
                 product_insight_cache.set(_cache_key, _result)
+                with _insight_inflight_lock:
+                    _ev = _insight_inflight.pop(_cache_key, None)
+                if _ev: _ev.set()
                 audit_log.record(
                     tool="parse_product_url",
                     action="strong_match_preset",
@@ -880,8 +906,15 @@ def register_agent_routes(
                 "cache_hit": False,
             }
             product_insight_cache.set(_cache_key, _result)
+            with _insight_inflight_lock:
+                _ev = _insight_inflight.pop(_cache_key, None)
+            if _ev: _ev.set()
             return jsonify(_result)
         except Exception as e:
+            # Always signal waiting threads on error so they don't block indefinitely
+            with _insight_inflight_lock:
+                _ev = _insight_inflight.pop(_cache_key, None)
+            if _ev: _ev.set()
             audit_log.record(
                 tool="parse_product_url",
                 action="scrape",
@@ -1424,9 +1457,16 @@ def register_agent_routes(
                 "max_rounds": max_rounds,
             })
 
+            # Hard cap on history depth: keep system prompt + last N messages.
+            # Prevents unbounded context growth in long multi-tool sessions.
+            _MAX_HISTORY = 60  # system[0] + last 59 messages (~30 rounds)
+
             try:
                 for round_num in range(1, max_rounds + 1):
                     rounds_used = round_num
+                    # Trim history before each LLM call (system prompt is always index 0)
+                    if len(messages) > _MAX_HISTORY:
+                        messages = messages[:1] + messages[-(_MAX_HISTORY - 1):]
                     yield _pack("thinking", {"round": round_num, "message": "calling LLM..."})
 
                     sc, wrap = _h.call_litellm_chat(
