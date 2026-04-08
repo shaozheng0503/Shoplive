@@ -310,7 +310,8 @@ body {
 }
 
 .video-msg video {
-  width: min(420px, 100%);
+  max-width: min(420px, 100%);
+  height: auto;
   margin-top: 8px;
   border-radius: 10px;
   border: 1px solid rgba(147, 178, 242, 0.34);
@@ -676,7 +677,8 @@ body {
 }
 
 .video-msg video {
-  width: min(420px, 100%);
+  max-width: min(420px, 100%);
+  height: auto;
   margin-top: 8px;
   border-radius: 10px;
   border: 1px solid rgba(147, 178, 242, 0.34);
@@ -1312,7 +1314,8 @@ body {
 }
 
 .video-msg video {
-  width: min(360px, 100%);
+  max-width: min(360px, 100%);
+  height: auto;
   border-radius: 10px;
   border: 1px solid #d7dfee;
   background: #000;
@@ -3383,9 +3386,12 @@ body {
 }
 
 .workspace .chat-list .video-msg video {
-  width: min(392px, 100%);
-  max-height: 280px;
-  min-height: 100px;
+  /* max-width + max-height + auto dimensions: browser preserves intrinsic ratio
+     for both 16:9 (≈220px tall at 392px wide) and 9:16 (≈270px wide at 480px tall) */
+  max-width: min(392px, 100%);
+  max-height: min(480px, 65vh);
+  width: auto;
+  height: auto;
   display: block;
   border-radius: 14px;
   border: 1px solid #d4e0f3;
