@@ -2,6 +2,9 @@ import { state } from './state.js';
 import { currentLang, t } from './i18n.js';
 import { getApiBase, toAbsoluteVideoUrl, postJson } from './utils.js';
 
+// Module-level RAF handle for editor playhead: survives renderVideoEditor() re-renders
+let _editorPlayheadRafId = null;
+
 // Callbacks injected by index.js (avoids circular deps)
 let _openEditorPanel = () => {};
 let _updateWorkspaceTabs = () => {};
@@ -462,7 +465,7 @@ export function applyVideoEditsToPreview() {
     const syncBgm = () => {
       const target = Number(video.currentTime || 0);
       if (!Number.isFinite(target)) return;
-      if (Math.abs((bgmAudio.currentTime || 0) - target) > 0.35) {
+      if (Math.abs((bgmAudio.currentTime || 0) - target) > 0.12) {
         try {
           bgmAudio.currentTime = target;
         } catch (_e) {}
@@ -483,13 +486,22 @@ export function applyVideoEditsToPreview() {
       video.addEventListener("pause", onPause);
       video.addEventListener("seeking", onSeek);
       video.addEventListener("seeked", onSeek);
-      video.addEventListener("timeupdate", onSeek);
+      // Intentionally NO "timeupdate" → onSeek: calling bgmAudio.play() on every
+      // timeupdate tick causes redundant Promise creation and audio state thrash.
+      // play/seeking/seeked are sufficient to keep BGM locked to video.
       video.addEventListener("ratechange", onRate);
       surface.dataset.bgmBound = "1";
       surface._bgmListeners = { onPlay, onPause, onSeek, onRate };
     }
     if (!surface.dataset.timelineFxBound) {
-      const onTimelineTick = () => applyVideoEditsToPreview();
+      const onTimelineTick = () => {
+        // Only re-apply when timeline keyframes are active (time-varying effects).
+        // Without keyframes, effects are constant — skipping avoids a full DOM
+        // traversal + redundant syncBgm() on every timeupdate tick.
+        const kf = state.videoEdit?.timeline?.keyframes || {};
+        if (!Object.values(kf).some((arr) => arr && arr.length >= 2)) return;
+        applyVideoEditsToPreview();
+      };
       video.addEventListener("timeupdate", onTimelineTick);
       video.addEventListener("seeking", onTimelineTick);
       video.addEventListener("seeked", onTimelineTick);
@@ -518,6 +530,8 @@ export function renderVideoEditor() {
   });
   if (_currentHash === state.videoEdit._renderHash && document.getElementById("videoEditorPanel")?.innerHTML) return;
   state.videoEdit._renderHash = _currentHash;
+  // Cancel stale playhead RAF from previous render (innerHTML replaces the video element)
+  if (_editorPlayheadRafId !== null) { cancelAnimationFrame(_editorPlayheadRafId); _editorPlayheadRafId = null; }
   if (typeof state.videoEdit._timelineKeydownHandler === "function") {
     window.removeEventListener("keydown", state.videoEdit._timelineKeydownHandler);
     state.videoEdit._timelineKeydownHandler = null;
@@ -617,7 +631,7 @@ export function renderVideoEditor() {
           `;
   const maxSec = getVideoDurationSec();
   const videoBlock = state.lastVideoUrl
-    ? `<div class="video-edit-surface"><video controls src="${state.lastVideoUrl}"></video></div>`
+    ? `<div class="video-edit-surface"><video controls preload="auto" playsinline src="${state.lastVideoUrl}"></video></div>`
     : `<div class="empty-video">${currentLang === "zh" ? "暂无视频，请先生成一次视频。" : "No video yet. Generate one first."}</div>`;
   document.getElementById("videoEditorPanel").innerHTML = `
     <div class="editor-head">
@@ -817,8 +831,8 @@ export function renderVideoEditor() {
     const actualMax = Number(playheadRange.max || maxSec);
     const sec = clampNum(Number(previewVideo.currentTime || 0), 0, actualMax);
     if (!Number.isFinite(sec)) return;
-    const curr = Number(playheadRange.value || 0);
-    if (Math.abs(curr - sec) < 0.05) return;
+    // No dead-zone threshold here: rAF calls this at ~60fps so tiny increments
+    // must be accepted; the syncingFromVideo flag prevents feedback loops.
     const snapped = snapTimelineSec(sec, 0.08);
     syncingFromVideo = true;
     state.videoEdit.timeline.playhead = snapped;
@@ -911,8 +925,27 @@ export function renderVideoEditor() {
   });
   updatePlayheadUI();
   if (previewVideo && !previewVideo.dataset.timelineSyncBound) {
-    previewVideo.addEventListener("timeupdate", syncPlayheadFromVideo);
+    // rAF-based smooth playhead: updates at ~60fps while playing, stops on pause/end.
+    // Falls back to seeked-event for manual scrubbing when video is paused.
+    const _startRaf = () => {
+      if (_editorPlayheadRafId !== null) return;
+      const rafLoop = () => {
+        syncPlayheadFromVideo();
+        _editorPlayheadRafId = (previewVideo && !previewVideo.paused && !previewVideo.ended)
+          ? requestAnimationFrame(rafLoop)
+          : null;
+      };
+      _editorPlayheadRafId = requestAnimationFrame(rafLoop);
+    };
+    const _stopRaf = () => {
+      if (_editorPlayheadRafId !== null) { cancelAnimationFrame(_editorPlayheadRafId); _editorPlayheadRafId = null; }
+    };
+    previewVideo.addEventListener("play", _startRaf);
+    previewVideo.addEventListener("pause", () => { _stopRaf(); syncPlayheadFromVideo(); });
+    previewVideo.addEventListener("ended", () => { _stopRaf(); syncPlayheadFromVideo(); });
     previewVideo.addEventListener("seeked", syncPlayheadFromVideo);
+    // If video is already playing when the editor panel opens, start RAF immediately
+    if (!previewVideo.paused && !previewVideo.ended) _startRaf();
     previewVideo.addEventListener("loadedmetadata", () => {
       // Update timeline max from actual video duration
       const actualDur = Number(previewVideo.duration || 0);

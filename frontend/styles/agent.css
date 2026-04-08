@@ -3392,6 +3392,7 @@ body {
   max-height: min(480px, 65vh);
   width: auto;
   height: auto;
+  object-fit: contain;
   display: block;
   border-radius: 14px;
   border: 1px solid #d4e0f3;

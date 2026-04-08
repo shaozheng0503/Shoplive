@@ -3029,9 +3029,10 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   video.controls = true;
   video.preload = "metadata";
   video.playsInline = true;
-  // width:100% + max-height lets portrait (9:16) videos show at natural AR in card view.
-  // object-fit:contain ensures black bars appear only at sides for landscape, not both axes.
-  video.style.cssText = "display:block;width:100%;max-height:360px;border-radius:14px;background:#000;object-fit:contain;";
+  // Let CSS handle sizing (max-width/max-height + width/height:auto) so both 16:9
+  // and 9:16 videos respect aspect ratio without distortion.  Only set decorative
+  // properties here to avoid overriding the .workspace .chat-list .video-msg video rule.
+  video.style.cssText = "display:block;object-fit:contain;border-radius:14px;background:#000;";
   video.src = finalPlayableUrl;
   let idx = 0;
   let refreshedByOp = false;
