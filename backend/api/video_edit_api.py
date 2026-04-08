@@ -494,7 +494,7 @@ def register_video_edit_routes(
             tint_val = _clamp_num(edits.get("tint", 0), -30, 30, 0)
             contrast_adj = _clamp_num(edits.get("contrast", 0), -30, 30, 0)
             mask_text = str(edits.get("maskText") or "").strip()
-            mask_opacity = _clamp_num(edits.get("opacity", 90), 0, 100, 90) / 100.0
+            mask_alpha = _clamp_num(edits.get("opacity", 90), 0, 100, 90) / 100.0  # 0.0-1.0
             _raw_color = str(edits.get("maskColor") or "#ffffff").strip()
             mask_color = _raw_color if _raw_color else "#ffffff"
             x_pct = _clamp_num(edits.get("x", 50), 0, 100, 50)
@@ -519,8 +519,11 @@ def register_video_edit_routes(
 
             sat = _clamp_num((100 + sat_val * 3) / 100.0, 0.2, 2.6, 1.0)
             bright = _clamp_num((100 + vibrance_val * 2 - 100) / 100.0, -0.6, 1.2, 0.0)
-            # contrast_adj adds a direct contrast boost on top of temp-derived contrast
-            contrast = _clamp_num((100 + abs(temp_val) * 1.2 + contrast_adj * 1.5) / 100.0, 0.2, 3.0, 1.0)
+            # Contrast: temperature bias (abs(temp) desaturates → more contrast)
+            # multiplied by a direct contrast_adj term so the two controls are independent.
+            temp_contrast  = 1.0 + abs(temp_val) * 0.012   # 0→1.0, 30→1.36
+            direct_contrast = 1.0 + contrast_adj * 0.015   # -30→0.55, 0→1.0, 30→1.45
+            contrast = _clamp_num(temp_contrast * direct_contrast, 0.2, 3.0, 1.0)
             hue = _clamp_num(tint_val * 1.8, -45, 45, 0)
             text_size = int(max(18, min(72, h_pct * 3.2)))
             text_y_expr = f"(H*{_fmt_float(y_pct / 100)}-text_h/2)"
@@ -617,7 +620,7 @@ def register_video_edit_routes(
                     enable_clause = f":enable='{mask_enable_expr}'" if (mask_mode == "ranged" and mask_enable_expr) else ""
                     video_filters.append(_build_drawtext_filter(
                         text=safe_text, fontsize=text_size,
-                        fontcolor=mask_color, alpha=mask_opacity,  # already 0-1 (divided at parse time)
+                        fontcolor=mask_color, alpha=mask_alpha,
                         x_expr=text_x_expr, y_expr=text_y_expr,
                         mask_style=mask_style, mask_font=mask_font,
                         enable_clause=enable_clause,
@@ -640,7 +643,7 @@ def register_video_edit_routes(
                         enable_sub = f":enable='between(t,{_fmt_float(sub_start, 3)},{_fmt_float(sub_end, 3)})'"
                         video_filters.append(_build_drawtext_filter(
                             text=safe_sub, fontsize=text_size,
-                            fontcolor=mask_color, alpha=mask_opacity,  # already 0-1 (divided at parse time)
+                            fontcolor=mask_color, alpha=mask_alpha,
                             x_expr=text_x_expr, y_expr=text_y_expr,
                             mask_style=mask_style, mask_font=mask_font,
                             enable_clause=enable_sub,

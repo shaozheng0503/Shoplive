@@ -107,19 +107,22 @@ def parse_generic_data_url(data_url: str, accepted_prefix: str) -> Tuple[str, st
     return m.group(2), m.group(1).lower()
 
 
+# Zero-width / invisible Unicode chars that survive the ord<32 filter but confuse
+# ffmpeg's drawtext parser (RTL marks, BOM, zero-width joiners, etc.).
+# Defined at module level so the frozenset is built once, not per call.
+_DRAWTEXT_ZERO_WIDTH = frozenset(
+    "\u200b\u200c\u200d\u200e\u200f"  # ZW space, NJ, J, LRM, RLM
+    "\ufeff\u2060\u2061\u2062\u2063"  # BOM, word-joiner, invisible operators
+    "\u034f"                           # combining grapheme joiner
+)
+
+
 def escape_drawtext_text(value: str) -> str:
     txt = str(value or "")
-    # Zero-width / invisible Unicode chars that confuse ffmpeg's drawtext parser
-    # (ord >= 32 so they survive the control-char filter below).
-    _ZERO_WIDTH = frozenset(
-        "\u200b\u200c\u200d\u200e\u200f"  # ZW space, NJ, J, LRM, RLM
-        "\ufeff\u2060\u2061\u2062\u2063"  # BOM, word-joiner, invisible operators
-        "\u034f"                           # combining grapheme joiner
-    )
     # Keep \n so it can be converted to literal \n below; allow \t; strip the rest < 32
     txt = "".join(
         c for c in txt
-        if (ord(c) >= 32 and c not in _ZERO_WIDTH) or c in ("\t", "\n")
+        if (ord(c) >= 32 and c not in _DRAWTEXT_ZERO_WIDTH) or c in ("\t", "\n")
     )
     txt = txt.replace("\\", "\\\\")
     txt = txt.replace(":", "\\:")

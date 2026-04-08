@@ -23,6 +23,21 @@ from shoplive.backend.async_executor import make_cache_key, product_insight_cach
 # from each launching a full scrape + LLM analysis independently.
 _insight_inflight: dict = {}
 _insight_inflight_lock = threading.Lock()
+
+
+def _cleanup_inflight_key(cache_key: str) -> None:
+    """Signal and remove an in-flight entry so waiting threads unblock."""
+    with _insight_inflight_lock:
+        ev = _insight_inflight.pop(cache_key, None)
+    if ev:
+        ev.set()
+
+
+# Maximum number of messages kept in /api/agent/run history (system prompt + N-1).
+# Prevents unbounded context growth in long multi-tool sessions.
+# Override via AGENT_MAX_HISTORY env var.
+import os as _os
+AGENT_MAX_HISTORY: int = int(_os.getenv("AGENT_MAX_HISTORY", "60"))
 from shoplive.backend.validation import validate_request
 from shoplive.backend.schemas import (
     AgentChatRequest,
@@ -697,9 +712,7 @@ def register_agent_routes(
                     "cache_hit": False,
                 }
                 product_insight_cache.set(_cache_key, _result)
-                with _insight_inflight_lock:
-                    _ev = _insight_inflight.pop(_cache_key, None)
-                if _ev: _ev.set()
+                _cleanup_inflight_key(_cache_key)
                 audit_log.record(
                     tool="parse_product_url",
                     action="strong_match_preset",
@@ -1457,16 +1470,12 @@ def register_agent_routes(
                 "max_rounds": max_rounds,
             })
 
-            # Hard cap on history depth: keep system prompt + last N messages.
-            # Prevents unbounded context growth in long multi-tool sessions.
-            _MAX_HISTORY = 60  # system[0] + last 59 messages (~30 rounds)
-
             try:
                 for round_num in range(1, max_rounds + 1):
                     rounds_used = round_num
-                    # Trim history before each LLM call (system prompt is always index 0)
-                    if len(messages) > _MAX_HISTORY:
-                        messages = messages[:1] + messages[-(_MAX_HISTORY - 1):]
+                    # Trim history before each LLM call: keep system prompt + last N-1 msgs
+                    if len(messages) > AGENT_MAX_HISTORY:
+                        messages = messages[:1] + messages[-(AGENT_MAX_HISTORY - 1):]
                     yield _pack("thinking", {"round": round_num, "message": "calling LLM..."})
 
                     sc, wrap = _h.call_litellm_chat(

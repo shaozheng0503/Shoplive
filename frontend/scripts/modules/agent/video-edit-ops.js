@@ -675,7 +675,6 @@ export async function applyFadeToCurrentVideo({ fadeIn = 0, fadeOut = 0 } = {}) 
     zh ? `🎬 正在添加${label}效果…` : `🎬 Applying ${label}…`, "progress"
   );
   try {
-    pushVideoUrlToHistory();
     const base = getApiBase();
     const resp = await postJson(
       `${base}/api/video/edit/export`,
@@ -684,6 +683,7 @@ export async function applyFadeToCurrentVideo({ fadeIn = 0, fadeOut = 0 } = {}) 
     );
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
+    pushVideoUrlToHistory(); // save old URL before overwriting (consistent with other apply* fns)
     state.lastVideoUrl = exportedUrl;
     document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
     _renderVideoEditor();
