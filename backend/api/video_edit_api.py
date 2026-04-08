@@ -492,6 +492,7 @@ def register_video_edit_routes(
             vibrance_val = _clamp_num(edits.get("vibrance", 0), -30, 30, 0)
             temp_val = _clamp_num(edits.get("temp", 0), -30, 30, 0)
             tint_val = _clamp_num(edits.get("tint", 0), -30, 30, 0)
+            contrast_adj = _clamp_num(edits.get("contrast", 0), -30, 30, 0)
             mask_text = str(edits.get("maskText") or "").strip()
             mask_opacity = _clamp_num(edits.get("opacity", 90), 0, 100, 90) / 100.0
             _raw_color = str(edits.get("maskColor") or "#ffffff").strip()
@@ -518,7 +519,8 @@ def register_video_edit_routes(
 
             sat = _clamp_num((100 + sat_val * 3) / 100.0, 0.2, 2.6, 1.0)
             bright = _clamp_num((100 + vibrance_val * 2 - 100) / 100.0, -0.6, 1.2, 0.0)
-            contrast = _clamp_num((100 + abs(temp_val) * 1.2) / 100.0, 0.6, 1.8, 1.0)
+            # contrast_adj adds a direct contrast boost on top of temp-derived contrast
+            contrast = _clamp_num((100 + abs(temp_val) * 1.2 + contrast_adj * 1.5) / 100.0, 0.2, 3.0, 1.0)
             hue = _clamp_num(tint_val * 1.8, -45, 45, 0)
             text_size = int(max(18, min(72, h_pct * 3.2)))
             text_y_expr = f"(H*{_fmt_float(y_pct / 100)}-text_h/2)"
@@ -589,9 +591,16 @@ def register_video_edit_routes(
                 else:
                     video_filters.append(f"eq=saturation={_fmt_float(sat)}:brightness={_fmt_float(bright)}:contrast={_fmt_float(contrast)}")
                     video_filters.append(f"hue=h={_fmt_float(hue, 3)}")
-                # Fade in / fade out — applied after colour grading, before text
+                # Fade in / fade out — applied after colour grading, before text.
+                # Guard: if fadeIn + fadeOut >= duration, scale both proportionally so
+                # they never overlap (each gets at most half the video duration).
                 fade_in  = _clamp_num(edits.get("fadeIn",  0), 0, 3.0, 0)
                 fade_out = _clamp_num(edits.get("fadeOut", 0), 0, 3.0, 0)
+                _fade_total = fade_in + fade_out
+                if _fade_total > 0 and _fade_total >= duration_seconds:
+                    _scale = (duration_seconds * 0.9) / _fade_total  # leave 10% solid
+                    fade_in  = round(fade_in  * _scale, 3)
+                    fade_out = round(fade_out * _scale, 3)
                 if fade_in > 0:
                     video_filters.append(f"fade=t=in:st=0:d={_fmt_float(fade_in, 3)}")
                 if fade_out > 0:
@@ -608,7 +617,7 @@ def register_video_edit_routes(
                     enable_clause = f":enable='{mask_enable_expr}'" if (mask_mode == "ranged" and mask_enable_expr) else ""
                     video_filters.append(_build_drawtext_filter(
                         text=safe_text, fontsize=text_size,
-                        fontcolor=mask_color, alpha=mask_opacity / 100.0,
+                        fontcolor=mask_color, alpha=mask_opacity,  # already 0-1 (divided at parse time)
                         x_expr=text_x_expr, y_expr=text_y_expr,
                         mask_style=mask_style, mask_font=mask_font,
                         enable_clause=enable_clause,
@@ -631,7 +640,7 @@ def register_video_edit_routes(
                         enable_sub = f":enable='between(t,{_fmt_float(sub_start, 3)},{_fmt_float(sub_end, 3)})'"
                         video_filters.append(_build_drawtext_filter(
                             text=safe_sub, fontsize=text_size,
-                            fontcolor=mask_color, alpha=mask_opacity / 100.0,
+                            fontcolor=mask_color, alpha=mask_opacity,  # already 0-1 (divided at parse time)
                             x_expr=text_x_expr, y_expr=text_y_expr,
                             mask_style=mask_style, mask_font=mask_font,
                             enable_clause=enable_sub,

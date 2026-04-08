@@ -1483,3 +1483,145 @@ class TestFullChainEditing:
         })
         assert r.status_code == 200
         assert r.get_json()["ok"] is True
+
+
+# ===========================================================================
+# Regression tests for bugs found during functional audit
+# ===========================================================================
+
+class TestBugRegressions:
+    """Tests that catch the 4 confirmed bugs found in the functional audit."""
+    EP = "/api/video/edit/export"
+
+    # Bug 1: alpha double-division
+    # mask_opacity was already 0-1 (divided at parse time) but _build_drawtext_filter
+    # received alpha=mask_opacity/100.0 → 0.0-0.01, making text effectively invisible.
+    def test_alpha_not_double_divided(self, client, vid_silent):
+        """Text with opacity=90 must produce mask_applied=True with correct alpha (0.9 not 0.009)."""
+        if not DRAWTEXT_AVAILABLE:
+            pytest.skip("drawtext not available")
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Visible", "opacity": 90, "x": 50, "y": 50},
+        })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["mask_applied"] is True  # would be False if alpha was 0.009
+
+    def test_alpha_full_opacity(self, client, vid_silent):
+        """opacity=100 → alpha=1.0 (was 0.01 before fix)."""
+        if not DRAWTEXT_AVAILABLE:
+            pytest.skip("drawtext not available")
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Full", "opacity": 100},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["mask_applied"] is True
+
+    def test_alpha_zero_opacity(self, client, vid_silent):
+        """opacity=0 → alpha=0.0, text is transparent — still no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Invisible", "opacity": 0},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    # Bug 2: hue mapped to wrong field
+    # applyColorGradingToCurrentVideo was writing hue to `temp` instead of `tint`.
+    # Backend test: `tint` param drives ffmpeg hue= filter; `temp` drives contrast.
+    def test_tint_drives_hue_filter(self, client, vid_silent):
+        """tint=15 (warm colour shift) must produce a valid export without error."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"tint": 15},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_tint_negative(self, client, vid_silent):
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"tint": -20}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    # Bug 3: contrast parameter was silently ignored
+    def test_contrast_direct_param_accepted(self, client, vid_silent):
+        """contrast=20 is now a direct parameter — export must succeed."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"contrast": 20},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_contrast_negative(self, client, vid_silent):
+        r = client.post(self.EP, json={"video_url": vid_silent, "edits": {"contrast": -15}})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_contrast_combined_with_sat_and_tint(self, client, vid_silent):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"contrast": 15, "sat": 10, "tint": 8, "vibrance": 5},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    # Bug 4: fade overlap when fadeIn + fadeOut >= duration_seconds
+    def test_fade_overlap_clamped_short_video(self, client):
+        """1-second video with fadeIn=0.6 + fadeOut=0.6 = 1.2s > duration → must not crash."""
+        vid_1s = _ffmpeg_lavfi_video(with_audio=False, duration=1)
+        r = client.post(self.EP, json={
+            "video_url": vid_1s,
+            "edits": {"fadeIn": 0.6, "fadeOut": 0.6},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_tiny_video(self, client):
+        """0.5-second video with large fades — must scale down, not crash."""
+        vid_half = _ffmpeg_lavfi_video(with_audio=False, duration=1)
+        r = client.post(self.EP, json={
+            "video_url": vid_half,
+            "edits": {"fadeIn": 3.0, "fadeOut": 3.0},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_normal_video_no_clamping_needed(self, client, vid_audio):
+        """3-second video, fadeIn=0.3 + fadeOut=0.3 = 0.6s < 3s → no clamping."""
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {"fadeIn": 0.3, "fadeOut": 0.3},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+
+# Unit tests for _build_drawtext_filter alpha parameter
+class TestBuildDrawtextFilterAlpha:
+    """Verify alpha is passed correctly (not double-divided)."""
+
+    def _build(self, alpha, **kwargs):
+        from shoplive.backend.api.video_edit_api import _build_drawtext_filter
+        return _build_drawtext_filter(
+            text="Test", fontsize=24, fontcolor="#fff",
+            alpha=alpha, x_expr="10", y_expr="10",
+            mask_style="elegant", mask_font="sans", enable_clause="",
+            **kwargs,
+        )
+
+    def test_alpha_09_produces_09_not_0009(self):
+        """alpha=0.9 must appear as '0.9' in filter, not '0.009'."""
+        f = self._build(alpha=0.9)
+        assert "alpha=0.9" in f
+
+    def test_alpha_1_produces_1(self):
+        f = self._build(alpha=1.0)
+        assert "alpha=1" in f
+
+    def test_alpha_0_produces_0(self):
+        f = self._build(alpha=0.0)
+        assert "alpha=0" in f

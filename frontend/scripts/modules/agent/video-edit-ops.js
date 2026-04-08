@@ -70,9 +70,12 @@ export async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
 export async function applyColorGradingToCurrentVideo({ bright = 0, sat = 0, hue = 0, contrast = 0 }) {
   state.videoEdit = {
     ...state.videoEdit,
-    temp: Number(state.videoEdit?.temp || 0) + (Number(hue) || 0),
+    // hue intent → tint field (backend: tint_val drives the hue= ffmpeg filter)
+    tint: Number(state.videoEdit?.tint || 0) + (Number(hue) || 0),
     sat: Number(state.videoEdit?.sat || 0) + (Number(sat) || 0),
     vibrance: Number(state.videoEdit?.vibrance || 0) + (Number(bright) || 0),
+    // contrast is now a direct backend parameter (combined with temp-derived contrast)
+    contrast: Number(state.videoEdit?.contrast || 0) + (Number(contrast) || 0),
   };
   _applyVideoEditsToPreview();
   _pushSystemStateMsg(t("colorIntentApplying"), "progress");
