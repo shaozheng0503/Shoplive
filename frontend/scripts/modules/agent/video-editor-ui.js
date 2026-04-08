@@ -670,6 +670,12 @@ export function renderVideoEditor() {
   const videoBlock = state.lastVideoUrl
     ? `<div class="video-edit-surface"><video controls preload="auto" playsinline src="${state.lastVideoUrl}"></video></div>`
     : `<div class="empty-video">${currentLang === "zh" ? "暂无视频，请先生成一次视频。" : "No video yet. Generate one first."}</div>`;
+
+  // Preserve playhead position across panel rebuilds (innerHTML destroys the old video element)
+  const _priorVid = document.getElementById("videoEditorPanel")?.querySelector(".video-edit-surface video");
+  const _savedTime = _priorVid ? (Number(_priorVid.currentTime) || 0) : 0;
+  const _wasPaused = _priorVid ? _priorVid.paused : true;
+
   document.getElementById("videoEditorPanel").innerHTML = `
     <div class="editor-head">
       <strong>${t("videoEditTitle")}</strong>
@@ -712,6 +718,22 @@ export function renderVideoEditor() {
       <button id="resetVideoEditorBtn" class="action-chip-btn action-chip-danger">${currentLang === "zh" ? "重置后处理" : "Reset post-edits"}</button>
     </div>
   `;
+  // Restore playhead position on the newly-created video element
+  if (_savedTime > 0) {
+    const _newVid = document.getElementById("videoEditorPanel")?.querySelector(".video-edit-surface video");
+    if (_newVid) {
+      const _restoreTime = () => {
+        _newVid.currentTime = _savedTime;
+        if (!_wasPaused) _newVid.play().catch(() => {});
+      };
+      if (_newVid.readyState >= 1) {
+        _restoreTime();
+      } else {
+        _newVid.addEventListener("loadedmetadata", _restoreTime, { once: true });
+      }
+    }
+  }
+
   const speedSelect = document.getElementById("videoEditorPanel").querySelector("#videoEditSpeed");
   const maskStyleSelect = document.getElementById("videoEditorPanel").querySelector("#maskStyleSelect");
   const moodSelect = document.getElementById("videoEditorPanel").querySelector("#bgmMoodSelect");
@@ -760,11 +782,19 @@ export function renderVideoEditor() {
       applyVideoEditsToPreview();
     });
   };
-  // Mask preset cards
+  // Mask preset cards — toggle active state in-place, skip full panel rebuild
   document.getElementById("videoEditorPanel").querySelectorAll(".mask-preset-card").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.videoEdit.maskStyle = btn.getAttribute("data-preset") || "elegant";
-      renderVideoEditor();  // re-render to update active card highlight
+      document.getElementById("videoEditorPanel").querySelectorAll(".mask-preset-card").forEach((b) => {
+        const isNow = b === btn;
+        b.classList.toggle("is-active", isNow);
+        const pr = MASK_PRESETS[b.getAttribute("data-preset") || "elegant"];
+        b.style.border = isNow
+          ? "2px solid #54a8ff"
+          : (pr?.border === "none" ? "1px solid rgba(255,255,255,0.15)" : (pr?.border || "1px solid rgba(255,255,255,0.15)"));
+      });
+      applyVideoEditsToPreview();
     });
   });
   // Mask text + font + color

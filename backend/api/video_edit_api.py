@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import logging
 import os
 import select
@@ -10,6 +11,11 @@ import time
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+
+# ASR subtitle cache: avoids re-calling Gemini for the same video.
+# Key: (url_sha256_prefix, language, max_lines)  Value: (subtitles, raw_text, created_at)
+_ASR_CACHE: Dict[tuple, tuple] = {}
+_ASR_CACHE_TTL = 24 * 60 * 60  # 24 h
 
 from flask import g, jsonify, request
 
@@ -852,6 +858,14 @@ def register_video_edit_routes(
         video_url = str(payload.get("video_url") or "").strip()
         language = str(payload.get("language") or "zh").strip().lower()
         max_lines = max(1, min(40, int(payload.get("max_lines") or 20)))
+        _asr_key = (hashlib.sha256(video_url.encode()).hexdigest()[:20], language, max_lines)
+        _cached = _ASR_CACHE.get(_asr_key)
+        if _cached:
+            _subs, _raw, _ts = _cached
+            if time.time() - _ts < _ASR_CACHE_TTL:
+                return jsonify({"ok": True, "subtitles": _subs, "raw_text": _raw, "cached": True})
+            del _ASR_CACHE[_asr_key]
+
         op = AuditedOp("video_asr", "transcribe", {"video_url_len": len(video_url), "language": language})
 
         if not video_url:
@@ -939,10 +953,13 @@ def register_video_edit_routes(
                     if len(subtitles) >= max_lines:
                         break
 
+            _ASR_CACHE[_asr_key] = (subtitles, raw_text, time.time())
+            op.success({"subtitle_count": len(subtitles)})
             return jsonify({"ok": True, "subtitles": subtitles, "raw_text": raw_text})
 
         except Exception as exc:
             from shoplive.backend.common.helpers import json_error
+            op.error(exc, "ASR_FAILED")
             return json_error(f"ASR 失败: {exc}", 500, error_code="ASR_FAILED")
 
     @app.post("/api/video/overlay-image")
