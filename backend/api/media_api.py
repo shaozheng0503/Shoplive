@@ -1,7 +1,12 @@
+import logging
 from typing import Any, Callable, Dict, List, Tuple
 
 import requests
 from flask import jsonify, request
+
+from shoplive.backend.audit import AuditedOp
+
+logger = logging.getLogger(__name__)
 
 
 def register_media_routes(
@@ -21,6 +26,11 @@ def register_media_routes(
     @app.post("/api/gemini")
     def api_gemini():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("gemini_call", "generate_content", {
+            "model": payload.get("model") or "gemini-3.1-pro-preview",
+            "location": payload.get("location") or "global",
+            "prompt_len": len(payload.get("prompt") or ""),
+        })
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
             prompt = (payload.get("prompt") or "").strip()
@@ -48,6 +58,7 @@ def register_media_routes(
                 proxies=build_proxies(proxy),
             )
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
+            op.success({"status_code": resp.status_code, "ok": resp.ok})
             return jsonify(
                 {
                     "ok": resp.ok,
@@ -57,13 +68,21 @@ def register_media_routes(
                 }
             ), resp.status_code
         except ValueError as e:
+            op.error(e, "value_error")
             return json_error(str(e))
         except Exception as e:
+            op.error(e, "gemini_exception")
             return json_error(f"Gemini 调用失败: {e}", 500)
 
     @app.post("/api/banana/generate")
     def api_banana_generate():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("banana_generate", "generate_image", {
+            "model": payload.get("model") or "gemini-2.5-flash-image",
+            "image_size": payload.get("image_size") or "16:9",
+            "num": int(payload.get("num", 1)),
+            "prompt_len": len(payload.get("prompt") or ""),
+        })
         try:
             api_base = (payload.get("api_base") or "https://api.nanobananaapi.dev").strip().rstrip("/")
             api_key = (payload.get("api_key") or "").strip()
@@ -91,6 +110,7 @@ def register_media_routes(
             )
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
             image_urls = extract_banana_urls(data)
+            op.success({"status_code": resp.status_code, "ok": resp.ok, "image_count": len(image_urls)})
             return jsonify(
                 {
                     "ok": resp.ok,
@@ -100,22 +120,41 @@ def register_media_routes(
                 }
             ), resp.status_code
         except Exception as e:
+            op.error(e, "banana_exception")
             return json_error(f"Banana 生图失败: {e}", 500)
 
     @app.post("/api/google-image/generate")
     def api_google_image_generate():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("google_image_generate", "generate_image", {
+            "model": payload.get("model", "imagen-3.0-generate-002"),
+            "sample_count": payload.get("sample_count", 1),
+            "aspect_ratio": payload.get("aspect_ratio"),
+            "prompt_len": len(payload.get("prompt") or ""),
+        })
         try:
             status_code, data = run_google_image_generate(payload)
+            op.success({"status_code": status_code, "ok": data.get("ok", False),
+                        "images_count": len(data.get("images") or [])})
             return jsonify(data), status_code
         except ValueError as e:
+            op.error(e, "value_error")
             return json_error(str(e))
         except Exception as e:
+            op.error(e, "google_image_exception")
             return json_error(f"Google 生图失败: {e}", 500)
 
     @app.post("/api/shoplive/image/generate")
     def api_shoplive_image_generate():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("shoplive_image_generate", "generate_image", {
+            "product_name": str(payload.get("product_name", ""))[:80],
+            "model": payload.get("model", "imagen-3.0-generate-002"),
+            "sample_count": int(payload.get("sample_count", 2)),
+            "aspect_ratio": payload.get("aspect_ratio", "3:4"),
+            "skip_category_check": bool(payload.get("skip_category_check", False)),
+            "category_retry_max": int(payload.get("category_retry_max", 2)),
+        })
         try:
             if not str(payload.get("product_name", "")).strip():
                 return json_error("product_name 不能为空")
@@ -184,6 +223,8 @@ def register_media_routes(
                 dt1["prompt_strategy"] = "llm_primary" if _use_llm_prompt else "strict_compact_primary"
                 dt1["category_check"] = judge1
                 dt1["attempts"] = attempts
+                op.success({"strategy": dt1["prompt_strategy"], "attempts_count": len(attempts),
+                            "images_count": len(dt1.get("images") or [])})
                 return jsonify(dt1), st1
 
             prompt_safe = build_shoplive_image_prompt_safe_product_only(payload)
@@ -193,6 +234,8 @@ def register_media_routes(
                 dt2["prompt_strategy"] = "safe_product_only_retry"
                 dt2["category_check"] = judge2
                 dt2["attempts"] = attempts
+                op.success({"strategy": "safe_product_only_retry", "attempts_count": len(attempts),
+                            "images_count": len(dt2.get("images") or [])})
                 return jsonify(dt2), st2
 
             forced_prompt = (
@@ -215,8 +258,12 @@ def register_media_routes(
                     d["prompt_strategy"] = f"category_lock_retry_{idx + 1}"
                     d["category_check"] = j
                     d["attempts"] = attempts
+                    op.success({"strategy": f"category_lock_retry_{idx + 1}",
+                                "attempts_count": len(attempts),
+                                "images_count": len(d.get("images") or [])})
                     return jsonify(d), s
 
+            op.error("category_mismatch_exhausted", "category_mismatch_exhausted")
             return (
                 jsonify(
                     {
@@ -236,13 +283,22 @@ def register_media_routes(
                 502,
             )
         except ValueError as e:
+            op.error(e, "value_error")
             return json_error(str(e))
         except Exception as e:
+            op.error(e, "shoplive_image_exception")
             return json_error(f"Shoplive 生图失败: {e}", 500)
 
     @app.post("/api/pipeline/banana-to-veo")
     def api_pipeline_banana_to_veo():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("pipeline_banana_to_veo", "pipeline_complete", {
+            "banana_model": payload.get("banana_model"),
+            "veo_model": payload.get("veo_model"),
+            "veo_mode": payload.get("veo_mode", "image"),
+            "banana_prompt_len": len(payload.get("banana_prompt") or ""),
+            "veo_prompt_len": len(payload.get("veo_prompt") or ""),
+        })
         try:
             banana_proxy = (payload.get("proxy") or "").strip()
             banana_payload = {
@@ -259,6 +315,7 @@ def register_media_routes(
             banana_json, banana_status = banana_resp
             banana_data = banana_json.get_json(silent=True) or {}
             if banana_status >= 400 or not banana_data.get("image_urls"):
+                op.error("banana_step_failed", "banana_step_failed")
                 return jsonify(
                     {
                         "ok": False,
@@ -293,6 +350,10 @@ def register_media_routes(
                 veo_resp = app.view_functions["api_veo_start"]()
             veo_json, veo_status = veo_resp
             veo_data = veo_json.get_json(silent=True) or {}
+            if veo_status < 400:
+                op.success({"veo_status": veo_status, "operation_name": veo_data.get("operation_name")})
+            else:
+                op.error("veo_step_failed", "veo_step_failed")
             return jsonify(
                 {
                     "ok": veo_status < 400,
@@ -304,6 +365,7 @@ def register_media_routes(
                 }
             ), veo_status
         except Exception as e:
+            op.error(e, "pipeline_exception")
             return json_error(f"Banana -> Veo 流程失败: {e}", 500)
 
     @app.post("/api/pipeline/google-image-to-veo")
@@ -368,4 +430,3 @@ def register_media_routes(
             ), veo_status
         except Exception as e:
             return json_error(f"Google 生图 -> Veo 流程失败: {e}", 500)
-

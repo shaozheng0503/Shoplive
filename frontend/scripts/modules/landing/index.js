@@ -364,7 +364,7 @@ function deriveProductName(text = "") {
   return clean.slice(0, 48);
 }
 
-async function callLandingImageGenerate(promptText) {
+async function callLandingImageGenerate(promptText, _maxRetries = 2) {
   const region   = (aiFieldRegion?.value   || "").trim();
   const category = (aiFieldCategory?.value || "").trim() || promptText;
   const style    = (aiFieldStyle?.value    || "").trim();
@@ -376,34 +376,46 @@ async function callLandingImageGenerate(promptText) {
     : "Shoplive conversion-oriented product storytelling";
   const product_name = category || promptText;
 
-  const resp = await fetch(`${window.location.origin}/api/shoplive/image/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      product_name,
-      main_category,
-      target_audience: "",
-      brand_philosophy,
-      selling_region,
-      selling_points: [category, style].filter(Boolean).join(", ") || promptText,
-      template: "clean",
-      other_info: [region, category, style].filter(Boolean).join(", ") || promptText,
-      sample_count: 1,
-      aspect_ratio: aspectRatioSelect?.value || "16:9",
-      location: "us-central1",
-      person_generation: "dont_allow",
-      skip_category_check: true,
-      language_code: currentLang === "zh" ? "zh-CN" : "en-US",
-      currency_code: currentLang === "zh" ? "CNY" : "USD",
-      exchange_rate: currentLang === "zh" ? "7.2" : "1.0",
-    }),
-  });
-  const data = await resp.json();
-  if (!resp.ok || !data?.ok || !Array.isArray(data?.images) || !data.images.length) {
-    const err = data?.error || data?.response?.error?.message || `HTTP ${resp.status}`;
-    throw new Error(err);
+  const payload = {
+    product_name,
+    main_category,
+    target_audience: "",
+    brand_philosophy,
+    selling_region,
+    selling_points: [category, style].filter(Boolean).join(", ") || promptText,
+    template: "clean",
+    other_info: [region, category, style].filter(Boolean).join(", ") || promptText,
+    sample_count: 1,
+    aspect_ratio: aspectRatioSelect?.value || "16:9",
+    location: "us-central1",
+    person_generation: "dont_allow",
+    skip_category_check: true,
+    language_code: currentLang === "zh" ? "zh-CN" : "en-US",
+    currency_code: currentLang === "zh" ? "CNY" : "USD",
+    exchange_rate: currentLang === "zh" ? "7.2" : "1.0",
+  };
+
+  let lastErr;
+  for (let attempt = 0; attempt <= _maxRetries; attempt++) {
+    try {
+      const resp = await fetch(`${window.location.origin}/api/shoplive/image/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok || !Array.isArray(data?.images) || !data.images.length) {
+        throw new Error(data?.error || data?.response?.error?.message || `HTTP ${resp.status}`);
+      }
+      return data.images.map((x) => String(x?.data_url || "")).filter(Boolean);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < _maxRetries) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+      }
+    }
   }
-  return data.images.map((x) => String(x?.data_url || "")).filter(Boolean);
+  throw lastErr;
 }
 
 function openRefModal() {
@@ -448,7 +460,10 @@ if (promptInput) {
       startFlowBtn?.click();
     }
   });
-  setInterval(() => {
+  // Rotate placeholder text; store handle so it can be cleaned up
+  window._placeholderTimer = window._placeholderTimer || null;
+  if (window._placeholderTimer) clearInterval(window._placeholderTimer);
+  window._placeholderTimer = setInterval(() => {
     const list = i18n[currentLang].placeholders;
     idx = (idx + 1) % list.length;
     promptInput.placeholder = list[idx];
@@ -484,8 +499,10 @@ refMosaicBtn?.addEventListener("click", () => {
 refFileInput?.addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []).slice(0, 8);
   if (!files.length) return;
-  const results = await Promise.all(files.map((f) => readFileAsDataUrl(f).catch(() => "")));
-  const newAssets = results.filter(Boolean);
+  const settled = await Promise.allSettled(files.map((f) => readFileAsDataUrl(f)));
+  const newAssets = settled
+    .filter((r) => r.status === "fulfilled" && r.value)
+    .map((r) => r.value);
   if (!newAssets.length) return;
   // Merge with existing assets, deduplicate by data-url prefix
   uploadAssets = [...uploadAssets, ...newAssets].slice(0, 16);
@@ -544,9 +561,12 @@ function finishAiProgress(container, success = true) {
   if (label) label.textContent = success ? "100%" : "failed";
 }
 
-// Chip click → fill the associated input field
+// Chip click → fill the associated input field (debounced)
 document.querySelectorAll(".ai-form-chips .ai-chip").forEach((chip) => {
   chip.addEventListener("click", () => {
+    if (chip.dataset._busy) return;
+    chip.dataset._busy = "1";
+    requestAnimationFrame(() => { delete chip.dataset._busy; });
     const fieldMap = { region: aiFieldRegion, category: aiFieldCategory, style: aiFieldStyle };
     const fieldName = chip.closest(".ai-form-chips")?.dataset.field;
     const input = fieldMap[fieldName];
@@ -555,7 +575,8 @@ document.querySelectorAll(".ai-form-chips .ai-chip").forEach((chip) => {
       input.focus();
     }
     // Highlight active chip within the group
-    chip.closest(".ai-form-chips")?.querySelectorAll(".ai-chip").forEach((c) => c.classList.remove("is-active"));
+    const group = chip.closest(".ai-form-chips");
+    if (group) group.querySelectorAll(".ai-chip").forEach((c) => c.classList.remove("is-active"));
     chip.classList.add("is-active");
   });
 });
@@ -580,6 +601,7 @@ refAiGenerateBtn?.addEventListener("click", async () => {
   const promptText = [category, style, region].filter(Boolean).join(", ");
   const oldHtml = refAiGenerateBtn.innerHTML;
   refAiGenerateBtn.disabled = true;
+  refAiGenerateBtn.setAttribute("aria-busy", "true");
   refAiGenerateBtn.innerHTML = `<span class="ai-gen-submit-icon spin">◌</span><span>${i18n[currentLang].refGenerating}</span>`;
   setActiveRefTab("ai");
   showAiProgress(refAiResultGrid);
@@ -602,6 +624,7 @@ refAiGenerateBtn?.addEventListener("click", async () => {
       </div>`;
   } finally {
     refAiGenerateBtn.disabled = false;
+    refAiGenerateBtn.removeAttribute("aria-busy");
     refAiGenerateBtn.innerHTML = oldHtml;
   }
 });
@@ -621,9 +644,10 @@ setActiveRefTab("upload");
 applyLanguage(currentLang);
 updateRefTriggerPreview();
 
-document.querySelectorAll(".command-template-card").forEach((card) => {
+const _templateCards = document.querySelectorAll(".command-template-card");
+_templateCards.forEach((card) => {
   card.addEventListener("click", () => {
-    document.querySelectorAll(".command-template-card").forEach((el) => el.classList.remove("is-active"));
+    _templateCards.forEach((el) => el.classList.remove("is-active"));
     card.classList.add("is-active");
     if (promptInput) {
       const fill = currentLang === "zh"

@@ -21,6 +21,7 @@ from typing import Generator
 import requests
 from flask import Flask, Response, g, jsonify, request
 
+from shoplive.backend.audit import AuditedOp, audit_log
 from shoplive.backend.common.helpers import json_error
 
 _TABCODE_API_BASE = os.getenv("TABCODE_API_BASE", "https://chat.tabcode.cc")
@@ -149,6 +150,7 @@ def register_tabcode_routes(app: Flask, **_kwargs) -> None:
             {"type":"error","message":"..."}
             [DONE]
         """
+        _t0          = time.monotonic()
         body         = request.get_json(silent=True) or {}
         prompt       = str(body.get("prompt")       or "").strip()
         model        = str(body.get("model")        or _DEFAULT_VIDEO_MODEL).strip()
@@ -158,7 +160,33 @@ def register_tabcode_routes(app: Flask, **_kwargs) -> None:
             return json_error("prompt is required", 400)
 
         def generate():
-            yield from _stream_tabcode_video(prompt, model, aspect_ratio)
+            _status = "error"
+            _out = {}
+            try:
+                for event in _stream_tabcode_video(prompt, model, aspect_ratio):
+                    yield event
+                    # Peek at the last meaningful event to determine final status
+                    if event.startswith("data:") and "[DONE]" not in event:
+                        try:
+                            _evt = json.loads(event[5:].strip())
+                            if _evt.get("type") == "done":
+                                _status = "success"
+                                _out = {"video_url_present": bool(_evt.get("video_url"))}
+                            elif _evt.get("type") == "error":
+                                _out = {"error": _evt.get("message", "")[:200]}
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+            except Exception as exc:
+                _out = {"error": str(exc)[:200]}
+                yield _sse_event({"type": "error", "message": str(exc)})
+                yield "data: [DONE]\n\n"
+            finally:
+                audit_log.record(
+                    tool="tabcode_video", action="generate",
+                    input_summary={"model": model, "prompt_length": len(prompt), "aspect_ratio": aspect_ratio},
+                    output_summary=_out,
+                    status=_status, duration_ms=int((time.monotonic() - _t0) * 1000),
+                )
 
         return Response(generate(), mimetype="text/event-stream",
                         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
@@ -166,12 +194,12 @@ def register_tabcode_routes(app: Flask, **_kwargs) -> None:
     @app.get("/api/tabcode/models")
     def api_tabcode_models():
         """Return available tabcode models (static list from API discovery)."""
-        return jsonify({
-            "ok": True,
-            "models": [
-                {"id": "grok-imagine-1.0-video",  "label": "Grok Video 1.0",       "type": "video"},
-                {"id": "grok-imagine-1.0",        "label": "Grok Image 1.0",       "type": "image"},
-                {"id": "grok-4.1-fast",           "label": "Grok 4.1 Fast (chat)", "type": "chat"},
-                {"id": "grok-4",                  "label": "Grok 4 (chat)",        "type": "chat"},
-            ],
-        })
+        op = AuditedOp("tabcode_models", "list")
+        models = [
+            {"id": "grok-imagine-1.0-video",  "label": "Grok Video 1.0",       "type": "video"},
+            {"id": "grok-imagine-1.0",        "label": "Grok Image 1.0",       "type": "image"},
+            {"id": "grok-4.1-fast",           "label": "Grok 4.1 Fast (chat)", "type": "chat"},
+            {"id": "grok-4",                  "label": "Grok 4 (chat)",        "type": "chat"},
+        ]
+        op.success({"model_count": len(models)})
+        return jsonify({"ok": True, "models": models})

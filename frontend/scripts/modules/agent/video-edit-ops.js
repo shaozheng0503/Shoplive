@@ -151,6 +151,7 @@ export async function pollRenderJob(base, jobId, bubbleEl, labelStart, labelEnd)
   const zh = currentLang === "zh";
   const maxWait = 300000; // 5 min
   const t0 = Date.now();
+  let _lastPct = -1; // throttle DOM writes — only update when % changes
   while (Date.now() - t0 < maxWait) {
     await new Promise((r) => setTimeout(r, 1500));
     let s;
@@ -159,8 +160,9 @@ export async function pollRenderJob(base, jobId, bubbleEl, labelStart, labelEnd)
       s = await r.json();
     } catch (_e) { continue; }
     const { status: js, progress = 0, result, error } = s;
-    if (bodyEl) {
-      const pct = Math.min(99, Math.round(progress));
+    const pct = Math.min(99, Math.round(progress));
+    if (bodyEl && pct !== _lastPct) {
+      _lastPct = pct;
       const range = labelStart != null ? ` (${labelStart}s → ${labelEnd}s)` : "";
       bodyEl.textContent = zh ? `✂️ 渲染中 ${pct}%…${range}` : `✂️ Rendering ${pct}%…${range}`;
     }

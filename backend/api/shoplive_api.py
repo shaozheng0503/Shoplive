@@ -1,11 +1,16 @@
 import hashlib
 import json
+import logging
 import os
+import time
 from typing import Callable, Dict, Tuple
 
 from flask import jsonify, request
 
 from shoplive.backend.async_executor import _TTLCache
+from shoplive.backend.audit import AuditedOp
+
+logger = logging.getLogger(__name__)
 
 # 5-min LLM response cache: key = (input_fingerprint, action, model)
 # Avoids re-calling LLM for identical brief + action within the same session.
@@ -139,6 +144,7 @@ def register_shoplive_routes(
     @app.post("/api/shoplive/video/prompt")
     def api_shoplive_video_prompt():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("video_prompt", "generate", {"product_name": payload.get("product_name", "")})
         try:
             api_base = (
                 payload.get("api_base")
@@ -179,6 +185,7 @@ def register_shoplive_routes(
             )
             data = data_wrap.get("response", {})
             content = extract_chat_content(data)
+            op.success({"ok": data_wrap.get("ok", False), "status_code": status_code, "prompt_length": len(content)})
             return jsonify(
                 {
                     "ok": data_wrap.get("ok", False),
@@ -191,11 +198,13 @@ def register_shoplive_routes(
                 }
             ), status_code
         except Exception as e:
+            op.error(e)
             return json_error(f"Shoplive 视频提示词生成失败: {e}", 500)
 
     @app.post("/api/shoplive/video/workflow")
     def api_shoplive_video_workflow():
         payload = request.get_json(silent=True) or {}
+        op = AuditedOp("video_workflow", str(payload.get("action", "generate_script")))
         try:
             action = str(payload.get("action", "generate_script")).strip()
             raw_input = payload.get("input", {}) if isinstance(payload.get("input"), dict) else {}
@@ -227,6 +236,7 @@ def register_shoplive_routes(
                 }
 
             if action == "validate":
+                op.success({"valid": validation["ok"]})
                 return jsonify(_base(validation["ok"]))
 
             if action == "generate_script":
@@ -269,6 +279,7 @@ def register_shoplive_routes(
                 if not script:
                     script = build_shoplive_script(normalized)
                 check = selfcheck_script(script)
+                op.success({"selfcheck_ok": check["ok"], "script_length": len(script), "source": script_source})
                 return jsonify(_base(check["ok"],
                     script=script, script_source=script_source,
                     script_fallback_reason=llm_error, selfcheck=check,
@@ -278,6 +289,7 @@ def register_shoplive_routes(
                 script_text = str(payload.get("script_text", "") or "")
                 check = selfcheck_script(script_text)
                 ready = validation["ok"] and check["ok"]
+                op.success({"ready": ready, "selfcheck_ok": check["ok"]})
                 return jsonify(_base(ready, selfcheck=check))
 
             if action == "build_export_prompt":
@@ -333,6 +345,7 @@ def register_shoplive_routes(
                 if not prompt_text:
                     prompt_text = build_shoplive_video_prompt_template(normalized, script_text)
                     prompt_source = "template_fallback"
+                op.success({"ready": bool(prompt_text), "prompt_length": len(prompt_text), "source": prompt_source})
                 return jsonify(_base(bool(prompt_text),
                     status_code=200, selfcheck=check,
                     prompt=prompt_text, prompt_source=prompt_source,
@@ -347,6 +360,7 @@ def register_shoplive_routes(
                     raw_prompt=raw_prompt,
                     script_text=script_text,
                 )
+                op.success({"ready": bool(template_text), "template_length": len(template_text)})
                 return jsonify(
                     {
                         "ok": True,
@@ -363,5 +377,6 @@ def register_shoplive_routes(
 
             return json_error(f"未知 action: {action}")
         except Exception as e:
+            op.error(e)
             return json_error(f"Shoplive workflow 失败: {e}", 500)
 

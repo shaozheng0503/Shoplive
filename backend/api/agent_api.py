@@ -2,11 +2,14 @@ import os
 import re
 import json
 import html
+import logging
 import time
 import base64
 from urllib.parse import urljoin, urlparse
 from typing import Callable, Dict, Tuple
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import requests
 from flask import Response, g, jsonify, request, stream_with_context

@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 import random
 import shutil
@@ -8,6 +9,8 @@ import time
 import re
 import threading
 import uuid
+
+logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Dict, List, Tuple

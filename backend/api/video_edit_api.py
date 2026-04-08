@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 import select
 import signal
@@ -12,8 +13,11 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from flask import g, jsonify, request
 
+from shoplive.backend.audit import AuditedOp
 from shoplive.backend.schemas import VideoEditExportRequest, VideoTimelineRenderRequest
 from shoplive.backend.validation import validate_request
+
+logger = logging.getLogger(__name__)
 
 
 def _clamp_num(value, minimum, maximum, default):
@@ -324,9 +328,14 @@ def register_video_edit_routes(
     @validate_request(VideoEditExportRequest)
     def api_video_edit_export():
         payload = g.req.model_dump()
+        video_url = str(payload.get("video_url") or "").strip()
+        op = AuditedOp("video_edit", "export", {
+            "video_url_len": len(video_url),
+            "has_edits": bool(payload.get("edits")),
+        })
         try:
-            video_url = str(payload.get("video_url") or "").strip()
             if not video_url:
+                op.error("video_url 不能为空", "MISSING_VIDEO_URL")
                 return json_error("video_url 不能为空")
 
             proxy = str(payload.get("proxy") or "").strip()
@@ -587,6 +596,8 @@ def register_video_edit_routes(
             warning = ""
             if mask_text and not mask_applied:
                 warning = "当前 ffmpeg 不支持 drawtext，文字蒙版未写入导出视频"
+            op.success({"file_name": output_name, "mask_applied": mask_applied,
+                        "speed": speed, "duration_seconds": duration_seconds})
             return jsonify(
                 {
                     "ok": True,
@@ -597,16 +608,21 @@ def register_video_edit_routes(
                 }
             )
         except ValueError as e:
+            op.error(e, "VALUE_ERROR")
             return json_error(str(e))
         except subprocess.TimeoutExpired:
+            op.error("timeout", "TIMEOUT")
             return json_error("视频导出超时，请缩短视频时长或减少编辑项", 500)
         except Exception as e:
+            op.error(e, "EXPORT_FAILED")
             return json_error(f"视频导出失败: {e}", 500)
 
     @app.post("/api/video/timeline/render")
     @validate_request(VideoTimelineRenderRequest)
     def api_video_timeline_render():
         req_obj = g.req  # VideoTimelineRenderRequest Pydantic instance
+        source_video_urls = []  # init before try to avoid UnboundLocalError in except
+        op = AuditedOp("video_timeline_render", "render")
         try:
             # Resolve source URLs: source_videos takes precedence over source_video_url
             source_video_urls = req_obj.resolved_source_videos()
@@ -711,6 +727,9 @@ def register_video_edit_routes(
                             _update_job(job_id, status="failed", progress=100, message="failed", error=msg)
 
                 threading.Thread(target=_job_runner, daemon=True).start()
+                op.input_summary = {"source_count": len(source_video_urls),
+                                    "track_count": len(tracks), "sort_strategy": sort_strategy}
+                op.success({"job_id": job_id, "async_job": True})
                 return jsonify({"ok": True, "async_job": True, "job_id": job_id, "status": "queued",
                                 "source_count": len(source_video_urls)})
 
@@ -726,6 +745,10 @@ def register_video_edit_routes(
                 download_video_to_file=download_video_to_file,
             )
 
+            op.input_summary = {"source_count": len(source_video_urls), "track_count": len(tracks),
+                                "sort_strategy": sort_strategy, "include_audio": include_audio}
+            op.success({"file_name": output_name, "segments_rendered": result["segments_rendered"],
+                        "duration": result["timeline_duration_seconds"]})
             return jsonify(
                 {
                     "ok": True,
@@ -738,22 +761,31 @@ def register_video_edit_routes(
                     "segment_sort_strategy": sort_strategy,
                 }
             )
-        except ValueError as e:
-            return json_error(str(e))
-        except subprocess.TimeoutExpired:
-            return json_error("时间线渲染超时，请缩短片段数量或时长", 500)
-        except Exception as e:
+        except (ValueError, subprocess.TimeoutExpired, Exception) as e:
+            op.input_summary["source_count"] = len(source_video_urls)
+            if isinstance(e, ValueError):
+                op.error(e, "VALUE_ERROR")
+                return json_error(str(e))
+            if isinstance(e, subprocess.TimeoutExpired):
+                op.error("timeout", "TIMEOUT")
+                return json_error("时间线渲染超时，请缩短片段数量或时长", 500)
+            op.error(e, "RENDER_FAILED")
             return json_error(f"时间线渲染失败: {e}", 500)
 
     @app.get("/api/video/timeline/render/status")
     def api_video_timeline_render_status():
+        op = AuditedOp("video_timeline_status", "query")
         job_id = str(request.args.get("job_id") or "").strip()
         if not job_id:
+            op.error("missing job_id", "MISSING_JOB_ID")
             return json_error("job_id 不能为空")
+        op.input_summary = {"job_id": job_id}
         with timeline_jobs_lock:
             job = timeline_jobs.get(job_id)
             if not job:
+                op.error("job not found", "JOB_NOT_FOUND")
                 return json_error("job 不存在", 404)
+            op.success({"status": job.get("status"), "progress": int(job.get("progress", 0))})
             return jsonify(
                 {
                     "ok": True,
@@ -768,15 +800,20 @@ def register_video_edit_routes(
 
     @app.post("/api/video/timeline/render/cancel")
     def api_video_timeline_render_cancel():
+        op = AuditedOp("video_timeline_cancel", "cancel")
         payload = request.get_json(silent=True) or {}
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
+            op.error("missing job_id", "MISSING_JOB_ID")
             return json_error("job_id 不能为空")
+        op.input_summary = {"job_id": job_id}
         with timeline_jobs_lock:
             job = timeline_jobs.get(job_id)
             if not job:
+                op.error("job not found", "JOB_NOT_FOUND")
                 return json_error("job 不存在", 404)
             if job.get("status") in {"done", "failed", "cancelled"}:
+                op.success({"status": job.get("status"), "already_terminal": True})
                 return jsonify({"ok": True, "job_id": job_id, "status": job.get("status")})
             job["cancel_requested"] = True
             job["status"] = "cancelling"
@@ -788,6 +825,7 @@ def register_video_edit_routes(
                 os.kill(int(pid), signal.SIGTERM)
             except Exception:
                 pass
+        op.success({"status": "cancelling", "pid_killed": bool(pid)})
         return jsonify({"ok": True, "job_id": job_id, "status": "cancelling"})
 
     @app.post("/api/video/asr")
@@ -814,9 +852,11 @@ def register_video_edit_routes(
         video_url = str(payload.get("video_url") or "").strip()
         language = str(payload.get("language") or "zh").strip().lower()
         max_lines = max(1, min(40, int(payload.get("max_lines") or 20)))
+        op = AuditedOp("video_asr", "transcribe", {"video_url_len": len(video_url), "language": language})
 
         if not video_url:
             from shoplive.backend.common.helpers import json_error
+            op.error("missing video_url", "MISSING_VIDEO_URL")
             return json_error("video_url 不能为空", error_code="MISSING_VIDEO_URL")
 
         try:
@@ -839,6 +879,7 @@ def register_video_edit_routes(
 
             # Limit upload size: skip if >20 MB (Gemini inline limit)
             if len(video_bytes) > 20 * 1024 * 1024:
+                op.error("video >20MB", "VIDEO_TOO_LARGE")
                 return json_error("视频文件过大（>20MB），暂不支持 ASR", error_code="VIDEO_TOO_LARGE")
 
             token = get_access_token(key_file, proxy)

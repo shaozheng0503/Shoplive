@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import re
 import subprocess
 import tempfile
@@ -8,6 +9,8 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import requests
 from flask import jsonify

@@ -308,6 +308,64 @@ audit_log = AuditLogger(
 
 
 # ---------------------------------------------------------------------------
+# AuditedOp — compact helper to eliminate repetitive audit boilerplate
+# ---------------------------------------------------------------------------
+
+class AuditedOp:
+    """Encapsulates timing + audit recording for a single API operation.
+
+    Replaces the repetitive pattern of:
+        _t0 = time.monotonic()
+        _input_summary = {...}
+        try:
+            ...
+            audit_log.record(tool=..., action=..., input_summary=..., output_summary=...,
+                             status="success", duration_ms=int((time.monotonic()-_t0)*1000))
+        except ...:
+            audit_log.record(tool=..., action=..., ..., status="error", ...)
+
+    Usage:
+        op = AuditedOp("gemini_call", "generate_content", {"model": "...", "prompt_len": 42})
+        try:
+            result = do_work()
+            op.success({"status_code": 200})
+            return result
+        except Exception as e:
+            op.error(e, "gemini_exception")
+            return json_error(...)
+    """
+
+    __slots__ = ("tool", "action", "input_summary", "_t0")
+
+    def __init__(self, tool: str, action: str, input_summary: Optional[Dict[str, Any]] = None):
+        self.tool = tool
+        self.action = action
+        self.input_summary = input_summary or {}
+        self._t0 = time.monotonic()
+
+    @property
+    def elapsed_ms(self) -> int:
+        return int((time.monotonic() - self._t0) * 1000)
+
+    def success(self, output_summary: Optional[Dict[str, Any]] = None) -> None:
+        audit_log.record(
+            tool=self.tool, action=self.action,
+            input_summary=self.input_summary,
+            output_summary=output_summary or {},
+            status="success", duration_ms=self.elapsed_ms,
+        )
+
+    def error(self, err, error_code: Optional[str] = None) -> None:
+        audit_log.record(
+            tool=self.tool, action=self.action,
+            input_summary=self.input_summary,
+            output_summary={"error": str(err)[:200]},
+            status="error", error_code=error_code,
+            duration_ms=self.elapsed_ms,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Flask Middleware Integration
 # ---------------------------------------------------------------------------
 

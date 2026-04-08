@@ -182,9 +182,8 @@ function renderTaskQueue() {
     taskQueueClearBtn.textContent = t("taskClearDone");
     taskQueueClearBtn.disabled = doneCount <= 0;
   }
-  taskQueueList.innerHTML = items
-    .slice(0, 8)
-    .map((item) => {
+  const _renderedItems = items.slice(0, 8);
+  const _newHtml = _renderedItems.map((item) => {
       const isDone    = item.status === "done";
       const isFailed  = item.status === "failed";
       const isQueued  = item.status === "queued";
@@ -233,6 +232,8 @@ function renderTaskQueue() {
       </div>`;
     })
     .join("");
+  // Only update DOM if content actually changed (avoids layout thrash on 1s polling)
+  if (taskQueueList.innerHTML !== _newHtml) taskQueueList.innerHTML = _newHtml;
   // Start live refresh when there are running tasks
   if (runningCount > 0) _startTaskQueueRefresh();
 }
