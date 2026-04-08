@@ -659,14 +659,27 @@ def _get_gcs_client(key_file: str) -> storage.Client:
     return storage.Client(project=creds.project_id, credentials=creds)
 
 
+# Signed URL cache: {(gs_uri, key_file, expires_seconds): (signed_url, created_at)}
+# Entries are reused until (expires_seconds - 120)s to avoid returning near-expired URLs.
+_sign_url_cache: dict = {}
+
 def sign_gcs_url(gs_uri: str, key_file: str, expires_seconds: int = 3600) -> str:
     m = re.match(r"^gs:\/\/([^\/]+)\/(.+)$", gs_uri)
     if not m:
         return ""
+    cache_key = (gs_uri, key_file, expires_seconds)
+    now = time.time()
+    cached = _sign_url_cache.get(cache_key)
+    if cached:
+        signed_url, created_at = cached
+        if now - created_at < expires_seconds - 120:  # 2-minute safety margin
+            return signed_url
     bucket_name, blob_name = m.group(1), m.group(2)
     client = _get_gcs_client(key_file)
     blob = client.bucket(bucket_name).blob(blob_name)
-    return blob.generate_signed_url(version="v4", expiration=expires_seconds, method="GET")
+    signed_url = blob.generate_signed_url(version="v4", expiration=expires_seconds, method="GET")
+    _sign_url_cache[cache_key] = (signed_url, now)
+    return signed_url
 
 
 def run_google_image_generate(payload: Dict) -> Tuple[int, Dict]:

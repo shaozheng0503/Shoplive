@@ -139,6 +139,16 @@ function formatElapsedSec(ms) {
   return Math.max(0, Math.floor((Number(ms) || 0) / 1000));
 }
 
+// rAF handle for batching rapid updateVideoTask() calls into one renderTaskQueue()
+let _taskQueueRafId = null;
+function _scheduleRenderTaskQueue() {
+  if (_taskQueueRafId) return;
+  _taskQueueRafId = requestAnimationFrame(() => {
+    _taskQueueRafId = null;
+    renderTaskQueue();
+  });
+}
+
 // Auto-refresh timer for running tasks (shows live elapsed time)
 let _taskQueueRefreshTimer = null;
 function _startTaskQueueRefresh() {
@@ -283,7 +293,7 @@ function cancelVideoTask(taskId) {
 function updateVideoTask(id, patch = {}) {
   if (!id || !state.taskMap[id]) return;
   state.taskMap[id] = { ...state.taskMap[id], ...patch };
-  renderTaskQueue();
+  _scheduleRenderTaskQueue(); // batched via rAF — coalesces burst updates into one render
 }
 
 function finishVideoTask(id, ok = true, stage = "") {

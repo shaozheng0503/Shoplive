@@ -535,15 +535,33 @@ export function renderVideoEditor() {
   if (!document.getElementById("videoEditorPanel")) return;
   if (!state.videoEditorOpen) return;
   const _currentHash = JSON.stringify({
+    // Motion
     speed: state.videoEdit.speed,
+    // Mask / text overlay
     maskText: state.videoEdit.maskText,
     maskStyle: state.videoEdit.maskStyle,
+    maskColor: state.videoEdit.maskColor,
+    maskFont: state.videoEdit.maskFont,
+    x: state.videoEdit.x,
+    y: state.videoEdit.y,
+    w: state.videoEdit.w,
+    h: state.videoEdit.h,
+    opacity: state.videoEdit.opacity,
+    rotation: state.videoEdit.rotation,
+    // Color grading
     temp: state.videoEdit.temp,
+    tint: state.videoEdit.tint,
     sat: state.videoEdit.sat,
+    vibrance: state.videoEdit.vibrance,
+    // BGM
     bgmMood: state.videoEdit.bgmMood,
+    bgmExtract: state.videoEdit.bgmExtract,
+    bgmVolume: state.videoEdit.bgmVolume,
+    bgmReplaceMode: state.videoEdit.bgmReplaceMode,
+    // UI state
     activeModule: state.videoEdit.activeModule,
     localBgmName: state.videoEdit.localBgmName,
-    // Include active card context so switching cards always forces a re-render
+    // Active card context — switching cards forces a re-render
     lastVideoUrl: state.lastVideoUrl,
     activeVideoCardId: state.activeVideoCardId,
   });
