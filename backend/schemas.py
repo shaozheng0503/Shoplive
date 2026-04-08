@@ -483,20 +483,30 @@ class VideoEditExportRequest(BaseModel):
     proxy: str = Field(default="", description="HTTP proxy for downloading the video.")
     edits: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Edit parameters: "
-                    "speed (0.5-2.0, playback speed), "
-                    "sat (-30 to 30, saturation), "
-                    "vibrance (-30 to 30, color vibrance), "
-                    "temp (-30 to 30, color temperature), "
-                    "tint (-30 to 30, color tint), "
-                    "maskText (text overlay string), "
-                    "opacity (0-100, text opacity), "
-                    "x (0-100, text X position %), "
-                    "y (0-100, text Y position %), "
-                    "h (6-60, text height %), "
-                    "bgmExtract (bool, enable BGM mixing), "
-                    "bgmVolume (0-100, BGM volume %), "
-                    "localBgmDataUrl (data URL of BGM audio file).",
+        description=(
+            "Edit parameters (all optional): "
+            "speed (0.5-2.0, playback speed), "
+            "sat (-30 to 30, saturation), "
+            "vibrance (-30 to 30, brightness/vibrance), "
+            "temp (-30 to 30, colour temperature), "
+            "tint (-30 to 30, colour tint/hue), "
+            "fadeIn (0-3.0 s, fade-in duration at start), "
+            "fadeOut (0-3.0 s, fade-out duration at end), "
+            "maskText (text overlay string), "
+            "maskStyle (elegant|bold|soft|neon|luxury|minimal|stamp|cinematic), "
+            "maskFont (sans|serif|kai|impact|rounded|mono), "
+            "maskColor (hex colour, e.g. #ffffff), "
+            "opacity (0-100, text opacity), "
+            "x (0-100, text X position %), "
+            "y (0-100, text Y position %), "
+            "w (10-100, text box width %), "
+            "h (6-60, text height %), "
+            "rotation (-30 to 30, text rotation deg), "
+            "bgmExtract (bool, enable BGM mixing), "
+            "bgmVolume (0-100, BGM volume %), "
+            "bgmMood (elegant|daily|piano|energetic|happy|calm|trendy|romantic), "
+            "localBgmDataUrl (data URL of BGM audio file)."
+        ),
     )
 
 

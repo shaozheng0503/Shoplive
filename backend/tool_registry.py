@@ -319,10 +319,16 @@ TOOL_REGISTRY: List[Dict[str, Any]] = [
                     "vibrance (float -1.0–1.0), "
                     "temp (float -1.0–1.0, color temperature warm/cool), "
                     "tint (float -1.0–1.0), "
+                    "fadeIn (float 0–3.0, seconds of fade-in from black at the start), "
+                    "fadeOut (float 0–3.0, seconds of fade-out to black at the end), "
                     "maskText (string, text to burn into the video frame — use this field name exactly, NOT 'text_overlay'), "
+                    "maskStyle (string: elegant|bold|soft|neon|luxury|minimal|stamp|cinematic — visual style of the text overlay), "
+                    "maskFont (string: sans|serif|kai|impact|rounded|mono — font family for the text), "
+                    "maskColor (string hex color, e.g. '#ffffff' for white text), "
                     "bgmExtract (bool, extract background music), "
                     "bgmVolume (float 0.0–1.0). "
-                    "Examples: {'speed': 1.5, 'sat': 1.2} or {'maskText': '限时特卖'} or {'speed': 2.0}."
+                    "Examples: {'speed': 1.5, 'sat': 1.2} or {'maskText': '限时特卖', 'maskStyle': 'bold'} "
+                    "or {'fadeIn': 0.5, 'fadeOut': 0.8} or {'speed': 2.0}."
                 ),
             },
         },

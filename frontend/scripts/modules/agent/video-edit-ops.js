@@ -647,3 +647,50 @@ export async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     _pushSystemStateMsg(msg ? `${t("speedIntentFailed")}（${msg}）` : t("speedIntentFailed"), "blocked");
   }
 }
+
+/**
+ * Apply fade-in / fade-out to the current video via /api/video/edit/export.
+ * intent = { fadeIn: 0.5, fadeOut: 0.5 }
+ */
+export async function applyFadeToCurrentVideo({ fadeIn = 0, fadeOut = 0 } = {}) {
+  const zh = currentLang === "zh";
+  if (!state.lastVideoUrl) {
+    _pushSystemStateMsg(zh ? "请先加载视频" : "Please load a video first", "blocked");
+    return;
+  }
+  const fi = Math.max(0, Math.min(3, Number(fadeIn) || 0));
+  const fo = Math.max(0, Math.min(3, Number(fadeOut) || 0));
+  if (!fi && !fo) {
+    _pushSystemStateMsg(zh ? "请指定淡入或淡出时长（如 0.5 秒）" : "Please specify fade-in or fade-out duration", "blocked");
+    return;
+  }
+  const parts = [];
+  if (fi) parts.push(zh ? `淡入 ${fi}s` : `fade-in ${fi}s`);
+  if (fo) parts.push(zh ? `淡出 ${fo}s` : `fade-out ${fo}s`);
+  const label = parts.join(" + ");
+  const bubble = _pushSystemStateMsg(
+    zh ? `🎬 正在添加${label}效果…` : `🎬 Applying ${label}…`, "progress"
+  );
+  try {
+    pushVideoUrlToHistory();
+    const base = getApiBase();
+    const resp = await postJson(
+      `${base}/api/video/edit/export`,
+      { video_url: toAbsoluteVideoUrl(state.lastVideoUrl), edits: { ...state.videoEdit, fadeIn: fi, fadeOut: fo } },
+      240000
+    );
+    const exportedUrl = String(resp?.video_url || "").trim();
+    if (!exportedUrl) throw new Error("exported url missing");
+    state.lastVideoUrl = exportedUrl;
+    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
+    _renderVideoEditor();
+    _applyVideoEditsToPreview();
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? `✅ ${label} 已应用` : `✅ ${label} applied`;
+    bubble?.classList.replace("status-tone-progress", "status-tone-done");
+  } catch (_e) {
+    const bodyEl = bubble?.querySelector("[data-msg-body]");
+    if (bodyEl) bodyEl.textContent = zh ? `❌ 淡入淡出失败` : `❌ Fade failed`;
+    bubble?.classList.replace("status-tone-progress", "status-tone-blocked");
+  }
+}

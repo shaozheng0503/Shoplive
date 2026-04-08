@@ -2,7 +2,7 @@ import { createTransientBackoffByPreset } from "../../shared/polling.js";
 import { currentLang, setCurrentLang, i18n, shortFeedback, feedbackDeck, insightPulseDeck, targetBatches, brandBatches, REGION_ITEMS, t, shuffle, nextLead, withLead, nextInsightPulseLine } from './i18n.js';
 import { state, smartOptionCache, MAX_CONCURRENT_VIDEO_JOBS, CHAT_TAIL_LIMIT_WHEN_SPLIT } from './state.js';
 import { getApiBase, postJson, postSse } from './utils.js';
-import { initVideoEditCallbacks, pushVideoUrlToHistory, _loadVideoHistory, applyRangedSpeedToCurrentVideo, applyColorGradingToCurrentVideo, applyBgmEditToCurrentVideo, pollRenderJob, applyTrimToCurrentVideo, applyMultiTrimToCurrentVideo, applySubtitleStyleToCurrentVideo, applyUndoLastEdit, applyAsrSubtitlesToCurrentVideo, applyImageOverlayToCurrentVideo, applySubtitleToCurrentVideo, applyPlaybackSpeedToCurrentVideo } from './video-edit-ops.js';
+import { initVideoEditCallbacks, pushVideoUrlToHistory, _loadVideoHistory, applyRangedSpeedToCurrentVideo, applyColorGradingToCurrentVideo, applyBgmEditToCurrentVideo, pollRenderJob, applyTrimToCurrentVideo, applyMultiTrimToCurrentVideo, applySubtitleStyleToCurrentVideo, applyUndoLastEdit, applyAsrSubtitlesToCurrentVideo, applyImageOverlayToCurrentVideo, applySubtitleToCurrentVideo, applyPlaybackSpeedToCurrentVideo, applyFadeToCurrentVideo } from './video-edit-ops.js';
 import { initVideoEditorCallbacks, applyVideoEditsToPreview, renderVideoEditor, clampNum, fmtSec, getVideoDurationSec, getTimelineSnapCandidates, snapTimelineSec, ensureTimelineState, buildTrackSegmentsHtml, getTrackRangesByKeyframes, isTrackActiveAtTime, buildTimelineRowsHtml, revokeLocalObjectUrl, readFileAsDataUrl, setupSurfaceFullscreen, setupMaskDrag } from './video-editor-ui.js';
 import { initWorkspaceCallbacks, buildStoryboardText, buildWorkflowInput, hasWorkflowRequiredInput, callShopliveWorkflow, hydrateWorkflowTexts, applyWorkspaceMode, updateWorkspaceTabs, updateWorkspaceToolbarVisibility, updateToolbarIndicator, buildSegmentedStoryboard, buildStoryboardFromPromptSegments, parseStoryboardSegments, renderScriptEditor } from './workspace.js';
 import { initAgentRunCallbacks, callAgentRunAndRender } from './agent-run.js';
@@ -2658,6 +2658,19 @@ function extractVideoEditIntent(raw = "") {
     }
   }
 
+  // ── 3.5 淡入/淡出 ──────────────────────────────────────────────────────────
+  {
+    const hasFadeIn  = /(淡入|fade.?in|开头淡入|片头.*淡|gradually.*appear)/i.test(str);
+    const hasFadeOut = /(淡出|fade.?out|结尾淡出|片尾.*淡|gradually.*disappear)/i.test(str);
+    const hasFadeBoth = /(淡入.*淡出|fade.*in.*out|首尾淡)/i.test(str);
+    // Duration: parse "淡入0.5秒" or "fade in 1s" → default 0.5s
+    const durMatch = str.match(/(?:fade.?(?:in|out)[^\d]*|淡[入出][^秒\d]*)(\d+(?:\.\d+)?)\s*s?(?:秒)?/i);
+    const dur = durMatch ? parseFloat(durMatch[1]) : 0.5;
+    if (hasFadeBoth) return { type: "fade", fadeIn: dur, fadeOut: dur };
+    if (hasFadeIn)   return { type: "fade", fadeIn: dur,  fadeOut: 0 };
+    if (hasFadeOut)  return { type: "fade", fadeIn: 0,    fadeOut: dur };
+  }
+
   // ── 4. BGM ─────────────────────────────────────────────────────────────────
   if (/(bgm|背景音乐|音乐|配乐|background music|music|音效)/i.test(str)) {
     if (/(去掉|删除|移除|关闭|静音|remove|delete|mute|off|no music)/i.test(str)) {
@@ -2756,6 +2769,9 @@ async function _dispatchSingleIntent(intent) {
       return true;
     case "bgm":
       await applyBgmEditToCurrentVideo(intent);
+      return true;
+    case "fade":
+      await applyFadeToCurrentVideo(intent);
       return true;
     default:
       return false;

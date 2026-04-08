@@ -25,6 +25,127 @@ from shoplive.backend.validation import validate_request
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Text-overlay preset style → ffmpeg drawtext parameter mapping
+# Approximates the 8 CSS presets from video-editor-ui.js in ffmpeg drawtext syntax.
+# ---------------------------------------------------------------------------
+_DRAWTEXT_STYLE_PARAMS: Dict[str, dict] = {
+    # box=0: transparent background; shadow for legibility
+    "elegant":   dict(box=0, shadowx=2,  shadowy=2,  shadowcolor="black@0.55"),
+    # heavy dark background box, no shadow
+    "bold":      dict(box=1, boxcolor="black@0.78",     boxborderw=18, shadowx=0, shadowy=0),
+    # soft blue-tinted background, subtle shadow
+    "soft":      dict(box=1, boxcolor="0x7890FF@0.22",  boxborderw=20, shadowx=1, shadowy=1, shadowcolor="black@0.35"),
+    # no background; glow shadow in text colour (shadow matches fontcolor at call-time)
+    "neon":      dict(box=0, shadowx=4,  shadowy=4,  shadowcolor="MATCH_FONTCOLOR"),
+    # gold-tinted box, golden shadow
+    "luxury":    dict(box=1, boxcolor="0xD4AF64@0.18",  boxborderw=14, shadowx=2, shadowy=2, shadowcolor="0xD4AF6A@0.75"),
+    # bare text, no box, no shadow — clean minimal look
+    "minimal":   dict(box=0, shadowx=0,  shadowy=0),
+    # stamp-like: no fill, light outline effect via white shadow
+    "stamp":     dict(box=0, shadowx=1,  shadowy=1,  shadowcolor="white@0.8"),
+    # cinematic: full black bar (large padding), no shadow
+    "cinematic": dict(box=1, boxcolor="black@0.82",     boxborderw=44, shadowx=0, shadowy=0),
+}
+
+# ---------------------------------------------------------------------------
+# Font key → ordered list of candidate file paths (first existing one wins)
+# ---------------------------------------------------------------------------
+_FONT_CANDIDATES: Dict[str, List[str]] = {
+    # sans-serif (CJK-capable)
+    "sans":    [
+        "/System/Library/Fonts/STHeiti Light.ttc",          # macOS CJK
+        "/System/Library/Fonts/Supplemental/Arial.ttf",     # macOS ASCII
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ],
+    # serif (CJK-capable via Songti)
+    "serif":   [
+        "/System/Library/Fonts/Supplemental/Songti.ttc",
+        "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSerif.ttf",
+    ],
+    # kai (cursive CJK)
+    "kai":     [
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ],
+    # impact / heavy headline
+    "impact":  [
+        "/System/Library/Fonts/Supplemental/Impact.ttf",
+        "/usr/share/fonts/truetype/msttcorefonts/Impact.ttf",
+        "/usr/share/fonts/impact.ttf",
+    ],
+    # rounded
+    "rounded": [
+        "/System/Library/Fonts/SFNSRounded.ttf",
+        "/System/Library/Fonts/Avenir Next.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ],
+    # monospace
+    "mono":    [
+        "/System/Library/Fonts/Supplemental/Courier New.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    ],
+}
+
+
+def _resolve_font_path(font_key: str) -> str:
+    """Return first existing font file path for key, or '' (ffmpeg uses default)."""
+    for p in _FONT_CANDIDATES.get(font_key or "sans", []):
+        if Path(p).exists():
+            return p
+    return ""
+
+
+def _build_drawtext_filter(
+    text: str,
+    fontsize: int,
+    fontcolor: str,
+    alpha: float,
+    x_expr: str,
+    y_expr: str,
+    mask_style: str,
+    mask_font: str,
+    enable_clause: str = "",
+) -> str:
+    """Build a complete ffmpeg drawtext filter string with preset style + font."""
+    style = _DRAWTEXT_STYLE_PARAMS.get(mask_style, _DRAWTEXT_STYLE_PARAMS["elegant"])
+    fontfile = _resolve_font_path(mask_font)
+    fontfile_clause = f"fontfile='{fontfile}':" if fontfile else ""
+
+    # For neon: shadow colour matches font colour to create glow effect
+    shadow_color = style.get("shadowcolor", "black@0.55")
+    if shadow_color == "MATCH_FONTCOLOR":
+        shadow_color = f"{fontcolor}@0.9"
+
+    parts = [
+        f"text='{text}'",
+        f"{fontfile_clause}fontsize={fontsize}",
+        f"fontcolor={fontcolor}",
+        f"alpha={_fmt_float(alpha, 3)}",
+        f"x={x_expr}",
+        f"y={y_expr}",
+    ]
+    # Box / background
+    if style.get("box", 0):
+        parts.append("box=1")
+        parts.append(f"boxcolor={style.get('boxcolor', 'black@0.5')}")
+        parts.append(f"boxborderw={style.get('boxborderw', 14)}")
+    else:
+        parts.append("box=0")
+    # Shadow
+    sx = style.get("shadowx", 0)
+    sy = style.get("shadowy", 0)
+    if sx or sy:
+        parts.append(f"shadowx={sx}:shadowy={sy}:shadowcolor={shadow_color}")
+    if enable_clause:
+        parts.append(enable_clause.lstrip(":"))
+    return "drawtext=" + ":".join(parts)
+
 
 def _clamp_num(value, minimum, maximum, default):
     try:
@@ -468,24 +589,30 @@ def register_video_edit_routes(
                 else:
                     video_filters.append(f"eq=saturation={_fmt_float(sat)}:brightness={_fmt_float(bright)}:contrast={_fmt_float(contrast)}")
                     video_filters.append(f"hue=h={_fmt_float(hue, 3)}")
+                # Fade in / fade out — applied after colour grading, before text
+                fade_in  = _clamp_num(edits.get("fadeIn",  0), 0, 3.0, 0)
+                fade_out = _clamp_num(edits.get("fadeOut", 0), 0, 3.0, 0)
+                if fade_in > 0:
+                    video_filters.append(f"fade=t=in:st=0:d={_fmt_float(fade_in, 3)}")
+                if fade_out > 0:
+                    _fo_start = _fmt_float(max(0.0, duration_seconds - fade_out), 3)
+                    video_filters.append(f"fade=t=out:st={_fo_start}:d={_fmt_float(fade_out, 3)}")
+
+                mask_style = str(edits.get("maskStyle") or "elegant").strip()
+                mask_font  = str(edits.get("maskFont")  or "sans").strip()
                 mask_applied = False
                 mask_enable_expr = _build_time_enable_expr(mask_ranges)
                 mask_allowed = mask_mode != "off"
                 if mask_text and drawtext_available and mask_allowed:
-                    safe_text = escape_drawtext_text(mask_text)
+                    safe_text    = escape_drawtext_text(mask_text)
                     enable_clause = f":enable='{mask_enable_expr}'" if (mask_mode == "ranged" and mask_enable_expr) else ""
-                    video_filters.append(
-                        "drawtext="
-                        f"text='{safe_text}':"
-                        f"fontsize={text_size}:"
-                        f"fontcolor={mask_color}:"
-                        f"alpha={_fmt_float(mask_opacity, 3)}:"
-                        f"x={text_x_expr}:"
-                        f"y={text_y_expr}:"
-                        "box=1:"
-                        "boxcolor=black@0.28:"
-                        f"boxborderw=14{enable_clause}"
-                    )
+                    video_filters.append(_build_drawtext_filter(
+                        text=safe_text, fontsize=text_size,
+                        fontcolor=mask_color, alpha=mask_opacity / 100.0,
+                        x_expr=text_x_expr, y_expr=text_y_expr,
+                        mask_style=mask_style, mask_font=mask_font,
+                        enable_clause=enable_clause,
+                    ))
                     mask_applied = True
 
                 # Batch ASR subtitles — each item: {text, start, end}
@@ -497,23 +624,18 @@ def register_video_edit_routes(
                             continue
                         try:
                             sub_start = max(0.0, float(sub.get("start") or 0))
-                            sub_end = max(sub_start + 0.05, float(sub.get("end") or sub_start + 2))
+                            sub_end   = max(sub_start + 0.05, float(sub.get("end") or sub_start + 2))
                         except (TypeError, ValueError):
                             continue
                         safe_sub = escape_drawtext_text(sub_text)
-                        video_filters.append(
-                            "drawtext="
-                            f"text='{safe_sub}':"
-                            f"fontsize={text_size}:"
-                            f"fontcolor={mask_color}:"
-                            f"alpha={_fmt_float(mask_opacity, 3)}:"
-                            f"x={text_x_expr}:"
-                            f"y={text_y_expr}:"
-                            "box=1:"
-                            "boxcolor=black@0.28:"
-                            f"boxborderw=14:"
-                            f"enable='between(t,{_fmt_float(sub_start, 3)},{_fmt_float(sub_end, 3)})'"
-                        )
+                        enable_sub = f":enable='between(t,{_fmt_float(sub_start, 3)},{_fmt_float(sub_end, 3)})'"
+                        video_filters.append(_build_drawtext_filter(
+                            text=safe_sub, fontsize=text_size,
+                            fontcolor=mask_color, alpha=mask_opacity / 100.0,
+                            x_expr=text_x_expr, y_expr=text_y_expr,
+                            mask_style=mask_style, mask_font=mask_font,
+                            enable_clause=enable_sub,
+                        ))
                         mask_applied = True
 
                 cmd = [
