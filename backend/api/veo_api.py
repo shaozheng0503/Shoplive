@@ -1648,11 +1648,18 @@ def register_veo_routes(
             if not split_fn or not concat_videos_ffmpeg or not download_gcs_blob_to_file:
                 return json_error(f"{total_seconds}s generation helpers not configured", 500)
 
-            parts = split_fn(prompt, api_base=api_base, api_key=api_key, model=llm_model, proxy=proxy)
+            # Run LLM prompt-split and GCP token fetch concurrently — they are fully
+            # independent and each takes 1-3 s, so overlapping saves ~2-4 s total.
+            _prep_pool = get_executor()
+            _split_fut = _prep_pool.submit(
+                split_fn, prompt,
+                api_base=api_base, api_key=api_key, model=llm_model, proxy=proxy,
+            )
+            _token_fut = _prep_pool.submit(get_access_token, key_file, proxy)
+            parts = _split_fut.result()
+            token = _token_fut.result()
             prompt_a = parts["part1"]
             prompt_b = parts["part2"]
-
-            token = get_access_token(key_file, proxy)
             aspect_ratio = (payload.get("aspect_ratio") or "16:9").strip()
             storage_uri = (payload.get("storage_uri") or "").strip() or None
             image_b64 = (payload.get("image_base64") or "").strip()
@@ -1802,11 +1809,20 @@ def register_veo_routes(
 
             tmp_dir = Path(tempfile.mkdtemp(prefix=f"veo{total_seconds}s_"))
             try:
-                local_files = []
-                for seg in segments:
+                # Download A and B from GCS in parallel — each is ~1-3 s of network I/O
+                def _dl(seg):
                     lp = tmp_dir / f"seg_{seg['label']}.mp4"
                     download_gcs_blob_to_file(seg["gcs_uri"], lp, key_file, project_id)
-                    local_files.append(lp)
+                    return seg["label"], lp
+
+                _dl_pool = get_executor()
+                _dl_futs = {_dl_pool.submit(_dl, seg): seg["label"] for seg in segments}
+                _lp_map: dict = {}
+                for _df in as_completed(_dl_futs, timeout=600):
+                    _lbl, _lp = _df.result()
+                    _lp_map[_lbl] = _lp
+                # Reassemble in sorted label order (A before B) for correct concat
+                local_files = [_lp_map[seg["label"]] for seg in segments]
                 concat_path = tmp_dir / f"concat_{total_seconds}s.mp4"
                 concat_videos_ffmpeg(local_files, concat_path)
                 final_data = concat_path.read_bytes()
