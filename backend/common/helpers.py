@@ -109,15 +109,24 @@ def parse_generic_data_url(data_url: str, accepted_prefix: str) -> Tuple[str, st
 
 def escape_drawtext_text(value: str) -> str:
     txt = str(value or "")
-    # Strip control characters and zero-width Unicode that confuse ffmpeg's
-    # drawtext parser (RTL marks, BOM, zero-width joiners, etc.)
-    txt = "".join(c for c in txt if ord(c) >= 32 or c == "\t")
+    # Zero-width / invisible Unicode chars that confuse ffmpeg's drawtext parser
+    # (ord >= 32 so they survive the control-char filter below).
+    _ZERO_WIDTH = frozenset(
+        "\u200b\u200c\u200d\u200e\u200f"  # ZW space, NJ, J, LRM, RLM
+        "\ufeff\u2060\u2061\u2062\u2063"  # BOM, word-joiner, invisible operators
+        "\u034f"                           # combining grapheme joiner
+    )
+    # Keep \n so it can be converted to literal \n below; allow \t; strip the rest < 32
+    txt = "".join(
+        c for c in txt
+        if (ord(c) >= 32 and c not in _ZERO_WIDTH) or c in ("\t", "\n")
+    )
     txt = txt.replace("\\", "\\\\")
     txt = txt.replace(":", "\\:")
     txt = txt.replace("'", "\\'")
     txt = txt.replace('"', '\\"')   # double-quotes break drawtext filter string
     txt = txt.replace("%", "\\%")
-    txt = txt.replace("\n", "\\n")
+    txt = txt.replace("\n", "\\n")  # must be AFTER strip (strip kept \n for this step)
     return txt
 
 

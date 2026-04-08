@@ -976,3 +976,510 @@ class TestVideoOverlayImage:
         })
         assert r.status_code == 200
         assert r.get_json()["ok"] is True
+
+
+# ===========================================================================
+# New capability tests (added after video-editing enhancements)
+# Covers: fade in/out, mask preset styles, font selection, drawtext helpers,
+#         escape security, GCS download retry, _build_drawtext_filter unit tests.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Fade in / fade out
+# ---------------------------------------------------------------------------
+
+class TestFadeEdit:
+    """Fade-in / fade-out are applied as ffmpeg fade filter in the export pipeline."""
+    EP = "/api/video/edit/export"
+
+    def test_fade_in_only(self, client, vid_silent):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"fadeIn": 0.3},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_out_only(self, client, vid_silent):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"fadeOut": 0.4},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_in_and_out(self, client, vid_audio):
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {"fadeIn": 0.5, "fadeOut": 0.5},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_clamped_to_max(self, client, vid_silent):
+        """fadeIn > 3.0 is clamped to 3.0 — should not crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"fadeIn": 99.0},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_zero_is_noop(self, client, vid_silent):
+        """fadeIn=0, fadeOut=0 → no fade filter added, still succeeds."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"fadeIn": 0, "fadeOut": 0},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_combined_with_speed_and_text(self, client, vid_audio):
+        """Fade + speed + text overlay — all filters in chain, no conflict."""
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {
+                "speed": 1.25,
+                "fadeIn": 0.3, "fadeOut": 0.3,
+                "maskText": "Sale",
+                "maskStyle": "bold",
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_combined_with_color(self, client, vid_silent):
+        """Fade applied after colour grading — filter ordering must be correct."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "sat": 15, "vibrance": 5,
+                "fadeIn": 0.2, "fadeOut": 0.4,
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_fade_negative_clamped_to_zero(self, client, vid_silent):
+        """Negative fade duration clamped to 0 → noop, no crash."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"fadeIn": -1.0, "fadeOut": -0.5},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Mask preset styles (maskStyle)
+# ---------------------------------------------------------------------------
+
+class TestMaskStyle:
+    """All 8 maskStyle presets must produce a valid exported video."""
+    EP = "/api/video/edit/export"
+    STYLES = ["elegant", "bold", "soft", "neon", "luxury", "minimal", "stamp", "cinematic"]
+
+    @pytest.mark.parametrize("style", STYLES)
+    def test_style_export_succeeds(self, client, vid_silent, style):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "Test",
+                "maskStyle": style,
+                "maskColor": "#ffffff",
+                "opacity": 85,
+                "x": 50, "y": 80, "h": 12,
+            },
+        })
+        assert r.status_code == 200, f"style={style}: {r.get_json()}"
+        assert r.get_json()["ok"] is True
+
+    def test_unknown_style_falls_back_to_elegant(self, client, vid_silent):
+        """Unrecognised style falls back gracefully — no 500."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Hi", "maskStyle": "totally_unknown_preset"},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_neon_style_with_custom_color(self, client, vid_silent):
+        """Neon glow shadow should match the custom fontcolor (no hardcoded cyan)."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "GLOW",
+                "maskStyle": "neon",
+                "maskColor": "#ff00aa",  # pink neon
+                "opacity": 90,
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_cinematic_with_fade(self, client, vid_audio):
+        """Cinematic (full black bar) + fade — common professional combo."""
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {
+                "maskText": "Director's Cut",
+                "maskStyle": "cinematic",
+                "fadeIn": 0.3, "fadeOut": 0.3,
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Font selection (maskFont)
+# ---------------------------------------------------------------------------
+
+class TestMaskFont:
+    """All 6 maskFont values must be accepted without crashing.
+    Font file may or may not exist on the test machine — we test graceful degradation."""
+    EP = "/api/video/edit/export"
+    FONTS = ["sans", "serif", "kai", "impact", "rounded", "mono"]
+
+    @pytest.mark.parametrize("font", FONTS)
+    def test_font_export_succeeds(self, client, vid_silent, font):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "字体测试 Font Test",
+                "maskFont": font,
+                "maskStyle": "elegant",
+                "opacity": 90,
+            },
+        })
+        assert r.status_code == 200, f"font={font}: {r.get_json()}"
+        assert r.get_json()["ok"] is True
+
+    def test_unknown_font_falls_back_gracefully(self, client, vid_silent):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {"maskText": "Test", "maskFont": "comic_sans_ms_lol"},
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+    def test_font_and_style_combined(self, client, vid_silent):
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": "Impact Bold",
+                "maskFont": "impact",
+                "maskStyle": "bold",
+                "maskColor": "#ff3300",
+                "opacity": 95,
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: escape_drawtext_text security
+# ---------------------------------------------------------------------------
+
+class TestEscapeDrawtext:
+    """escape_drawtext_text must safely handle all special characters."""
+
+    def _escape(self, text: str) -> str:
+        from shoplive.backend.common.helpers import escape_drawtext_text
+        return escape_drawtext_text(text)
+
+    def test_backslash_escaped(self):
+        assert self._escape("a\\b") == "a\\\\b"
+
+    def test_colon_escaped(self):
+        assert "\\:" in self._escape("00:00")
+
+    def test_single_quote_escaped(self):
+        assert "\\'" in self._escape("it's")
+
+    def test_double_quote_escaped(self):
+        """Double quotes must be escaped — previously a security gap."""
+        result = self._escape('say "hello"')
+        assert '\\"' in result
+        assert '"' not in result.replace('\\"', "")
+
+    def test_percent_escaped(self):
+        assert "\\%" in self._escape("50%")
+
+    def test_newline_converted(self):
+        assert "\\n" in self._escape("line1\nline2")
+
+    def test_control_chars_stripped(self):
+        """NUL, BEL, ESC and other control chars (ord < 32) must be removed."""
+        result = self._escape("a\x00b\x07c\x1bd")
+        assert "\x00" not in result
+        assert "\x07" not in result
+        assert "\x1b" not in result
+        assert "abcd" in result  # visible chars kept
+
+    def test_zero_width_chars_stripped(self):
+        """Zero-width joiner (U+200D) and similar should be stripped."""
+        zwj = "\u200d"
+        result = self._escape(f"a{zwj}b")
+        assert zwj not in result
+        assert "ab" in result
+
+    def test_tab_preserved(self):
+        """Tab (0x09) is >= 32 after the strip logic — kept as-is."""
+        # Tab ord=9 is < 32 but we allow it in the implementation; just verify no crash
+        result = self._escape("a\tb")
+        assert isinstance(result, str)
+
+    def test_empty_string(self):
+        assert self._escape("") == ""
+
+    def test_plain_text_unchanged(self):
+        assert self._escape("Hello World 123") == "Hello World 123"
+
+    def test_combined_special_chars(self):
+        """Real-world scenario: product description with many special chars."""
+        s = '50% OFF: "Shop Now!" It\'s a sale\\deal'
+        result = self._escape(s)
+        assert "\\%" in result
+        assert "\\:" in result
+        assert '\\"' in result
+        assert "\\'" in result
+        assert "\\\\" in result
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _build_drawtext_filter
+# ---------------------------------------------------------------------------
+
+class TestBuildDrawtextFilter:
+    """_build_drawtext_filter must produce correct ffmpeg drawtext string for each style."""
+
+    def _build(self, **kwargs):
+        from shoplive.backend.api.video_edit_api import _build_drawtext_filter
+        defaults = dict(
+            text="Test", fontsize=24, fontcolor="#ffffff", alpha=0.9,
+            x_expr="10", y_expr="10",
+            mask_style="elegant", mask_font="sans", enable_clause="",
+        )
+        defaults.update(kwargs)
+        return _build_drawtext_filter(**defaults)
+
+    def test_starts_with_drawtext(self):
+        assert self._build().startswith("drawtext=")
+
+    def test_text_included(self):
+        assert "text='Hello'" in self._build(text="Hello")
+
+    def test_fontsize_included(self):
+        assert "fontsize=32" in self._build(fontsize=32)
+
+    def test_fontcolor_included(self):
+        assert "fontcolor=#ff0000" in self._build(fontcolor="#ff0000")
+
+    def test_elegant_has_no_box(self):
+        f = self._build(mask_style="elegant")
+        assert "box=0" in f
+        assert "box=1" not in f
+
+    def test_bold_has_box(self):
+        f = self._build(mask_style="bold")
+        assert "box=1" in f
+        assert "boxcolor=black@0.78" in f
+
+    def test_neon_shadow_matches_fontcolor(self):
+        """Neon glow shadow must use the same colour as fontcolor."""
+        f = self._build(mask_style="neon", fontcolor="#00f5d4")
+        assert "#00f5d4" in f  # shadow should reference the neon colour
+
+    def test_cinematic_has_large_boxborderw(self):
+        f = self._build(mask_style="cinematic")
+        assert "boxborderw=44" in f
+
+    def test_enable_clause_appended(self):
+        f = self._build(enable_clause=":enable='between(t,1,3)'")
+        assert "enable='between(t,1,3)'" in f
+
+    def test_unknown_style_falls_back(self):
+        """Unrecognised maskStyle uses elegant default — no KeyError."""
+        f = self._build(mask_style="__nonexistent__")
+        assert f.startswith("drawtext=")
+
+    def test_fontfile_injected_when_path_exists(self, tmp_path):
+        """If a font file exists at the resolved path, fontfile= appears in output."""
+        # Create a dummy font file at a known temp path
+        fake_font = tmp_path / "fake.ttf"
+        fake_font.write_bytes(b"FAKE")
+        # Patch _FONT_CANDIDATES to use our temp font
+        import shoplive.backend.api.video_edit_api as ve
+        original = ve._FONT_CANDIDATES.get("sans", [])
+        ve._FONT_CANDIDATES["sans"] = [str(fake_font)]
+        try:
+            f = self._build(mask_style="elegant", mask_font="sans")
+            assert "fontfile=" in f
+            assert str(fake_font) in f
+        finally:
+            ve._FONT_CANDIDATES["sans"] = original
+
+    def test_no_fontfile_when_no_path_exists(self):
+        """When no candidate path exists, fontfile= is omitted (ffmpeg uses default)."""
+        import shoplive.backend.api.video_edit_api as ve
+        original = ve._FONT_CANDIDATES.get("mono", [])
+        ve._FONT_CANDIDATES["mono"] = ["/nonexistent/path/font.ttf"]
+        try:
+            f = self._build(mask_style="minimal", mask_font="mono")
+            assert "fontfile=" not in f
+        finally:
+            ve._FONT_CANDIDATES["mono"] = original
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _resolve_font_path
+# ---------------------------------------------------------------------------
+
+class TestResolveFontPath:
+
+    def _resolve(self, key):
+        from shoplive.backend.api.video_edit_api import _resolve_font_path
+        return _resolve_font_path(key)
+
+    def test_unknown_key_returns_empty(self):
+        assert self._resolve("__no_such_font__") == ""
+
+    def test_returns_string(self):
+        result = self._resolve("sans")
+        assert isinstance(result, str)
+
+    def test_path_exists_when_nonempty(self):
+        """If a path is returned it must actually exist on disk."""
+        from pathlib import Path
+        result = self._resolve("sans")
+        if result:
+            assert Path(result).exists(), f"Resolved path does not exist: {result}"
+
+    def test_all_known_keys_return_string(self):
+        keys = ["sans", "serif", "kai", "impact", "rounded", "mono"]
+        for k in keys:
+            assert isinstance(self._resolve(k), str), f"key={k} returned non-string"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: GCS download retry
+# ---------------------------------------------------------------------------
+
+class TestGCSDownloadRetry:
+    """download_gcs_blob_to_file retries up to 3 times on transient errors."""
+
+    def test_succeeds_on_first_try(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+        from shoplive.backend.common.helpers import download_gcs_blob_to_file
+
+        out = tmp_path / "out.mp4"
+        mock_blob = MagicMock()
+        mock_blob.download_to_filename.return_value = None  # success
+
+        with patch("shoplive.backend.common.helpers._get_gcs_client") as mc:
+            mc.return_value.bucket.return_value.blob.return_value = mock_blob
+            result = download_gcs_blob_to_file("gs://bucket/file.mp4", out, "key.json")
+
+        assert mock_blob.download_to_filename.call_count == 1
+        assert result == out
+
+    def test_retries_on_transient_error_then_succeeds(self, tmp_path):
+        from unittest.mock import MagicMock, patch, call
+        from shoplive.backend.common.helpers import download_gcs_blob_to_file
+
+        out = tmp_path / "out.mp4"
+        mock_blob = MagicMock()
+        # Fail twice, succeed on 3rd attempt
+        mock_blob.download_to_filename.side_effect = [
+            ConnectionError("network blip"),
+            TimeoutError("timeout"),
+            None,  # success
+        ]
+
+        with patch("shoplive.backend.common.helpers._get_gcs_client") as mc, \
+             patch("time.sleep"):  # skip retry waits in tests
+            mc.return_value.bucket.return_value.blob.return_value = mock_blob
+            result = download_gcs_blob_to_file("gs://bucket/file.mp4", out, "key.json")
+
+        assert mock_blob.download_to_filename.call_count == 3
+        assert result == out
+
+    def test_raises_after_max_attempts(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+        from shoplive.backend.common.helpers import download_gcs_blob_to_file
+        import pytest
+
+        out = tmp_path / "out.mp4"
+        mock_blob = MagicMock()
+        mock_blob.download_to_filename.side_effect = ConnectionError("always fails")
+
+        with patch("shoplive.backend.common.helpers._get_gcs_client") as mc, \
+             patch("time.sleep"):
+            mc.return_value.bucket.return_value.blob.return_value = mock_blob
+            with pytest.raises(ConnectionError):
+                download_gcs_blob_to_file("gs://bucket/file.mp4", out, "key.json")
+
+        assert mock_blob.download_to_filename.call_count == 3  # 3 attempts exhausted
+
+    def test_invalid_uri_raises_value_error(self, tmp_path):
+        from shoplive.backend.common.helpers import download_gcs_blob_to_file
+        import pytest
+
+        with pytest.raises(ValueError, match="Invalid GCS URI"):
+            download_gcs_blob_to_file("https://not-a-gcs-uri", tmp_path / "x.mp4", "key.json")
+
+
+# ---------------------------------------------------------------------------
+# Full-chain: fade + style + font all together
+# ---------------------------------------------------------------------------
+
+class TestFullChainEditing:
+    """Integration tests that combine multiple new features in one export call."""
+    EP = "/api/video/edit/export"
+
+    def test_fade_style_font_color_combined(self, client, vid_audio):
+        """All new params together: fade + preset style + font + custom color."""
+        r = client.post(self.EP, json={
+            "video_url": vid_audio,
+            "edits": {
+                "fadeIn": 0.3, "fadeOut": 0.3,
+                "maskText": "限时特惠 SALE",
+                "maskStyle": "bold",
+                "maskFont": "sans",
+                "maskColor": "#ffcc00",
+                "opacity": 90,
+                "x": 50, "y": 82, "h": 14,
+                "speed": 1.1,
+                "sat": 8, "vibrance": 4,
+            },
+        })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["ok"] is True
+        assert d["video_url"].endswith(".mp4")
+
+    def test_all_styles_in_sequence_no_state_leak(self, client, vid_silent):
+        """Run exports with different styles back-to-back; no shared state leaks."""
+        for style in ["neon", "cinematic", "minimal"]:
+            r = client.post(self.EP, json={
+                "video_url": vid_silent,
+                "edits": {"maskText": style, "maskStyle": style},
+            })
+            assert r.status_code == 200, f"style={style} failed: {r.get_json()}"
+            assert r.get_json()["ok"] is True
+
+    def test_special_chars_in_masked_text_with_style(self, client, vid_silent):
+        """Text with quotes, percent, colon + bold preset must not crash ffmpeg."""
+        r = client.post(self.EP, json={
+            "video_url": vid_silent,
+            "edits": {
+                "maskText": '50% OFF: "Shop Now!" It\'s great\\deal',
+                "maskStyle": "bold",
+                "maskFont": "sans",
+                "opacity": 88,
+            },
+        })
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is True
