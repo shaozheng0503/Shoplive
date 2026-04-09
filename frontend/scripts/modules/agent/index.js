@@ -4767,27 +4767,35 @@ function consumeLandingParams() {
       if (dataUrl && !state.images.length) {
         state.images = [{ dataUrl, name: "landing-reference.png", source: "landing-ref" }];
         pushImageMsg(state.images);
-        setTimeout(async () => {
-          const stopProgress = startInsightProgress();
-          let usedFallback = false;
-          try {
-            const result = await analyzeImageInsight(state.images);
-            const insight = result?.insight || {};
-            const hasInsight = Boolean(insight.product_name || insight.main_business || (insight.selling_points || []).length);
-            if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
-          } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
-          stopProgress();
-          state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
-          state.lastStoryboard = buildStoryboardText();
-          syncSimpleControlsFromState();
-          pushSystemStateMsg(t("parseDone", {
-            product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
-            business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
-            style: state.template || "clean",
-          }), "done");
-          try { await hydrateWorkflowTexts(true); } catch (_) {}
-          if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
-        }, 600);
+        if (draft) {
+          // Template shortcut: draft prompt already in chatInput, image is the Veo reference frame.
+          // Skip product analysis entirely — just auto-submit to start video generation.
+          setTimeout(() => sendBtn?.click(), 400);
+        } else {
+          // User uploaded their own product image without a preset prompt:
+          // run full analysis to fill in product details.
+          setTimeout(async () => {
+            const stopProgress = startInsightProgress();
+            let usedFallback = false;
+            try {
+              const result = await analyzeImageInsight(state.images);
+              const insight = result?.insight || {};
+              const hasInsight = Boolean(insight.product_name || insight.main_business || (insight.selling_points || []).length);
+              if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
+            } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
+            stopProgress();
+            state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
+            state.lastStoryboard = buildStoryboardText();
+            syncSimpleControlsFromState();
+            pushSystemStateMsg(t("parseDone", {
+              product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+              business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+              style: state.template || "clean",
+            }), "done");
+            try { await hydrateWorkflowTexts(true); } catch (_) {}
+            if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
+          }, 600);
+        }
       }
     } catch (_e) {}
   }
