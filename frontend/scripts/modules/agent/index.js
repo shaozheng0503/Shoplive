@@ -1613,6 +1613,24 @@ function inferSystemCardMeta(text = "", opts = {}) {
   return { label: t("agentReplyLabel"), status: "", kind: "reply", tone: "neutral" };
 }
 
+// Append a "retry generation" button to a failed status bubble.
+// promptText is the finalText captured at generation time.
+function appendRetryButton(articleEl, promptText) {
+  if (!articleEl || !promptText) return;
+  const zh = currentLang === "zh";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "msg-retry-btn";
+  btn.textContent = zh ? "↺ 重新生成" : "↺ Retry";
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = zh ? "提交中…" : "Submitting…";
+    submitSimplePromptGeneration(promptText);
+  });
+  articleEl.appendChild(btn);
+}
+
 function pushSystemStateMsg(text, tone = "progress", extra = {}) {
   return pushMsg("system", text, {
     typewriter: false,
@@ -4126,9 +4144,12 @@ async function generateVideo(promptOverride = "") {
       if (pollElapsedMs > POLL_HARD_TIMEOUT_MS) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        pushSystemStateMsg(zh
-          ? `视频生成超时（总计 ${taskElapsedSec}s）。请稍后重试或简化提示词。`
-          : `Video generation timed out (${taskElapsedSec}s total). Retry later or simplify the prompt.`, "blocked");
+        appendRetryButton(
+          pushSystemStateMsg(zh
+            ? `视频生成超时（总计 ${taskElapsedSec}s）。请稍后重试或简化提示词。`
+            : `Video generation timed out (${taskElapsedSec}s total). Retry later or simplify the prompt.`, "blocked"),
+          finalText
+        );
         finishVideoTask(taskId, false, zh ? "超时" : "Timeout");
         releaseSlotOnce();
         return;
@@ -4181,11 +4202,12 @@ async function generateVideo(promptOverride = "") {
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
           if (isVeoSafetyRejection(opError)) {
+            // Safety block — no retry button: same prompt will fail again.
             pushSystemStateMsg(zh
               ? `视频生成被安全策略拦截：${opError.slice(0, 120)}。请简化提示词后重试。`
               : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`, "blocked");
           } else {
-            pushSystemStateMsg(t("genFail"), "blocked");
+            appendRetryButton(pushSystemStateMsg(t("genFail"), "blocked"), finalText);
           }
           finishVideoTask(taskId, false, zh ? "失败" : "Failed");
           releaseSlotOnce();
@@ -4207,7 +4229,7 @@ async function generateVideo(promptOverride = "") {
       } catch (_e) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        pushSystemStateMsg(t("pollFail"), "blocked");
+        appendRetryButton(pushSystemStateMsg(t("pollFail"), "blocked"), finalText);
         finishVideoTask(taskId, false, zh ? "轮询异常" : "Polling error");
         releaseSlotOnce();
         return;
@@ -4226,7 +4248,10 @@ async function generateVideo(promptOverride = "") {
     const detail = /aborted|abort/i.test(detailRaw)
       ? currentLang === "zh" ? "请求超时，请重试" : "request timeout, please retry"
       : detailRaw;
-    pushSystemStateMsg(detail ? `${t("genFail")} (${detail})` : t("genFail"), "blocked");
+    appendRetryButton(
+      pushSystemStateMsg(detail ? `${t("genFail")} (${detail})` : t("genFail"), "blocked"),
+      finalText
+    );
     finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
     releaseSlotOnce();
   }

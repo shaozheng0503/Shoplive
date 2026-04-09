@@ -5736,3 +5736,28 @@ body {
   border: 1px solid #cfe0fb !important;
   color: #3f5f95 !important;
 }
+
+/* ── Retry button inside failed generation bubbles ── */
+.msg-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 5px 13px;
+  border: 1px solid rgba(99, 140, 210, 0.45);
+  border-radius: 20px;
+  background: rgba(235, 242, 255, 0.9);
+  color: #3a5ca8;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.msg-retry-btn:hover:not(:disabled) {
+  background: rgba(210, 228, 255, 0.95);
+  border-color: rgba(99, 140, 210, 0.7);
+}
+.msg-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
