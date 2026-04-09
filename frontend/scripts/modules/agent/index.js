@@ -1857,6 +1857,38 @@ function parseDataUrl(dataUrl) {
   return { mime: m[1].toLowerCase(), base64: m[2] };
 }
 
+// Center-crop a dataURL image to match the target aspect ratio string (e.g. "9:16").
+// Veo image-to-video ignores aspect_ratio when the reference image has a different ratio,
+// so we pre-crop to guarantee the generated video dimensions match the request.
+function cropDataUrlToAspectRatio(dataUrl, aspectRatioStr) {
+  const parts = String(aspectRatioStr || "16:9").split(":");
+  const [aw, ah] = [Number(parts[0]) || 16, Number(parts[1]) || 9];
+  const targetRatio = aw / ah;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const srcRatio = img.naturalWidth / img.naturalHeight;
+      if (Math.abs(srcRatio - targetRatio) < 0.02) { resolve(dataUrl); return; }
+      let sx, sy, sw, sh;
+      if (srcRatio > targetRatio) {
+        sh = img.naturalHeight; sw = Math.round(sh * targetRatio);
+        sx = Math.round((img.naturalWidth - sw) / 2); sy = 0;
+      } else {
+        sw = img.naturalWidth; sh = Math.round(sw / targetRatio);
+        sx = 0; sy = Math.round((img.naturalHeight - sh) / 2);
+      }
+      const scale = Math.min(1, 512 / Math.max(sw, sh));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(sw * scale);
+      canvas.height = Math.round(sh * scale);
+      canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 function buildVeoReferencePayload() {
   const localImages = (Array.isArray(state.images) ? state.images : [])
     .map((item) => {
@@ -3974,7 +4006,21 @@ async function generateVideo(promptOverride = "") {
     }
 
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
-    const imagePayload = buildVeoReferencePayload();
+    let imagePayload = buildVeoReferencePayload();
+    // Pre-crop single reference image to the target aspect ratio.
+    // Veo image-to-video uses the input image's native dimensions and ignores aspect_ratio,
+    // so we center-crop before sending to guarantee the correct output format.
+    if (!useFrameMode && imagePayload.veo_mode === "image" && imagePayload.image_base64) {
+      const mime = imagePayload.image_mime_type || "image/jpeg";
+      const croppedUrl = await cropDataUrlToAspectRatio(
+        `data:${mime};base64,${imagePayload.image_base64}`,
+        state.aspectRatio || "16:9"
+      );
+      const croppedParsed = parseDataUrl(croppedUrl);
+      if (croppedParsed) {
+        imagePayload = { ...imagePayload, image_base64: croppedParsed.base64, image_mime_type: croppedParsed.mime };
+      }
+    }
     const startBody = {
       project_id: "qy-shoplazza-02",
       model: getVeoModel(),
