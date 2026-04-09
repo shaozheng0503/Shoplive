@@ -422,25 +422,31 @@ function closeRefModal() {
 [topStartBtn, startFlowBtn].forEach((btn) => {
   if (!btn) return;
   btn.addEventListener("click", async () => {
-    // Wait for any in-progress template thumbnail fetch (max 2s) before navigating
-    if (_templateRefFetch) {
-      await Promise.race([_templateRefFetch, new Promise((r) => setTimeout(r, 2000))]);
-    }
-    const draft = promptInput ? promptInput.value.trim() : "";
-    const normalizedDraftUrl = normalizeProductUrlForApi(draft);
-    const duration = durationSelect?.value || "8";
-    if (normalizedDraftUrl) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      // Wait for any in-progress template thumbnail fetch (max 2s) before navigating
+      if (_templateRefFetch) {
+        await Promise.race([_templateRefFetch, new Promise((r) => setTimeout(r, 2000))]);
+      }
+      const draft = promptInput ? promptInput.value.trim() : "";
+      const normalizedDraftUrl = normalizeProductUrlForApi(draft);
+      const duration = durationSelect?.value || "8";
+      if (normalizedDraftUrl) {
+        gotoAgent({
+          from: "landing-product-link",
+          product_url: normalizedDraftUrl,
+          duration,
+        });
+        return;
+      }
       gotoAgent({
-        from: "landing-product-link",
-        product_url: normalizedDraftUrl,
+        from: selectedRefDataUrl ? "landing-ref" : "landing-prompt",
         duration,
       });
-      return;
+    } finally {
+      btn.disabled = false;
     }
-    gotoAgent({
-      from: selectedRefDataUrl ? "landing-ref" : "landing-prompt",
-      duration,
-    });
   });
 });
 

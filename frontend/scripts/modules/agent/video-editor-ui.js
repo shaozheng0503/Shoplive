@@ -416,8 +416,13 @@ export function applyVideoEditsToPreview() {
     const hue = colorActive ? clampNum(Number(fx.tint || 0) * 1.8, -45, 45) : 0;
     video.playbackRate = speed;
     video.volume = bgmVolume;
-    // Skip style recalculation when filter hasn't changed (common during position drags)
-    const _newFilter = `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`;
+    // Skip style recalculation when filter hasn't changed (common during position drags).
+    // Use empty string when all values are neutral so the browser can use its native
+    // color-space pipeline without forcing a software filter compositing pass.
+    const _hasNonNeutral = sat !== 100 || bright !== 100 || contrast !== 100 || hue !== 0;
+    const _newFilter = _hasNonNeutral
+      ? `saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) hue-rotate(${hue}deg)`
+      : "";
     if (video.style.filter !== _newFilter) video.style.filter = _newFilter;
 
     surface.querySelector(".video-bgm-badge")?.remove();

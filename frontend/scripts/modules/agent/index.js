@@ -1404,7 +1404,7 @@ function openEditorPanel(type) {
     hydrateWorkflowTexts(true).then(() => {
       if (state.scriptEditorOpen) renderScriptEditor();
       restoreWorkspaceAnchor("auto", "nearest");
-    });
+    }).catch((_e) => {});
   }
 }
 
@@ -4994,7 +4994,7 @@ function scheduleLandingPrefillAfterWelcome() {
       setTab("upload");
       renderGrid(uploadGrid, _uploadAssets);
       fileInput.value = "";
-    });
+    }).catch((_e) => {});
   }
 
   uploadBtn2?.addEventListener("click", () => { setTab("upload"); fileInput?.click(); });
