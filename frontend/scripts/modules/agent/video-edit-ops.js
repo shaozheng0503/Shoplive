@@ -97,13 +97,22 @@ export async function applyColorGradingToCurrentVideo({ bright = 0, sat = 0, hue
   }
 }
 
-export async function applyBgmEditToCurrentVideo({ action, volume }) {
+export async function applyBgmEditToCurrentVideo({ action, volume, mood }) {
   if (action === "remove") {
     state.videoEdit = { ...state.videoEdit, bgmExtract: false, bgmVolume: 0 };
+  } else if (action === "add") {
+    // Enable BGM with specified mood (or keep current) and a sensible default volume
+    state.videoEdit = {
+      ...state.videoEdit,
+      bgmExtract: true,
+      bgmVolume: Number(volume) || 70,
+      ...(mood ? { bgmMood: mood } : {}),
+    };
   } else if (action === "lower") {
-    state.videoEdit = { ...state.videoEdit, bgmVolume: Math.max(0, Number(volume) || 30) };
+    // Also ensure bgmExtract is on — otherwise the backend won't apply the BGM at all
+    state.videoEdit = { ...state.videoEdit, bgmExtract: true, bgmVolume: Math.max(0, Number(volume) || 30) };
   } else if (action === "raise") {
-    state.videoEdit = { ...state.videoEdit, bgmVolume: Math.min(100, Number(volume) || 80) };
+    state.videoEdit = { ...state.videoEdit, bgmExtract: true, bgmVolume: Math.min(100, Number(volume) || 80) };
   }
   _applyVideoEditsToPreview();
   _pushSystemStateMsg(t("bgmIntentApplying"), "progress");

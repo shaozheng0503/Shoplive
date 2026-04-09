@@ -645,19 +645,14 @@ export function renderVideoEditor() {
           ? `
             <label class="inline-check"><input id="bgmExtractChk" type="checkbox" ${fx.bgmExtract ? "checked" : ""} /> ${t("bgmExtract")}</label>
             <label>${t("bgmMood")}<select id="bgmMoodSelect">
-              <option value="elegant">${t("bgmMoodElegant")}</option>
-              <option value="daily">${t("bgmMoodDaily")}</option>
-              <option value="trendy">${t("bgmMoodTrendy")}</option>
-              <option value="piano">${t("bgmMoodPiano")}</option>
-              <option value="energetic">${t("bgmMoodEnergetic")}</option>
-              <option value="happy">${t("bgmMoodHappy")}</option>
-              <option value="calm">${t("bgmMoodCalm")}</option>
-              <option value="romantic">${t("bgmMoodRomantic")}</option>
-            </select></label>
-            <label>${t("bgmReplace")}<select id="bgmReplaceModeSelect">
-              <option value="auto">${t("bgmReplaceAuto")}</option>
-              <option value="keep">${t("bgmReplaceKeep")}</option>
-              <option value="beat">${t("bgmReplaceStrongBeat")}</option>
+              <option value="elegant" ${fx.bgmMood === "elegant" ? "selected" : ""}>${t("bgmMoodElegant")}</option>
+              <option value="daily" ${fx.bgmMood === "daily" ? "selected" : ""}>${t("bgmMoodDaily")}</option>
+              <option value="trendy" ${fx.bgmMood === "trendy" ? "selected" : ""}>${t("bgmMoodTrendy")}</option>
+              <option value="piano" ${fx.bgmMood === "piano" ? "selected" : ""}>${t("bgmMoodPiano")}</option>
+              <option value="energetic" ${fx.bgmMood === "energetic" ? "selected" : ""}>${t("bgmMoodEnergetic")}</option>
+              <option value="happy" ${fx.bgmMood === "happy" ? "selected" : ""}>${t("bgmMoodHappy")}</option>
+              <option value="calm" ${fx.bgmMood === "calm" ? "selected" : ""}>${t("bgmMoodCalm")}</option>
+              <option value="romantic" ${fx.bgmMood === "romantic" ? "selected" : ""}>${t("bgmMoodRomantic")}</option>
             </select></label>
             <label>${t("bgmVolume")} <span id="bgmVolVal">${Number(fx.bgmVolume || 70)}%</span><input id="bgmVolRange" type="range" min="0" max="100" value="${Number(fx.bgmVolume || 70)}" /></label>
             <label>${t("bgmLocalFile")}
@@ -1476,7 +1471,6 @@ export function renderVideoEditor() {
       bgmExtract: pickChecked("#bgmExtractChk", fx.bgmExtract),
       bgmMood: pickValue("#bgmMoodSelect", fx.bgmMood || "elegant"),
       bgmVolume: Number(pickValue("#bgmVolRange", fx.bgmVolume ?? 70)),
-      bgmReplaceMode: pickValue("#bgmReplaceModeSelect", fx.bgmReplaceMode || "auto"),
       localBgmUrl: state.videoEdit.localBgmUrl || "",
       localBgmName: state.videoEdit.localBgmName || "",
       localBgmDataUrl: state.videoEdit.localBgmDataUrl || "",

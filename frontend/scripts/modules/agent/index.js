@@ -2956,6 +2956,19 @@ function extractVideoEditIntent(raw = "") {
       const volM = str.match(/(\d+)\s*[%％]/);
       return { type: "bgm", action: "raise", volume: volM ? parseInt(volM[1]) : 80 };
     }
+    // 添加/启用 BGM — e.g. "添加背景音乐", "加个音乐", "add background music"
+    const moodMap = {
+      优雅: "elegant", 轻奢: "elegant", elegant: "elegant",
+      日常: "daily", 清新: "daily", daily: "daily",
+      潮流: "trendy", 节奏: "trendy", trendy: "trendy",
+      钢琴: "piano", piano: "piano",
+      励志: "energetic", 热血: "energetic", energetic: "energetic",
+      愉快: "happy", 开心: "happy", happy: "happy",
+      沉静: "calm", 深夜: "calm", calm: "calm",
+      浪漫: "romantic", 温馨: "romantic", romantic: "romantic",
+    };
+    const moodKey = Object.keys(moodMap).find((k) => str.includes(k));
+    return { type: "bgm", action: "add", mood: moodMap[moodKey] || null };
   }
 
   return null;

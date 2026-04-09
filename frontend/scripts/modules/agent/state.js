@@ -75,7 +75,6 @@ export const state = {
     bgmExtract: false,
     bgmMood: "elegant",
     bgmVolume: 70,
-    bgmReplaceMode: "auto",
     localBgmUrl: "",
     localBgmName: "",
     localBgmDataUrl: "",
