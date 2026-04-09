@@ -1857,9 +1857,10 @@ function parseDataUrl(dataUrl) {
   return { mime: m[1].toLowerCase(), base64: m[2] };
 }
 
-// Center-crop a dataURL image to match the target aspect ratio string (e.g. "9:16").
-// Veo image-to-video ignores aspect_ratio when the reference image has a different ratio,
-// so we pre-crop to guarantee the generated video dimensions match the request.
+// Fit a dataURL image into the target aspect ratio with white letterbox padding.
+// Veo image-to-video uses the input image's native dimensions and ignores aspect_ratio.
+// We pad (not crop) so the full product stays visible — product shots are typically
+// centered on light backgrounds so the padding blends naturally.
 function cropDataUrlToAspectRatio(dataUrl, aspectRatioStr) {
   const parts = String(aspectRatioStr || "16:9").split(":");
   const [aw, ah] = [Number(parts[0]) || 16, Number(parts[1]) || 9];
@@ -1869,20 +1870,26 @@ function cropDataUrlToAspectRatio(dataUrl, aspectRatioStr) {
     img.onload = () => {
       const srcRatio = img.naturalWidth / img.naturalHeight;
       if (Math.abs(srcRatio - targetRatio) < 0.02) { resolve(dataUrl); return; }
-      let sx, sy, sw, sh;
-      if (srcRatio > targetRatio) {
-        sh = img.naturalHeight; sw = Math.round(sh * targetRatio);
-        sx = Math.round((img.naturalWidth - sw) / 2); sy = 0;
+      // Fit the whole image inside the target frame (scale-to-fit), pad the rest with white.
+      const maxLong = 768;
+      let canvasW, canvasH;
+      if (targetRatio >= 1) {
+        canvasW = maxLong; canvasH = Math.round(maxLong / targetRatio);
       } else {
-        sw = img.naturalWidth; sh = Math.round(sw / targetRatio);
-        sx = 0; sy = Math.round((img.naturalHeight - sh) / 2);
+        canvasH = maxLong; canvasW = Math.round(maxLong * targetRatio);
       }
-      const scale = Math.min(1, 512 / Math.max(sw, sh));
+      const scale = Math.min(canvasW / img.naturalWidth, canvasH / img.naturalHeight);
+      const drawW = Math.round(img.naturalWidth * scale);
+      const drawH = Math.round(img.naturalHeight * scale);
+      const dx = Math.round((canvasW - drawW) / 2);
+      const dy = Math.round((canvasH - drawH) / 2);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.round(sw * scale);
-      canvas.height = Math.round(sh * scale);
-      canvas.getContext("2d").drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", 0.85));
+      canvas.width = canvasW; canvas.height = canvasH;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvasW, canvasH);
+      ctx.drawImage(img, dx, dy, drawW, drawH);
+      resolve(canvas.toDataURL("image/jpeg", 0.88));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
