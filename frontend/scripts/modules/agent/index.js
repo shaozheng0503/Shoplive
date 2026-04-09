@@ -4015,31 +4015,17 @@ async function generateVideo(promptOverride = "") {
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     let imagePayload = buildVeoReferencePayload();
     if (!useFrameMode && imagePayload.veo_mode === "image" && imagePayload.image_base64) {
-      const isTemplateRef = state.images[0]?.source === "landing-ref";
-      if (isTemplateRef) {
-        // Template thumbnail: use as style reference, NOT as first frame.
-        // veo_mode "image" forces Veo to generate at the input image's native dimensions,
-        // ignoring aspect_ratio. Switching to "reference" lets Veo generate at the
-        // correct aspect_ratio while still being influenced by the image's visual style.
-        imagePayload = {
-          veo_mode: "reference",
-          reference_images_base64: [{
-            base64: imagePayload.image_base64,
-            mime_type: imagePayload.image_mime_type || "image/jpeg",
-          }],
-        };
-      } else {
-        // User-uploaded product image: letterbox to target aspect ratio then use as first frame.
-        const mime = imagePayload.image_mime_type || "image/jpeg";
-        const croppedUrl = await cropDataUrlToAspectRatio(
-          `data:${mime};base64,${imagePayload.image_base64}`,
-          state.aspectRatio || "16:9"
-        );
-        const croppedParsed = parseDataUrl(croppedUrl);
-        if (croppedParsed) {
-          imagePayload = { ...imagePayload, image_base64: croppedParsed.base64, image_mime_type: croppedParsed.mime };
-        }
-      }
+      // Use reference mode for all single images (both template thumbnails and user uploads).
+      // veo_mode "image" forces Veo to generate at the input image's native dimensions
+      // and ignores aspect_ratio. Reference mode respects aspect_ratio and maintains
+      // subject/product consistency via Veo's reference-image conditioning.
+      imagePayload = {
+        veo_mode: "reference",
+        reference_images_base64: [{
+          base64: imagePayload.image_base64,
+          mime_type: imagePayload.image_mime_type || "image/jpeg",
+        }],
+      };
     }
     const startBody = {
       project_id: "qy-shoplazza-02",
