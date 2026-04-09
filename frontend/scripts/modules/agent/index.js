@@ -1857,6 +1857,25 @@ function parseDataUrl(dataUrl) {
   return { mime: m[1].toLowerCase(), base64: m[2] };
 }
 
+// Resize a dataURL image so its longest side ≤ maxDim.
+// Smaller images upload faster and reduce Veo's reference-conditioning overhead.
+function resizeDataUrlForVeo(dataUrl, maxDim = 512, quality = 0.82) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+      if (scale >= 1) { resolve(dataUrl); return; }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 // Fit a dataURL image into the target aspect ratio with white letterbox padding.
 // Veo image-to-video uses the input image's native dimensions and ignores aspect_ratio.
 // We pad (not crop) so the full product stays visible — product shots are typically
@@ -4015,15 +4034,19 @@ async function generateVideo(promptOverride = "") {
     const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     let imagePayload = buildVeoReferencePayload();
     if (!useFrameMode && imagePayload.veo_mode === "image" && imagePayload.image_base64) {
-      // Use reference mode for all single images (both template thumbnails and user uploads).
-      // veo_mode "image" forces Veo to generate at the input image's native dimensions
-      // and ignores aspect_ratio. Reference mode respects aspect_ratio and maintains
-      // subject/product consistency via Veo's reference-image conditioning.
+      // Reference mode for all single images: respects aspect_ratio and maintains
+      // subject consistency. Resize to max 512px first — smaller payload uploads faster
+      // and reduces Veo's reference-conditioning overhead (key latency win).
+      const mime = imagePayload.image_mime_type || "image/jpeg";
+      const resizedUrl = await resizeDataUrlForVeo(
+        `data:${mime};base64,${imagePayload.image_base64}`, 512, 0.82
+      );
+      const resizedParsed = parseDataUrl(resizedUrl);
       imagePayload = {
         veo_mode: "reference",
         reference_images_base64: [{
-          base64: imagePayload.image_base64,
-          mime_type: imagePayload.image_mime_type || "image/jpeg",
+          base64: resizedParsed?.base64 ?? imagePayload.image_base64,
+          mime_type: resizedParsed?.mime ?? mime,
         }],
       };
     }
@@ -4111,7 +4134,7 @@ async function generateVideo(promptOverride = "") {
         return;
       }
 
-      if (pollElapsedMs < 30000) {
+      if (pollElapsedMs < 18000) {
         scheduleNext(2000);
         return;
       }
@@ -4189,7 +4212,7 @@ async function generateVideo(promptOverride = "") {
         releaseSlotOnce();
         return;
       }
-      scheduleNext(pollElapsedMs < 90000 ? 10000 : 15000);
+      scheduleNext(pollElapsedMs < 90000 ? 8000 : 12000);
     };
     function scheduleNext(ms) { if (!pollStopped) setTimeout(doPoll, ms); }
     scheduleNext(2000);
