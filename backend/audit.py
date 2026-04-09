@@ -261,12 +261,12 @@ class AuditLogger:
             except queue.Full:
                 logger.warning("Audit write queue full — log entry dropped")
 
-        # Also log via standard logging
+        # Also log via standard logging (include error_message so terminal shows API reason)
         log_fn = logger.info if status == "success" else logger.warning
-        log_fn(
-            f"[{trace_id}] {tool}.{action} -> {status} ({duration_ms}ms)",
-            extra={"audit": entry.to_dict()},
-        )
+        _line = f"[{trace_id}] {tool}.{action} -> {status} ({duration_ms}ms)"
+        if error_message:
+            _line = f"{_line} — {str(error_message)[:280]}"
+        log_fn(_line, extra={"audit": entry.to_dict()})
 
     def get_recent(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get recent audit records."""

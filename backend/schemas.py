@@ -8,7 +8,9 @@ Design principles (from "一文读懂 Agent Tools"):
 - Use natural language Field descriptions so LLM understands how to fill parameters
 """
 
+import re
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -68,10 +70,29 @@ class ProductInsightRequest(BaseModel):
     @field_validator("product_url")
     @classmethod
     def validate_url(cls, v: str) -> str:
+        # Strip BOM / zero-width / line breaks / tabs (paste from sheets, logs, etc.)
+        v = (
+            str(v or "")
+            .strip()
+            .replace("\ufeff", "")
+            .replace("\u200b", "")
+        )
+        v = re.sub(r"[\n\r\t\f\v]+", "", v)
         v = v.strip()
-        if not v or not (v.startswith("http://") or v.startswith("https://")):
+        if not v:
             raise ValueError("product_url must be a valid http/https URL")
-        return v
+        if v.startswith("http://") or v.startswith("https://"):
+            if not urlparse(v).netloc:
+                raise ValueError("product_url must be a valid http/https URL")
+            return v
+        # No scheme: amazon.com/dp/... , www.amazon.com/... , //amazon.com/...
+        candidate = "https://" + v.lstrip("/")
+        parsed = urlparse(candidate)
+        host = (parsed.netloc or "").lower()
+        # Reject only obvious non-URLs; do not use \s here — IDN / rare cases aside, pasted tabs are already stripped.
+        if not host or "." not in host or re.search(r"[<>\"']", v):
+            raise ValueError("product_url must be a valid http/https URL")
+        return candidate
 
 
 class ImageInsightRequest(CommonPayload):

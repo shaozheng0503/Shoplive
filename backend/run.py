@@ -42,7 +42,8 @@ def main():
     port = int(os.getenv("PORT", "8000"))
     host = os.getenv("HOST", "127.0.0.1")
     debug = os.getenv("DEBUG", "1") not in {"0", "false", "False"}
-    app.run(host=host, port=port, debug=debug)
+    # threaded=True: multiple browser tabs / concurrent API calls don't block each other (demo-friendly).
+    app.run(host=host, port=port, debug=debug, threaded=True)
 
 
 if __name__ == "__main__":

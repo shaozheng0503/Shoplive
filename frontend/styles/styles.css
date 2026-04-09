@@ -937,6 +937,7 @@ input:focus-visible {
 }
 
 .command-template-card {
+  position: relative; /* anchor ::before accent to each card; else it stacks on .command-template-grid */
   display: grid;
   gap: 4px;
   align-content: start;
@@ -1644,6 +1645,7 @@ input:focus-visible {
   font-weight: 600;
   text-align: center;
   padding: 10px;
+  writing-mode: horizontal-tb;
 }
 
 .ref-side-btn span:last-child {

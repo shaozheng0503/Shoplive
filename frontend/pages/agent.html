@@ -67,7 +67,7 @@
               <button id="uploadBtn" class="ghost upload-ref-btn">参考图</button>
               <button id="toggleProductUrlBtn" class="ghost">商品链接</button>
               <button id="toggleFrameBtn" class="ghost">首尾帧</button>
-              <span id="uploadHint" class="compact-hint">上传商品图后可自动识别商品信息并优化提示词。</span>
+              <span id="uploadHint" class="compact-hint" hidden></span>
             </div>
             <div class="frame-upload-panel" id="framePanel" hidden>
               <div class="frame-slot" id="firstFrameSlot">
@@ -87,11 +87,29 @@
               <button id="aiGenerateFramesBtn" class="ghost" type="button">AI 自动生成</button>
             </div>
             <div class="compact-link-row">
-              <input id="productUrlInput" type="url" placeholder="粘贴 Shoplazza 商品链接（可自动解析）" />
+              <input id="productUrlInput" type="url" placeholder="粘贴商品链接并解析" />
               <button id="parseProductUrlBtn" class="ghost">解析链接</button>
             </div>
+            <p id="linkParseStatus" class="link-parse-status" hidden aria-live="polite"></p>
             <textarea id="chatInput" placeholder="输入视频生成提示词..." rows="3"></textarea>
+            <div class="video-engine-wrap" aria-label="video model">
+              <span class="video-engine-caption" id="videoEngineLabel">视频模型</span>
+              <div class="video-engine-inline" role="tablist">
+                <button type="button" class="engine-chip" data-video-engine="ltx" role="tab" title="LTX 2.3（ComfyUI）">LTX 2.3</button>
+                <button type="button" class="engine-chip" data-video-engine="jimeng" role="tab" title="即梦 3.0">即梦 3.0</button>
+                <button type="button" class="engine-chip active" data-video-engine="veo" role="tab" title="Veo 3.1 Fast">Veo 3.1</button>
+                <button type="button" class="engine-chip" data-video-engine="grok" role="tab" title="Grok Video">Grok</button>
+              </div>
+            </div>
             <div class="compact-config-row">
+              <label class="compact-chip" for="aspectRatioSelect">
+                <span>比例</span>
+                <select id="aspectRatioSelect" aria-label="Aspect ratio">
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                  <option value="1:1">1:1</option>
+                </select>
+              </label>
               <label class="compact-chip" for="durationSelect">
                 <span>视频时长</span>
                 <select id="durationSelect"></select>

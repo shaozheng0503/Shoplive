@@ -18,6 +18,8 @@ let _pushSystemReplyMsg = () => null;
 let _renderVideoEditor = () => {};
 let _applyVideoEditsToPreview = () => {};
 let _scrollToBottom = () => {};
+/** Appends a new chat video card for an exported URL; does not replace older cards. */
+let _appendExportedVideoCard = (_url) => {};
 
 export function initVideoEditCallbacks(cbs) {
   if (cbs.pushSystemStateMsg) _pushSystemStateMsg = cbs.pushSystemStateMsg;
@@ -26,6 +28,11 @@ export function initVideoEditCallbacks(cbs) {
   if (cbs.renderVideoEditor) _renderVideoEditor = cbs.renderVideoEditor;
   if (cbs.applyVideoEditsToPreview) _applyVideoEditsToPreview = cbs.applyVideoEditsToPreview;
   if (cbs.scrollToBottom) _scrollToBottom = cbs.scrollToBottom;
+  if (cbs.appendExportedVideoCard) _appendExportedVideoCard = cbs.appendExportedVideoCard;
+}
+
+function _finalizeExportedVideo(exportedUrl) {
+  _appendExportedVideoCard(exportedUrl);
 }
 
 export async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
@@ -55,10 +62,7 @@ export async function applyRangedSpeedToCurrentVideo({ start, end, speed }) {
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(t("speedRangeApplied", { start: startSec.toFixed(1), end: endSec.toFixed(1) }), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
@@ -85,10 +89,7 @@ export async function applyColorGradingToCurrentVideo({ bright = 0, sat = 0, hue
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(t("colorIntentApplied"), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
@@ -112,10 +113,7 @@ export async function applyBgmEditToCurrentVideo({ action, volume }) {
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(t("bgmIntentApplied"), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
@@ -217,10 +215,7 @@ export async function applyTrimToCurrentVideo({ start, end }) {
     const result = await pollRenderJob(base, initResp.job_id, bubble, s.toFixed(1), e.toFixed(1));
     const exportedUrl = String(result?.video_url || "").trim();
     if (!exportedUrl) throw new Error("url missing");
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(t("trimIntentApplied", { start: s.toFixed(1), end: e.toFixed(1) }), "done");
   } catch (_e) {
     state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1); // rollback on fail
@@ -277,10 +272,7 @@ export async function applyMultiTrimToCurrentVideo({ segments }) {
     const result = await pollRenderJob(base, initResp.job_id, bubble);
     const exportedUrl = String(result?.video_url || "").trim();
     if (!exportedUrl) throw new Error("url missing");
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(zh ? `✂️ 已保留 ${segs.length} 段` : `✂️ Kept ${segs.length} segments`, "done");
   } catch (_e) {
     state.videoUrlHistory = (state.videoUrlHistory || []).slice(0, -1);
@@ -316,10 +308,7 @@ export function applySubtitleStyleToCurrentVideo({ color, position }) {
     );
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
   };
 
   const confirmId = `preview-confirm-${Date.now()}`;
@@ -363,7 +352,8 @@ export async function applyUndoLastEdit() {
   state.videoUrlHistory = history.slice(0, -1);
   _saveVideoHistory();
   state.lastVideoUrl = prevUrl;
-  document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = prevUrl; });
+  const edVid = document.getElementById("videoEditorPanel")?.querySelector(".video-edit-surface video");
+  if (edVid) edVid.src = prevUrl;
   _renderVideoEditor();
   _applyVideoEditsToPreview();
   _pushSystemStateMsg(t("undoApplied"), "done");
@@ -431,11 +421,8 @@ export async function applyAsrSubtitlesToCurrentVideo() {
         );
         const url = String(exportResp?.video_url || "").trim();
         if (!url) throw new Error("url missing");
-        state.lastVideoUrl = url;
         state.videoEdit = { ...prevEdit, maskText: "", subtitles: editsWithSubs.subtitles };
-        document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = url; });
-        _renderVideoEditor();
-        _applyVideoEditsToPreview();
+        _finalizeExportedVideo(url);
         const bodyEl2 = applyBubble?.querySelector("[data-msg-body]");
         if (bodyEl2) bodyEl2.textContent = zh ? `✅ 已批量写入 ${subs.length} 条字幕` : `✅ ${subs.length} subtitles burned in`;
         applyBubble?.classList.replace("status-tone-progress", "status-tone-done");
@@ -527,10 +514,7 @@ export async function applyImageOverlayToCurrentVideo({ scale = 0.35, position =
     );
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("url missing");
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     const bodyEl = bubble?.querySelector("[data-msg-body]");
     if (bodyEl) bodyEl.textContent = zh ? "✅ 商品图已叠加到视频" : "✅ Image overlaid on video";
     bubble?.classList.replace("status-tone-progress", "status-tone-done");
@@ -596,10 +580,7 @@ export async function applySubtitleToCurrentVideo(intent = {}) {
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(
       t("subtitleIntentApplied", { start: startSec.toFixed(1), end: endSec.toFixed(1) }),
       "done"
@@ -637,12 +618,7 @@ export async function applyPlaybackSpeedToCurrentVideo(speed = 1) {
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory();
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => {
-      v.src = exportedUrl;
-    });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     _pushSystemStateMsg(t("speedIntentApplied", { speed: normalized.toFixed(2).replace(/\.00$/, "") }), "done");
   } catch (_e) {
     _applyVideoEditsToPreview();
@@ -684,10 +660,7 @@ export async function applyFadeToCurrentVideo({ fadeIn = 0, fadeOut = 0 } = {}) 
     const exportedUrl = String(resp?.video_url || "").trim();
     if (!exportedUrl) throw new Error("exported url missing");
     pushVideoUrlToHistory(); // save old URL before overwriting (consistent with other apply* fns)
-    state.lastVideoUrl = exportedUrl;
-    document.querySelectorAll(".video-edit-surface video").forEach((v) => { v.src = exportedUrl; });
-    _renderVideoEditor();
-    _applyVideoEditsToPreview();
+    _finalizeExportedVideo(exportedUrl);
     const bodyEl = bubble?.querySelector("[data-msg-body]");
     if (bodyEl) bodyEl.textContent = zh ? `✅ ${label} 已应用` : `✅ ${label} applied`;
     bubble?.classList.replace("status-tone-progress", "status-tone-done");

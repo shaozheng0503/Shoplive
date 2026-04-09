@@ -1,4 +1,13 @@
-export const MAX_CONCURRENT_VIDEO_JOBS = 3;
+/** 单页可同时进行的视频生成数（多窗口各自独立计数）。演示可调高 window.__SHOPLIVE_MAX_CONCURRENT_JOBS__（1–64，需在加载模块前设置）。 */
+export const MAX_CONCURRENT_VIDEO_JOBS = (() => {
+  try {
+    const w = typeof window !== "undefined" ? window : null;
+    const raw = w && w.__SHOPLIVE_MAX_CONCURRENT_JOBS__;
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 1) return Math.min(64, Math.floor(n));
+  } catch (_e) {}
+  return 12;
+})();
 export const CHAT_TAIL_LIMIT_WHEN_SPLIT = 3;
 
 export const state = {
@@ -16,6 +25,8 @@ export const state = {
   productImageUrls: [],
   template: "clean",
   duration: "16",
+  /** 视频引擎：ltx | jimeng | veo | grok（与 Agent 页模型切换一致） */
+  videoEngine: "veo",
   aspectRatio: "16:9",
   needModel: true,
   summaryShown: false,

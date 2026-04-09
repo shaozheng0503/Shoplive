@@ -2659,14 +2659,83 @@ body {
 .workspace .video-editor-shell {
   margin-top: 10px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
+/* 上排：预览 + 关键帧时间轴；下排：模块编辑全宽（小屏改为纵向：预览→时间轴→模块） */
 .workspace .video-stage-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(260px, 0.9fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* 横屏 16:9 / 1:1：勿与时间轴列 stretch 等高，否则预览区被撑高、视频只占上半截、下方大块黑底 */
+.workspace .video-stage-grid[data-aspect="16:9"],
+.workspace .video-stage-grid[data-aspect="1:1"] {
   align-items: start;
+}
+
+@media (min-width: 1201px) {
+  .workspace .video-stage-grid[data-aspect="16:9"] {
+    grid-template-columns: minmax(0, 1.75fr) minmax(260px, 0.82fr);
+  }
+}
+
+.workspace .video-stage-grid[data-aspect="16:9"] .video-preview-wrap,
+.workspace .video-stage-grid[data-aspect="1:1"] .video-preview-wrap {
+  width: 100%;
+}
+
+.workspace .video-stage-grid[data-aspect="16:9"] .video-preview-wrap video {
+  min-height: unset;
+  max-height: min(70vh, 880px);
+}
+
+.workspace .video-stage-grid[data-aspect="1:1"] .video-preview-wrap video {
+  min-height: unset;
+  max-height: min(58vh, 720px);
+}
+
+.workspace .video-stage-grid > .timeline-section {
+  min-width: 0;
+  min-height: 0;
+  max-height: min(56vh, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace .video-stage-grid .timeline-section .kf-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.workspace .video-stage-grid .timeline-hint-clip {
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 5.9em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.workspace .video-editor-shell > .module-panel {
+  min-width: 0;
+}
+
+.workspace .module-panel .module-switch {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .workspace .module-panel .module-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .workspace .video-preview-wrap {
@@ -3081,11 +3150,31 @@ body {
 @media (max-width: 1200px) {
   .workspace .video-stage-grid {
     grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .workspace .video-stage-grid > .timeline-section {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .workspace .video-stage-grid .timeline-hint-clip {
+    font-size: 12px;
+    max-height: none;
+    overflow: visible;
+    display: block;
+    -webkit-line-clamp: unset;
   }
 
   .workspace .video-preview-wrap video {
     min-height: 240px;
-    max-height: 360px;
+    max-height: min(42vh, 360px);
+  }
+
+  .workspace .video-stage-grid[data-aspect="16:9"] .video-preview-wrap video,
+  .workspace .video-stage-grid[data-aspect="1:1"] .video-preview-wrap video {
+    min-height: unset;
+    max-height: min(50vh, 460px);
   }
 
   .workspace .range-grid {
@@ -3094,6 +3183,27 @@ body {
 
   .workspace .kf-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .workspace .video-editor-shell {
+    gap: 10px;
+  }
+
+  .workspace .video-preview-wrap video {
+    max-height: 38vh;
+    min-height: 200px;
+  }
+
+  .workspace .video-stage-grid[data-aspect="16:9"] .video-preview-wrap video,
+  .workspace .video-stage-grid[data-aspect="1:1"] .video-preview-wrap video {
+    min-height: unset;
+    max-height: min(42vh, 360px);
+  }
+
+  .workspace .module-panel .module-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -3563,6 +3673,98 @@ body {
   margin-top: -2px;
 }
 
+/* 视频模型：与 mode-chat 顶栏「上传/链接/首尾帧」同系 — #3f86ff 胶囊，禁用全局 button 投影 */
+.composer.composer-compact .video-engine-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.composer.composer-compact .video-engine-caption {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #999;
+}
+
+.composer.composer-compact .video-engine-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer.composer-compact .engine-chip {
+  appearance: none;
+  margin: 0;
+  cursor: pointer;
+  line-height: 1.2;
+  text-align: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #e0e0e0;
+  background: #f5f5f5;
+  color: #555;
+  box-shadow: none !important;
+  transform: none !important;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.composer.composer-compact .engine-chip:hover:not(.active) {
+  background: #ebebeb;
+  border-color: #d8d8d8;
+  color: #333;
+  box-shadow: none !important;
+}
+
+.composer.composer-compact .engine-chip:focus-visible {
+  outline: 2px solid #3f86ff;
+  outline-offset: 1px;
+}
+
+.composer.composer-compact .engine-chip.active {
+  background: #3f86ff;
+  border-color: #3f86ff;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: none !important;
+}
+
+.composer.composer-compact .engine-chip.active:hover {
+  background: #2f74f0;
+  border-color: #2f74f0;
+  color: #fff;
+}
+
+.workspace.mode-chat .composer.composer-compact .engine-chip,
+.workspace.mode-chat .composer.composer-compact .engine-chip:hover,
+.workspace.mode-chat .composer.composer-compact .engine-chip:focus,
+.workspace.mode-chat .composer.composer-compact .engine-chip:active {
+  box-shadow: none !important;
+}
+
+@media (max-width: 520px) {
+  .composer.composer-compact .video-engine-caption {
+    flex: 1 1 100%;
+  }
+
+  .composer.composer-compact .engine-chip {
+    font-size: 11px;
+    padding: 0 10px;
+    min-height: 32px;
+  }
+}
+
 .composer.composer-compact #chatInput {
   width: 100%;
   min-height: 64px !important;
@@ -3697,6 +3899,26 @@ body {
   box-shadow: 0 0 0 3px rgba(129, 161, 219, 0.18);
 }
 
+/* 商品链接解析进度：紧挨输入区，避免仅依赖聊天区气泡（上滚/入口模式会看不到） */
+.composer.composer-compact .link-parse-status {
+  margin: 0;
+  padding: 6px 2px 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3d5a80;
+  max-width: 100%;
+}
+.composer.composer-compact .link-parse-status:not([hidden]) {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(63, 134, 255, 0.09), rgba(63, 134, 255, 0.04));
+  border: 1px solid rgba(63, 134, 255, 0.22);
+  color: #2a4a6e;
+  font-weight: 500;
+}
+
 .composer.composer-compact .compact-chip {
   display: inline-flex;
   align-items: center;
@@ -3722,7 +3944,7 @@ body {
   transition: transform 0.28s ease, box-shadow 0.28s ease, filter 0.28s ease;
 }
 
-.composer.composer-compact button:hover {
+.composer.composer-compact button:hover:not(.engine-chip) {
   box-shadow: 0 10px 18px rgba(62, 92, 148, 0.18);
 }
 
@@ -4996,20 +5218,23 @@ body {
   box-shadow: none !important;
 }
 
-/* Upload / attach button */
+/* Upload / attach：勿用窄圆形容器，否则在分栏模式（非 mode-chat）下会失去覆盖样式，中文会逐字竖排 */
 .composer.composer-compact #uploadBtn {
-  width: 34px !important;
+  width: auto !important;
+  min-width: 72px !important;
   height: 34px !important;
-  padding: 0 !important;
-  border-radius: 50% !important;
+  padding: 0 12px !important;
+  border-radius: 999px !important;
   background: #f0f0f0 !important;
   border: 1px solid #e0e0e0 !important;
   color: #555 !important;
   box-shadow: none !important;
-  display: flex !important;
+  display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  font-size: 18px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+  writing-mode: horizontal-tb !important;
 }
 
 /* compact-config-row: align send to right */
@@ -5120,11 +5345,23 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Composer button final normalization ────────────────────────────────── */
+/* ── Composer button final normalization（含分栏编辑：mode-two-* / mode-three，否则仅 mode-chat 有横排覆盖） ─ */
 .workspace.mode-chat .composer.composer-compact #uploadBtn,
+.workspace.mode-two-video .composer.composer-compact #uploadBtn,
+.workspace.mode-two-script .composer.composer-compact #uploadBtn,
+.workspace.mode-three .composer.composer-compact #uploadBtn,
 .workspace.mode-chat .composer.composer-compact #toggleProductUrlBtn,
+.workspace.mode-two-video .composer.composer-compact #toggleProductUrlBtn,
+.workspace.mode-two-script .composer.composer-compact #toggleProductUrlBtn,
+.workspace.mode-three .composer.composer-compact #toggleProductUrlBtn,
 .workspace.mode-chat .composer.composer-compact #toggleFrameBtn,
-.workspace.mode-chat .composer.composer-compact #enhancePromptBtn {
+.workspace.mode-two-video .composer.composer-compact #toggleFrameBtn,
+.workspace.mode-two-script .composer.composer-compact #toggleFrameBtn,
+.workspace.mode-three .composer.composer-compact #toggleFrameBtn,
+.workspace.mode-chat .composer.composer-compact #enhancePromptBtn,
+.workspace.mode-two-video .composer.composer-compact #enhancePromptBtn,
+.workspace.mode-two-script .composer.composer-compact #enhancePromptBtn,
+.workspace.mode-three .composer.composer-compact #enhancePromptBtn {
   width: auto !important;
   min-width: 72px !important;
   height: 34px !important;
@@ -5143,7 +5380,10 @@ body {
   white-space: nowrap !important;
 }
 
-.workspace.mode-chat .composer.composer-compact #sendBtn {
+.workspace.mode-chat .composer.composer-compact #sendBtn,
+.workspace.mode-two-video .composer.composer-compact #sendBtn,
+.workspace.mode-two-script .composer.composer-compact #sendBtn,
+.workspace.mode-three .composer.composer-compact #sendBtn {
   width: auto !important;
   min-width: 88px !important;
   height: 34px !important;
@@ -5161,72 +5401,116 @@ body {
   white-space: nowrap !important;
 }
 
-.workspace.mode-chat .composer.composer-compact #sendBtn::after {
+.workspace.mode-chat .composer.composer-compact #sendBtn::after,
+.workspace.mode-two-video .composer.composer-compact #sendBtn::after,
+.workspace.mode-two-script .composer.composer-compact #sendBtn::after,
+.workspace.mode-three .composer.composer-compact #sendBtn::after {
   content: none !important;
 }
 
 .workspace.mode-chat .composer.composer-compact #uploadBtn:hover:not(:disabled),
+.workspace.mode-two-video .composer.composer-compact #uploadBtn:hover:not(:disabled),
+.workspace.mode-two-script .composer.composer-compact #uploadBtn:hover:not(:disabled),
+.workspace.mode-three .composer.composer-compact #uploadBtn:hover:not(:disabled),
 .workspace.mode-chat .composer.composer-compact #toggleProductUrlBtn:hover:not(:disabled),
+.workspace.mode-two-video .composer.composer-compact #toggleProductUrlBtn:hover:not(:disabled),
+.workspace.mode-two-script .composer.composer-compact #toggleProductUrlBtn:hover:not(:disabled),
+.workspace.mode-three .composer.composer-compact #toggleProductUrlBtn:hover:not(:disabled),
 .workspace.mode-chat .composer.composer-compact #toggleFrameBtn:hover:not(:disabled),
-.workspace.mode-chat .composer.composer-compact #enhancePromptBtn:hover:not(:disabled) {
+.workspace.mode-two-video .composer.composer-compact #toggleFrameBtn:hover:not(:disabled),
+.workspace.mode-two-script .composer.composer-compact #toggleFrameBtn:hover:not(:disabled),
+.workspace.mode-three .composer.composer-compact #toggleFrameBtn:hover:not(:disabled),
+.workspace.mode-chat .composer.composer-compact #enhancePromptBtn:hover:not(:disabled),
+.workspace.mode-two-video .composer.composer-compact #enhancePromptBtn:hover:not(:disabled),
+.workspace.mode-two-script .composer.composer-compact #enhancePromptBtn:hover:not(:disabled),
+.workspace.mode-three .composer.composer-compact #enhancePromptBtn:hover:not(:disabled) {
   background: #2f74f0 !important;
   border-color: #2f74f0 !important;
 }
 
-.workspace.mode-chat .composer.composer-compact #sendBtn:hover:not(:disabled) {
+.workspace.mode-chat .composer.composer-compact #sendBtn:hover:not(:disabled),
+.workspace.mode-two-video .composer.composer-compact #sendBtn:hover:not(:disabled),
+.workspace.mode-two-script .composer.composer-compact #sendBtn:hover:not(:disabled),
+.workspace.mode-three .composer.composer-compact #sendBtn:hover:not(:disabled) {
   background: #2f74f0 !important;
   border-color: #2f74f0 !important;
 }
 
-/* ── Task queue: unified bright-blue palette ─────────────────────────────── */
+/* ── Task queue：与下方白底 Composer 统一 — 中性浅灰，减少「大块蓝底」压迫感 */
 .workspace.mode-chat #taskQueuePanel.task-queue-panel {
-  border: 1px solid #d8e6ff !important;
-  background: #f4f8ff !important;
+  margin: 0 0 6px !important;
+  padding: 8px 10px !important;
+  border: 1px solid #ebebeb !important;
+  border-radius: 12px !important;
+  background: #f7f7f8 !important;
   box-shadow: none !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-queue-title {
-  color: #2f66cc !important;
+  color: #666 !important;
+  font-weight: 600 !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-queue-clear-btn {
-  border: 1px solid #bfd6ff !important;
-  background: #eaf3ff !important;
-  color: #2f66cc !important;
+  border: 1px solid #e0e0e0 !important;
+  background: #fff !important;
+  color: #555 !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-queue-clear-btn:hover:not(:disabled) {
+  background: #f0f0f0 !important;
+  border-color: #d5d5d5 !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-item {
-  border: 1px solid #d7e5ff !important;
-  background: #f6faff !important;
+  border: 1px solid #e8e8e8 !important;
+  background: #fff !important;
   box-shadow: none !important;
 }
 
-.workspace.mode-chat #taskQueuePanel .task-item.running,
+.workspace.mode-chat #taskQueuePanel .task-item.running {
+  border-color: #e0e8f5 !important;
+  background: #fcfdff !important;
+  box-shadow: inset 3px 0 0 #3f86ff !important;
+}
+
 .workspace.mode-chat #taskQueuePanel .task-item.done {
-  border-color: #cfe0ff !important;
-  background: #f3f8ff !important;
+  border-color: #e8e8e8 !important;
+  background: #fafafa !important;
+  box-shadow: none !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-item.failed {
-  border-color: #f3c8cf !important;
-  background: #fff5f7 !important;
+  border-color: #f0c4cc !important;
+  background: #fffafa !important;
+  box-shadow: none !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-item strong {
-  color: #234b96 !important;
+  color: #333 !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-item small {
-  color: #4e6ea8 !important;
+  color: #777 !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-state-badge,
-.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-info,
-.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-progress,
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-info {
+  border-color: #e0e0e0 !important;
+  background: #f5f5f5 !important;
+  color: #555 !important;
+}
+
+.workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-progress {
+  border-color: #c8daf8 !important;
+  background: #eef4ff !important;
+  color: #2f5eb8 !important;
+}
+
 .workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-done {
-  border-color: #bfd6ff !important;
-  background: #eaf3ff !important;
-  color: #2f66cc !important;
+  border-color: #c8e6d0 !important;
+  background: #f0faf3 !important;
+  color: #2d6a45 !important;
 }
 
 .workspace.mode-chat #taskQueuePanel .task-state-badge.status-dot-blocked {
@@ -5249,6 +5533,12 @@ body {
 
 .workspace.mode-chat #taskQueuePanel .action-chip-btn:hover {
   transform: none !important;
+}
+
+/* 有并发任务时，输入区与任务区用淡线分隔，层级更清晰 */
+.workspace.mode-chat .chat-shell:has(#taskQueuePanel:not([hidden])) .composer.composer-compact {
+  border-top: 1px solid #f0f0f0 !important;
+  padding-top: 12px !important;
 }
 
 /* ── Final responsive top + centered column tune ───────────────────────── */

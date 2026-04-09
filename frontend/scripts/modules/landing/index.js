@@ -1,3 +1,5 @@
+import { normalizeProductUrlForApi } from "../agent/utils.js";
+
 const promptInput = document.getElementById("promptInput");
 const langToggleBtn = document.getElementById("langToggleBtn");
 const topStartBtn = document.getElementById("topStartBtn");
@@ -228,21 +230,6 @@ function gotoAgentWithAiImage(singleDataUrl, allDataUrls = []) {
   window.location.href = `/pages/agent.html?${params.toString()}`;
 }
 
-function isLikelyUrl(text = "") {
-  const raw = String(text || "").trim();
-  if (!raw) return false;
-  if (/^https?:\/\//i.test(raw)) return true;
-  return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(\/.*)?$/i.test(raw);
-}
-
-function normalizeProductUrl(text = "") {
-  const raw = String(text || "").trim();
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
-  if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(\/.*)?$/i.test(raw)) return `https://${raw}`;
-  return "";
-}
-
 function setActiveRefTab(tab) {
   const isUpload = tab === "upload";
   refTabUpload?.classList.toggle("is-active", isUpload);
@@ -434,11 +421,15 @@ function closeRefModal() {
 
 [topStartBtn, startFlowBtn].forEach((btn) => {
   if (!btn) return;
-  btn.addEventListener("click", () => {
+  btn.addEventListener("click", async () => {
+    // Wait for any in-progress template thumbnail fetch (max 2s) before navigating
+    if (_templateRefFetch) {
+      await Promise.race([_templateRefFetch, new Promise((r) => setTimeout(r, 2000))]);
+    }
     const draft = promptInput ? promptInput.value.trim() : "";
-    const normalizedDraftUrl = normalizeProductUrl(draft);
+    const normalizedDraftUrl = normalizeProductUrlForApi(draft);
     const duration = durationSelect?.value || "8";
-    if (normalizedDraftUrl && isLikelyUrl(normalizedDraftUrl)) {
+    if (normalizedDraftUrl) {
       gotoAgent({
         from: "landing-product-link",
         product_url: normalizedDraftUrl,
@@ -644,6 +635,8 @@ setActiveRefTab("upload");
 applyLanguage(currentLang);
 updateRefTriggerPreview();
 
+let _templateRefFetch = null;
+
 const _templateCards = document.querySelectorAll(".command-template-card");
 _templateCards.forEach((card) => {
   card.addEventListener("click", () => {
@@ -660,5 +653,34 @@ _templateCards.forEach((card) => {
     const duration = card.getAttribute("data-duration") || "";
     if (ratio && aspectRatioSelect) aspectRatioSelect.value = ratio;
     if (duration && durationSelect) durationSelect.value = duration;
+
+    // Clear stale ref immediately, then fetch this card's thumbnail as the new ref.
+    // This lets Veo do image-to-video using the template's cover image.
+    selectedRefDataUrl = "";
+    sessionStorage.removeItem(REF_IMAGE_STORAGE_KEY);
+    sessionStorage.removeItem(AI_IMAGES_STORAGE_KEY);
+    updateRefTriggerPreview();
+
+    const thumbSrc = card.querySelector(".template-thumb img")?.src || "";
+    if (thumbSrc) {
+      const smallUrl = thumbSrc.replace(/w=\d+/, "w=480").replace(/q=\d+/, "q=75");
+      _templateRefFetch = fetch(smallUrl)
+        .then((r) => r.blob())
+        .then((blob) => new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        }))
+        .then((dataUrl) => {
+          selectedRefDataUrl = dataUrl;
+          try { sessionStorage.setItem(REF_IMAGE_STORAGE_KEY, dataUrl); } catch (_e) {}
+          updateRefTriggerPreview();
+          _templateRefFetch = null;
+        })
+        .catch(() => { _templateRefFetch = null; });
+    } else {
+      _templateRefFetch = null;
+    }
   });
 });

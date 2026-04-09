@@ -189,6 +189,49 @@ def _probe_has_audio(src_path: Path) -> bool:
     return bool((result.stdout or "").strip())
 
 
+def _probe_stream_duration_seconds(src_path: Path, stream_selector: str) -> Optional[float]:
+    """Return stream duration in seconds (e.g. v:0 / a:0), or None if missing/N/A."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", stream_selector,
+            "-show_entries", "stream=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(src_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    raw = ((result.stdout or "").strip().split("\n") or [""])[0].strip()
+    if not raw or raw.upper() == "N/A":
+        return None
+    try:
+        v = float(raw)
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_input_duration_seconds(input_video: Path, format_duration: float) -> float:
+    """
+    Prefer min(format, video stream, audio stream) when metadata disagrees.
+    Inflated container duration (e.g. mvhd/edit list) vs real packets causes players to
+    show a long timeline while video freezes after the true frame span — common after
+    re-encode + setpts if upstream MP4 duration was already wrong.
+    """
+    fd = max(0.001, float(format_duration))
+    parts: List[float] = [fd]
+    v_dur = _probe_stream_duration_seconds(input_video, "v:0")
+    if v_dur is not None:
+        parts.append(v_dur)
+    if _probe_has_audio(input_video):
+        a_dur = _probe_stream_duration_seconds(input_video, "a:0")
+        if a_dur is not None:
+            parts.append(a_dur)
+    return max(0.001, min(parts))
+
+
 def _normalize_track_ranges(points, duration_seconds: float) -> List[Tuple[float, float]]:
     vals = []
     for item in (points or []):
@@ -551,7 +594,8 @@ def register_video_edit_routes(
                     stderr=subprocess.PIPE,
                     text=True,
                 )
-                duration_seconds = _clamp_num((duration_probe.stdout or "").strip(), 0.001, 7200, 60)
+                format_duration = _clamp_num((duration_probe.stdout or "").strip(), 0.001, 7200, 60)
+                duration_seconds = _effective_input_duration_seconds(input_video, format_duration)
 
                 motion_mode, motion_ranges = _resolve_track_mode(edits, "motion", duration_seconds)
                 color_mode, color_ranges = _resolve_track_mode(edits, "color", duration_seconds)
@@ -653,6 +697,10 @@ def register_video_edit_routes(
                 cmd = [
                     "ffmpeg",
                     "-y",
+                    # Limit demux to the shortest credible span so bad container duration
+                    # does not yield a long MP4 with a frozen tail after setpts/atempo.
+                    "-t",
+                    _fmt_float(duration_seconds, 4),
                     "-i",
                     str(input_video),
                 ]
@@ -716,9 +764,18 @@ def register_video_edit_routes(
                         "20",
                         "-movflags",
                         "+faststart",
-                        str(output_video),
                     ]
                 )
+                # Global setpts/atempo: wall-clock output length is input_span/speed. Without an explicit
+                # output -t, some MP4 muxers keep a bogus long duration (e.g. 2:04) while real frames end
+                # earlier — players then show wrong total time. Ranged motion uses time-varying setpts; do not cap.
+                if motion_mode != "ranged" and abs(float(speed) - 1.0) > 1e-6:
+                    out_wall = max(0.05, float(duration_seconds) / float(speed))
+                    cmd.extend(["-t", _fmt_float(out_wall, 4)])
+                # With two inputs (BGM), -shortest can truncate to the shorter file; rely on -t on video only.
+                if not use_bgm:
+                    cmd.append("-shortest")
+                cmd.append(str(output_video))
 
                 proc = subprocess.run(
                     cmd,

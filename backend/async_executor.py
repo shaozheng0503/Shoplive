@@ -12,6 +12,7 @@ Design principles (from article):
 
 import asyncio
 import hashlib
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,8 +26,11 @@ import requests
 # Thread-pool based parallel executor (compatible with Flask's sync model)
 # ---------------------------------------------------------------------------
 
-# Shared thread pool for parallel I/O operations
-_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="shoplive-async")
+# Shared thread pool for parallel I/O (shop insight, Veo chain steps, etc.)
+# Raise SHOPLIVE_ASYNC_MAX_WORKERS when many browser tabs hit the API at once (e.g. demos).
+_async_workers = int(os.getenv("SHOPLIVE_ASYNC_MAX_WORKERS", "32"))
+_async_workers = max(4, min(_async_workers, 128))
+_executor = ThreadPoolExecutor(max_workers=_async_workers, thread_name_prefix="shoplive-async")
 
 
 def parallel_execute(

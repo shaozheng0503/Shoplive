@@ -1,17 +1,21 @@
 /**
- * Video generation UI — supports LTX 2.3 (ComfyUI) and Veo 3.1 Fast dual engine.
+ * Video generation UI — LTX 2.3 (ComfyUI)、即梦 3.x、Veo 3.1 Fast。
  */
 
 // ===== State =====
 let state = {
-  engine: 'comfyui-ltxv',  // 'comfyui-ltxv' or 'veo'
+  engine: 'comfyui-ltxv', // 'comfyui-ltxv' | 'jimeng' | 'veo'
   // LTX settings
   ltxModel: 'LTX-2 (Pro)',
-  ltxOrient: 'landscape',   // 'landscape' or 'portrait'
-  ltxBaseRes: '1920x1080',  // base resolution (always WxH landscape form)
+  ltxOrient: 'landscape', // 'landscape' | 'portrait'
+  ltxBaseRes: '1920x1080',
   ltxResolution: '1920x1080',
   ltxDuration: 10,
   ltxFps: 25,
+  // Jimeng settings
+  jimengModel: '3.0', // '3.0' | '3.5-pro'
+  jimengRatio: '16:9',
+  jimengDuration: 10, // 5 | 10
   // Veo settings
   veoRatio: '9:16',
   veoDuration: 8,
@@ -27,8 +31,9 @@ const $imageInput   = $('ltxvImageInput');
 const $imagePickBtn = $('ltxvImagePickBtn');
 const $imageName    = $('ltxvImageName');
 const $imageClearBtn= $('ltxvImageClearBtn');
-const $ltxSettings  = $('ltxvSettings');
-const $veoSettings  = $('veoSettings');
+const $ltxSettings    = $('ltxvSettings');
+const $jimengSettings = $('jimengSettings');
+const $veoSettings    = $('veoSettings');
 const $durationSlider = $('ltxvDuration');
 const $durationLabel  = $('ltxvDurationLabel');
 const $audioChk       = $('ltxvAudio');
@@ -54,13 +59,24 @@ function bindOpts(attr, onChange) {
   });
 }
 
+function generateBtnLabel() {
+  if (state.engine === 'veo') return '生成视频 (Veo)';
+  if (state.engine === 'jimeng') return '生成视频 (即梦)';
+  return '生成视频 (LTX 2.3)';
+}
+
+function applyEnginePanels() {
+  const e = state.engine;
+  $ltxSettings.style.display = e === 'comfyui-ltxv' ? '' : 'none';
+  $jimengSettings.style.display = e === 'jimeng' ? '' : 'none';
+  $veoSettings.style.display = e === 'veo' ? '' : 'none';
+  $generateBtn.textContent = generateBtnLabel();
+}
+
 // ===== Engine switcher =====
 bindOpts('data-engine', (val) => {
   state.engine = val;
-  $ltxSettings.style.display = val === 'comfyui-ltxv' ? '' : 'none';
-  $veoSettings.style.display = val === 'veo' ? '' : 'none';
-  // Update generate button text
-  $generateBtn.textContent = val === 'veo' ? '生成视频 (Veo)' : '生成视频 (LTX)';
+  applyEnginePanels();
 });
 
 // ===== LTX settings =====
@@ -86,6 +102,11 @@ $durationSlider.addEventListener('input', () => {
 // ===== Veo settings =====
 bindOpts('data-veo-ratio', (val) => { state.veoRatio = val; });
 bindOpts('data-veo-dur', (val) => { state.veoDuration = parseInt(val, 10); });
+
+// ===== Jimeng settings =====
+bindOpts('data-jimeng-model', (val) => { state.jimengModel = val; });
+bindOpts('data-jimeng-ratio', (val) => { state.jimengRatio = val; });
+bindOpts('data-jimeng-dur', (val) => { state.jimengDuration = parseInt(val, 10); });
 
 // ===== Image picker =====
 $imagePickBtn.addEventListener('click', () => $imageInput.click());
@@ -138,6 +159,8 @@ $generateBtn.addEventListener('click', async () => {
 
     if (state.engine === 'comfyui-ltxv') {
       result = await generateLTX(prompt);
+    } else if (state.engine === 'jimeng') {
+      result = await generateJimeng(prompt);
     } else {
       result = await generateVeo(prompt);
     }
@@ -146,6 +169,10 @@ $generateBtn.addEventListener('click', async () => {
 
     if (result.error) {
       $statusText.textContent = `错误: ${result.error}`;
+      return;
+    }
+    if (!result.video_url) {
+      $statusText.textContent = '错误: 未返回可播放地址';
       return;
     }
 
@@ -168,7 +195,7 @@ $generateBtn.addEventListener('click', async () => {
     $statusText.textContent = `请求失败: ${err.message}`;
   } finally {
     $generateBtn.disabled = false;
-    $generateBtn.textContent = state.engine === 'veo' ? '生成视频 (Veo)' : '生成视频 (LTX)';
+    $generateBtn.textContent = generateBtnLabel();
   }
 });
 
@@ -192,7 +219,45 @@ async function generateLTX(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return await res.json();
+  const data = await res.json();
+  if (!res.ok && data.error) return { error: data.error };
+  return data;
+}
+
+// ===== Jimeng (即梦) =====
+async function generateJimeng(prompt) {
+  const body = {
+    prompt,
+    model: state.jimengModel,
+    ratio: state.jimengRatio,
+    duration: state.jimengDuration,
+    resolution: '720p',
+  };
+  if (state.imageFile) {
+    body.image_base64 = await fileToBase64(state.imageFile);
+  }
+
+  const res = await fetch('/api/jimeng/video', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { error: data.error || data.message || `即梦请求失败 (${res.status})` };
+  }
+  const urls = data.video_urls || [];
+  const first = urls[0];
+  if (!first) {
+    return { error: '即梦未返回视频 URL，请查看服务端日志或稍后重试' };
+  }
+  return {
+    video_url: first,
+    filename: 'jimeng_video.mp4',
+    model: data.model || `jimeng-${state.jimengModel}`,
+    resolution: '720p',
+    duration: data.duration_seconds ?? state.jimengDuration,
+  };
 }
 
 // ===== Veo =====
@@ -302,3 +367,5 @@ function fileToBase64(file) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+applyEnginePanels();

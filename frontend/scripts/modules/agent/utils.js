@@ -23,6 +23,51 @@ export function toAbsoluteVideoUrl(url) {
   return url;
 }
 
+/**
+ * Pull the first URL-like token from free text (https / www / bare domain + path).
+ * Used so pasted "amazon.com/dp/…" without scheme still parses when embedded in a sentence.
+ */
+export function extractProductUrlCandidateFromText(raw = "") {
+  const s = String(raw || "")
+    .replace(/\ufeff|\u200b/g, "")
+    .replace(/[\u201c\u201d\u2018\u2019]/g, "")
+    .replace(/[\n\r\t\f\v]+/g, "")
+    .trim();
+  if (!s) return "";
+  const withScheme = s.match(/https?:\/\/[^\s<>"'`]+/i);
+  if (withScheme) return String(withScheme[0]).replace(/[),.;，。]+$/g, "").trim();
+  const www = s.match(/\bwww\.[a-z0-9.-]+\.[a-z]{2,}[^\s<>"'`]*/i);
+  if (www) return String(www[0]).replace(/[),.;，。]+$/g, "").trim();
+  const bare = s.match(/\b[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[^\s<>"'`]*)?/i);
+  if (bare) return String(bare[0]).replace(/[),.;，。]+$/g, "").trim();
+  return "";
+}
+
+/**
+ * Normalize to a valid http(s) URL for ProductInsightRequest / shop-product-insight.
+ */
+export function normalizeProductUrlForApi(raw = "") {
+  let s = extractProductUrlCandidateFromText(raw);
+  if (!s) s = String(raw || "").replace(/[\n\r\t\f\v]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) {
+    s = s.replace(/^\/+/, "");
+    if (!/^[a-z0-9]/i.test(s)) return "";
+    s = `https://${s}`;
+  }
+  try {
+    const u = new URL(s);
+    if ((u.protocol === "http:" || u.protocol === "https:") && u.hostname && u.hostname.includes(".")) {
+      return u.href;
+    }
+  } catch (_e) {}
+  return "";
+}
+
+export function isLikelyProductUrlCandidate(text = "") {
+  return Boolean(normalizeProductUrlForApi(text));
+}
+
 export async function postJson(url, body, timeout = 30000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);

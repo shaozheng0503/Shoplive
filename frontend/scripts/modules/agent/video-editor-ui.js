@@ -535,6 +535,7 @@ export function renderVideoEditor() {
   if (!document.getElementById("videoEditorPanel")) return;
   if (!state.videoEditorOpen) return;
   const _currentHash = JSON.stringify({
+    aspectRatio: state.aspectRatio,
     // Motion
     speed: state.videoEdit.speed,
     // Mask / text overlay
@@ -667,6 +668,9 @@ export function renderVideoEditor() {
             <p class="editor-note">${currentLang === "zh" ? "运动轨道用于控制全片速度与关键帧点位。" : "Motion track controls global speed and keyframe positions."}</p>
           `;
   const maxSec = getVideoDurationSec();
+  const stageAspect = ["16:9", "9:16", "1:1"].includes(String(state.aspectRatio || ""))
+    ? String(state.aspectRatio)
+    : "16:9";
   const videoBlock = state.lastVideoUrl
     ? `<div class="video-edit-surface"><video controls preload="auto" playsinline src="${state.lastVideoUrl}"></video></div>`
     : `<div class="empty-video">${currentLang === "zh" ? "暂无视频，请先生成一次视频。" : "No video yet. Generate one first."}</div>`;
@@ -682,34 +686,34 @@ export function renderVideoEditor() {
       <button class="editor-close-btn" id="closeVideoPanelBtn">${t("closePanel")}</button>
     </div>
     <p class="editor-hint">${t("videoEditHint")}</p>
-    <div class="video-editor-shell">
-      <div class="video-stage-grid">
+    <div class="video-editor-shell" data-aspect="${stageAspect}">
+      <div class="video-stage-grid" data-aspect="${stageAspect}">
         <div class="video-preview-wrap">${videoBlock}</div>
-        <section class="editor-section module-panel">
-          <h4>${t("videoModuleTitle")}</h4>
-          <p class="editor-note">${t("videoModuleHint")}</p>
-          ${activeTrackState.visible ? "" : `<p class="editor-note">${t("timelineTrackHidden")}</p>`}
-          ${activeTrackState.locked ? `<p class="editor-note">${t("timelineTrackLocked")}</p>` : ""}
-          <div class="module-switch">${moduleSwitchHtml}</div>
-          <div class="video-editor-grid module-body">${moduleEditorHtml}</div>
+        <section class="editor-section timeline-section">
+          <h4>${t("timelineTitle")}</h4>
+          <p class="editor-note timeline-hint-clip">${t("timelineHint")}</p>
+          <label>${t("timelinePlayhead")} <span id="playheadVal">${fmtSec(tl.playhead)}</span><input id="timelinePlayheadRange" type="range" min="0" max="${maxSec}" step="0.1" value="${Number(tl.playhead || 0)}" /></label>
+          <p class="timeline-track-current">${t("timelineSelectTrack")}：<strong>${activeTrackLabel}</strong></p>
+          <p class="timeline-pending-tip" id="timelinePendingTip">${tl.pendingRangeStart ? t("timelinePendingArmed", { time: fmtSec(Number(tl.pendingRangeStart.sec || 0)) }) : t("timelinePendingIdle")}</p>
+          <div class="kf-ruler">
+            <span>0:00</span><span>${fmtSec(Math.round(maxSec / 2))}</span><span>${fmtSec(maxSec)}</span>
+            <i id="kfPlayheadLine" style="left:${Math.max(0, Math.min(100, (tl.playhead / maxSec) * 100))}%"></i>
+          </div>
+          <div class="kf-rows">${buildTimelineRowsHtml(maxSec)}</div>
+          <div class="timeline-actions">
+            <button id="addKeyframeBtn">${t("timelineAddKeyframe")}</button>
+            <button id="removeKeyframeBtn">${t("timelineRemoveKeyframe")}</button>
+          </div>
+          <div class="timeline-mini-toast" id="timelineMiniToast"></div>
         </section>
       </div>
-      <section class="editor-section timeline-section">
-        <h4>${t("timelineTitle")}</h4>
-        <p class="editor-note">${t("timelineHint")}</p>
-        <label>${t("timelinePlayhead")} <span id="playheadVal">${fmtSec(tl.playhead)}</span><input id="timelinePlayheadRange" type="range" min="0" max="${maxSec}" step="0.1" value="${Number(tl.playhead || 0)}" /></label>
-        <p class="timeline-track-current">${t("timelineSelectTrack")}：<strong>${activeTrackLabel}</strong></p>
-        <p class="timeline-pending-tip" id="timelinePendingTip">${tl.pendingRangeStart ? t("timelinePendingArmed", { time: fmtSec(Number(tl.pendingRangeStart.sec || 0)) }) : t("timelinePendingIdle")}</p>
-        <div class="kf-ruler">
-          <span>0:00</span><span>${fmtSec(Math.round(maxSec / 2))}</span><span>${fmtSec(maxSec)}</span>
-          <i id="kfPlayheadLine" style="left:${Math.max(0, Math.min(100, (tl.playhead / maxSec) * 100))}%"></i>
-        </div>
-        <div class="kf-rows">${buildTimelineRowsHtml(maxSec)}</div>
-        <div class="timeline-actions">
-          <button id="addKeyframeBtn">${t("timelineAddKeyframe")}</button>
-          <button id="removeKeyframeBtn">${t("timelineRemoveKeyframe")}</button>
-        </div>
-        <div class="timeline-mini-toast" id="timelineMiniToast"></div>
+      <section class="editor-section module-panel">
+        <h4>${t("videoModuleTitle")}</h4>
+        <p class="editor-note">${t("videoModuleHint")}</p>
+        ${activeTrackState.visible ? "" : `<p class="editor-note">${t("timelineTrackHidden")}</p>`}
+        ${activeTrackState.locked ? `<p class="editor-note">${t("timelineTrackLocked")}</p>` : ""}
+        <div class="module-switch">${moduleSwitchHtml}</div>
+        <div class="video-editor-grid module-body">${moduleEditorHtml}</div>
       </section>
     </div>
     <div class="editor-actions">

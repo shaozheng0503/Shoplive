@@ -1,8 +1,10 @@
 import base64
 import json
 import logging
+import os
 import random
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -1214,6 +1216,72 @@ def normalize_timeline_video_segments(
     if len(normalized) > max_segments:
         raise ValueError(f"Too many timeline segments: {len(normalized)} > {max_segments}")
     return normalized
+
+
+def _ffprobe_has_audio_stream(path: Path) -> bool:
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                str(path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=20,
+        )
+        return bool((r.stdout or "").strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def mitigate_veo_temporal_flicker(
+    input_path: Path,
+    output_path: Path,
+    *,
+    timeout_seconds: int = 420,
+) -> Path:
+    """Reduce visible luminance pops (often around ~2–4s) in Veo/Grok MP4 output.
+
+    Uses mild hqdn3d (spatial–temporal denoise) plus a short fade-in from black at t=0.
+    Set SHOPLIVE_VEO_SKIP_FLICKER_FILTER=1 to copy input → output without re-encode.
+    """
+    if not input_path.exists():
+        raise FileNotFoundError(str(input_path))
+    if os.getenv("SHOPLIVE_VEO_SKIP_FLICKER_FILTER", "").strip().lower() in ("1", "true", "yes", "on"):
+        shutil.copyfile(input_path, output_path)
+        return output_path
+
+    # hqdn3d=luma_spatial:luma_tmp:chroma_spatial:chroma_tmp — keep mild to avoid mushy detail
+    vf = "hqdn3d=4:3:6:4.5,fade=t=in:st=0:d=0.22"
+    cmd: List[str] = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "20",
+        "-movflags", "+faststart",
+    ]
+    if _ffprobe_has_audio_stream(input_path):
+        cmd.extend(["-c:a", "copy"])
+    else:
+        cmd.append("-an")
+    cmd.append(str(output_path))
+
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+    )
+    if proc.returncode != 0 or not output_path.exists() or output_path.stat().st_size < 1024:
+        stderr_tail = (proc.stderr or b"").decode("utf-8", errors="replace")[-600:]
+        raise RuntimeError(f"mitigate_veo_temporal_flicker failed (rc={proc.returncode}): {stderr_tail}")
+    return output_path
 
 
 def concat_videos_ffmpeg(video_paths: List[Path], output_path: Path, timeout_seconds: int = 180) -> Path:

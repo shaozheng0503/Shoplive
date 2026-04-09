@@ -21,8 +21,40 @@ from google.cloud import storage
 from google.oauth2 import service_account
 
 from shoplive.backend.audit import audit_log
+from shoplive.backend.common.helpers import mitigate_veo_temporal_flicker
 from shoplive.backend.validation import validate_request
 from shoplive.backend.schemas import VeoStartRequest, VeoStatusRequest
+
+
+def _extract_vertex_predict_error_message(data: object) -> str:
+    """Human-readable snippet from Vertex predictLongRunning error JSON (4xx/5xx)."""
+    if not isinstance(data, dict):
+        return (str(data) or "")[:600]
+    err = data.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("status") or ""
+        if str(msg).strip():
+            return str(msg).strip()[:600]
+    if isinstance(err, str) and err.strip():
+        return err.strip()[:600]
+    return (str(data.get("message") or "") or "")[:600]
+
+
+def _ensure_opening_exposure_stability(prompt: str) -> str:
+    """Reduce visible flash / exposure pop in the first ~2–4s (common Veo artifact)."""
+    p = (prompt or "").strip()
+    if not p:
+        return p
+    low = p.lower()
+    if "first 0-4 seconds" in low or "0s to 4s" in low:
+        return p
+    if "lock exposure" in low and ("0-4" in p or "opening" in low):
+        return p
+    suffix = (
+        " First 0-4 seconds: lock exposure and white balance — no flash, no fade-to-white, "
+        "no sudden brightening or luminance spike; if lighting changes, ramp smoothly."
+    )
+    return f"{p.rstrip()}{suffix}"
 
 
 def register_veo_routes(
@@ -150,6 +182,18 @@ def register_veo_routes(
             val = payload.get(p_key)
             if val is not None and str(val).strip() != "":
                 parameters[k] = val
+        # Reduce abrupt flash / brightness pop — especially opening 0–4s (timestamp beats, i2v ramp).
+        # merge exposure-stability negatives (append so user negatives stay primary).
+        _neg_flash = (
+            "strobe, flashing lights, sudden white flash, harsh exposure jump, "
+            "brightness spike, flickering, overexposed pop, lens flare burst, "
+            "opening flash, intro luminance spike, fade to white at start, "
+            "first seconds exposure drift, blown highlights pop, hard exposure cut"
+        )
+        if parameters.get("negativePrompt"):
+            parameters["negativePrompt"] = f"{parameters['negativePrompt']}, {_neg_flash}"
+        else:
+            parameters["negativePrompt"] = _neg_flash
         return parameters, raw_duration_seconds, effective_duration_seconds
 
     def _extract_video_uris(operation_payload: Dict) -> list:
@@ -280,7 +324,7 @@ def register_veo_routes(
         raw_payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
-            prompt = g.req.prompt
+            prompt = _ensure_opening_exposure_stability(g.req.prompt)
             storage_uri = g.req.storage_uri
             sample_count = g.req.sample_count
             veo_mode = g.req.veo_mode
@@ -396,6 +440,7 @@ def register_veo_routes(
             data = resp.json() if resp.headers.get("content-type", "").find("json") >= 0 else {"raw": resp.text}
             operation_name = data.get("name") or ""
             _dur_ms = int((time.monotonic() - _t0) * 1000)
+            _api_err = "" if resp.ok else _extract_vertex_predict_error_message(data)
             audit_log.record(
                 tool="generate_video",
                 action="veo_start",
@@ -412,9 +457,11 @@ def register_veo_routes(
                     "ok": resp.ok,
                     "status_code": resp.status_code,
                     "operation_name": operation_name[:80],
+                    **({"vertex_error": _api_err[:400]} if _api_err else {}),
                 },
                 status="success" if resp.ok else "error",
                 error_code=None if resp.ok else "VEO_API_ERROR",
+                error_message=_api_err[:600] if _api_err else None,
                 duration_ms=_dur_ms,
             )
             return jsonify(
@@ -581,7 +628,7 @@ def register_veo_routes(
         payload = request.get_json(silent=True) or {}
         try:
             project_id, key_file, proxy, model = parse_common_payload(payload)
-            prompt = (payload.get("prompt") or "").strip()
+            prompt = _ensure_opening_exposure_stability((payload.get("prompt") or "").strip())
             if not model:
                 model = "veo-3.1-generate-preview"
             if not prompt:
@@ -1413,6 +1460,68 @@ def register_veo_routes(
         if size < 1024:
             raise ValueError(f"HTTP 视频下载后体积过小 ({size} bytes): {url}")
 
+    @app.post("/api/veo/mitigate-output")
+    def api_veo_mitigate_output():
+        """Single-segment Veo output: download (GCS / HTTP / data URL) → flicker mitigate → /video-edits/."""
+        _t0 = time.monotonic()
+        payload = request.get_json(silent=True) or {}
+        try:
+            project_id, key_file, proxy, _ = parse_common_payload(payload)
+            gcs_uri = (payload.get("gcs_uri") or "").strip()
+            http_url = (payload.get("video_http_url") or "").strip()
+            data_url = (payload.get("video_data_url") or "").strip()
+            if not gcs_uri and not http_url and not data_url:
+                return json_error("需要 gcs_uri、video_http_url 或 video_data_url 之一")
+            if not video_export_dir:
+                return json_error("video export 未配置", 500)
+            if gcs_uri and not download_gcs_blob_to_file:
+                return json_error("GCS 下载未配置", 500)
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="veo_mit_"))
+            try:
+                src = tmp_dir / "src.mp4"
+                if gcs_uri:
+                    if not gcs_uri.startswith("gs://"):
+                        return json_error("gcs_uri 格式错误")
+                    download_gcs_blob_to_file(gcs_uri, src, key_file, project_id)
+                elif http_url:
+                    _download_http_video_to_file(http_url, src, timeout=180)
+                else:
+                    _write_video_data_url_to_file(data_url, src)
+                mitigated = tmp_dir / "mitigated.mp4"
+                try:
+                    mitigate_veo_temporal_flicker(src, mitigated)
+                    final_path = mitigated
+                except Exception as _mit_e:
+                    logger.warning("mitigate-output flicker filter skipped: %s", _mit_e)
+                    final_path = src
+                final_data = final_path.read_bytes()
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            out_name = f"veo-mit-{uuid.uuid4().hex[:12]}.mp4"
+            out_file = video_export_dir / out_name
+            out_file.write_bytes(final_data)
+            _dur_ms = int((time.monotonic() - _t0) * 1000)
+            audit_log.record(
+                tool="veo_mitigate_output",
+                action="ffmpeg_mitigate",
+                input_summary={
+                    "has_gcs": bool(gcs_uri),
+                    "has_http": bool(http_url),
+                    "has_data": bool(data_url),
+                },
+                output_summary={"size_bytes": len(final_data)},
+                status="success",
+                duration_ms=_dur_ms,
+            )
+            return jsonify({"ok": True, "video_url": f"/video-edits/{out_name}"})
+        except ValueError as e:
+            return json_error(str(e))
+        except Exception as e:
+            logger.exception("mitigate-output failed")
+            return json_error(f"mitigate-output 失败: {e}", 500)
+
     @app.post("/api/veo/concat-segments")
     def api_veo_concat_segments():
         """Concatenate two video segments from GCS, inline data URLs, or plain HTTP URLs."""
@@ -1453,12 +1562,19 @@ def register_veo_routes(
                     _write_video_data_url_to_file(data_url_b, seg_b_path)
                 concat_path = tmp_dir / "concat_out.mp4"
                 concat_videos_ffmpeg([seg_a_path, seg_b_path], concat_path)
+                final_concat = concat_path
+                try:
+                    mitigated = tmp_dir / "concat_mitigated.mp4"
+                    mitigate_veo_temporal_flicker(concat_path, mitigated)
+                    final_concat = mitigated
+                except Exception as _mit_e:
+                    logger.warning("concat flicker mitigate skipped: %s", _mit_e)
                 duration_probe = subprocess.run(
                     [
                         "ffprobe", "-v", "error",
                         "-show_entries", "format=duration",
                         "-of", "default=noprint_wrappers=1:nokey=1",
-                        str(concat_path),
+                        str(final_concat),
                     ],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1468,7 +1584,7 @@ def register_veo_routes(
                     concat_duration_seconds = float((duration_probe.stdout or "").strip() or 0.0)
                 except Exception:
                     concat_duration_seconds = 0.0
-                final_data = concat_path.read_bytes()
+                final_data = final_concat.read_bytes()
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1658,8 +1774,8 @@ def register_veo_routes(
             _token_fut = _prep_pool.submit(get_access_token, key_file, proxy)
             parts = _split_fut.result()
             token = _token_fut.result()
-            prompt_a = parts["part1"]
-            prompt_b = parts["part2"]
+            prompt_a = _ensure_opening_exposure_stability(parts["part1"])
+            prompt_b = _ensure_opening_exposure_stability(parts["part2"])
             aspect_ratio = (payload.get("aspect_ratio") or "16:9").strip()
             storage_uri = (payload.get("storage_uri") or "").strip() or None
             image_b64 = (payload.get("image_base64") or "").strip()
@@ -1825,7 +1941,14 @@ def register_veo_routes(
                 local_files = [_lp_map[seg["label"]] for seg in segments]
                 concat_path = tmp_dir / f"concat_{total_seconds}s.mp4"
                 concat_videos_ffmpeg(local_files, concat_path)
-                final_data = concat_path.read_bytes()
+                final_path = concat_path
+                try:
+                    mitigated = tmp_dir / f"concat_{total_seconds}s_mitigated.mp4"
+                    mitigate_veo_temporal_flicker(concat_path, mitigated)
+                    final_path = mitigated
+                except Exception as _mit_e:
+                    logger.warning("split concat flicker mitigate skipped: %s", _mit_e)
+                final_data = final_path.read_bytes()
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 

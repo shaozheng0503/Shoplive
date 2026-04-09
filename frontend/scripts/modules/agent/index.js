@@ -1,7 +1,7 @@
 import { createTransientBackoffByPreset } from "../../shared/polling.js";
 import { currentLang, setCurrentLang, i18n, shortFeedback, feedbackDeck, insightPulseDeck, targetBatches, brandBatches, REGION_ITEMS, t, shuffle, nextLead, withLead, nextInsightPulseLine } from './i18n.js';
 import { state, smartOptionCache, MAX_CONCURRENT_VIDEO_JOBS, CHAT_TAIL_LIMIT_WHEN_SPLIT } from './state.js';
-import { getApiBase, postJson, postSse } from './utils.js';
+import { getApiBase, postJson, postSse, normalizeProductUrlForApi, toAbsoluteVideoUrl } from './utils.js';
 import { initVideoEditCallbacks, pushVideoUrlToHistory, _loadVideoHistory, applyRangedSpeedToCurrentVideo, applyColorGradingToCurrentVideo, applyBgmEditToCurrentVideo, pollRenderJob, applyTrimToCurrentVideo, applyMultiTrimToCurrentVideo, applySubtitleStyleToCurrentVideo, applyUndoLastEdit, applyAsrSubtitlesToCurrentVideo, applyImageOverlayToCurrentVideo, applySubtitleToCurrentVideo, applyPlaybackSpeedToCurrentVideo, applyFadeToCurrentVideo } from './video-edit-ops.js';
 import { initVideoEditorCallbacks, applyVideoEditsToPreview, renderVideoEditor, clampNum, fmtSec, getVideoDurationSec, getTimelineSnapCandidates, snapTimelineSec, ensureTimelineState, buildTrackSegmentsHtml, getTrackRangesByKeyframes, isTrackActiveAtTime, buildTimelineRowsHtml, revokeLocalObjectUrl, readFileAsDataUrl, setupSurfaceFullscreen, setupMaskDrag } from './video-editor-ui.js';
 import { initWorkspaceCallbacks, buildStoryboardText, buildWorkflowInput, hasWorkflowRequiredInput, callShopliveWorkflow, hydrateWorkflowTexts, applyWorkspaceMode, updateWorkspaceTabs, updateWorkspaceToolbarVisibility, updateToolbarIndicator, buildSegmentedStoryboard, buildStoryboardFromPromptSegments, parseStoryboardSegments, renderScriptEditor } from './workspace.js';
@@ -26,6 +26,7 @@ const enhancePromptBtn = document.getElementById("enhancePromptBtn");
 const uploadHint = document.getElementById("uploadHint");
 const productUrlInput = document.getElementById("productUrlInput");
 const parseProductUrlBtn = document.getElementById("parseProductUrlBtn");
+const linkParseStatusEl = document.getElementById("linkParseStatus");
 const toggleProductUrlBtn = document.getElementById("toggleProductUrlBtn");
 const workspaceEl = document.getElementById("workspace");
 const composerCompact = document.querySelector(".composer.composer-compact");
@@ -131,7 +132,11 @@ function showProductAssetRequiredMessage(reason = "generate") {
 
 function updateGenerationGateUI() {
   const hasAsset = hasEffectiveProductAsset();
-  if (uploadHint) uploadHint.textContent = hasAsset ? t("uploadHintReady") : t("uploadHintLocked");
+  if (uploadHint) {
+    const txt = hasAsset ? t("uploadHintReady") : t("uploadHintLocked");
+    uploadHint.textContent = txt;
+    uploadHint.hidden = !String(txt || "").trim();
+  }
   if (sendBtn) {
     sendBtn.dataset.locked = "false";
     sendBtn.title = "";
@@ -194,7 +199,7 @@ function renderTaskQueue() {
       : blockedCount > 0
         ? `${blockedCount} ${t("taskFailed")}`
         : `${doneCount} ${t("taskDone")}`;
-    taskQueueTitle.innerHTML = `<span>${t("taskQueueTitle")}</span><span class="task-state-badge ${summaryTone}">${sanitizeInputValue(summaryText)}</span>`;
+    taskQueueTitle.innerHTML = `<span>${t("taskQueueTitle", { max: MAX_CONCURRENT_VIDEO_JOBS })}</span><span class="task-state-badge ${summaryTone}">${sanitizeInputValue(summaryText)}</span>`;
   }
   if (taskQueueClearBtn) {
     taskQueueClearBtn.textContent = t("taskClearDone");
@@ -231,7 +236,14 @@ function renderTaskQueue() {
       const viewBtn   = canView   ? `<button class="task-view-btn action-chip-btn action-chip-view"   type="button" data-task-action="view"   data-task-id="${item.id}">${t("taskView")}</button>`   : "";
       const cancelBtn = canCancel ? `<button class="task-cancel-btn action-chip-btn action-chip-danger" type="button" data-task-action="cancel" data-task-id="${item.id}">${t("taskCancel")}</button>` : "";
 
-      const timeStr  = finalSec !== null ? ` · ${finalSec}s` : "";
+      // 进行中若 stage 已含「总计 / total」类计时，勿再前缀 ·Xs，避免 270s 与「总计252s」两套时钟打架
+      const isRunning = item.status === "running";
+      const stageHasEmbeddedTimer =
+        isRunning
+        && safeStage
+        && /(?:总计\s*\d+|\d+\s*s\s*total|\(\d+s\))/.test(String(safeStage));
+      const timeStr =
+        finalSec !== null && !(isRunning && stageHasEmbeddedTimer) ? ` · ${finalSec}s` : "";
       const stageStr = safeStage ? ` · ${safeStage}` : "";
       const stateTone = item.status === "done"
         ? "status-dot-done"
@@ -259,10 +271,10 @@ function renderTaskQueue() {
 function createVideoTask(durationLabel = "8s") {
   state.taskSeq = Number(state.taskSeq || 0) + 1;
   const id = `video-task-${Date.now()}-${state.taskSeq}`;
-  const provider = getModelProvider();
+  const eng = state.videoEngine || "veo";
   const sourceLabel = currentLang === "zh"
-    ? (provider === "veo" ? "Veo 图生视频" : "Grok 文生视频")
-    : (provider === "veo" ? "Veo image-to-video" : "Grok text-to-video");
+    ? ({ ltx: "LTX 2.3", jimeng: "即梦 3.0", veo: "Veo 3.1 Fast", grok: "Grok Video" }[eng] || "Veo 3.1 Fast")
+    : ({ ltx: "LTX 2.3", jimeng: "Jimeng 3.0", veo: "Veo 3.1 Fast", grok: "Grok Video" }[eng] || "Veo 3.1 Fast");
   state.taskMap[id] = {
     id,
     title: `#${state.taskSeq} · ${durationLabel}`,
@@ -374,6 +386,10 @@ let hasOpenEditors = false;
 
 
 function startLinkParseProgress() {
+  if (state.entryFocusMode) {
+    state.entryFocusMode = false;
+    applyWorkspaceMode();
+  }
   const steps = [
     t("parseLinkWorking"),
     t("parseLinkStep1"),
@@ -383,21 +399,79 @@ function startLinkParseProgress() {
   ];
   const startedAt = Date.now();
   let stepIdx = 0;
+  let timer = null;
+  let visualTimer = null;
+  forceScrollChatToBottom();
+  setLinkParseInlineStatus(steps[0], true);
   const bubble = pushSystemStateMsg(steps[0], "progress");
-  const timer = setInterval(() => {
+  forceScrollChatToBottom();
+  timer = setInterval(() => {
     const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+    let line = "";
     if (sec < 20) {
       stepIdx = Math.min(stepIdx + 1, steps.length - 1);
-      bubble.textContent = steps[stepIdx];
+      line = steps[stepIdx];
+      setSystemStateMsgBodyText(bubble, line);
     } else {
-      bubble.textContent = t("parseLinkSlow", { sec });
+      line = t("parseLinkSlow", { sec });
+      setSystemStateMsgBodyText(bubble, line);
     }
-    scrollToBottom();
+    setLinkParseInlineStatus(line, true);
+    forceScrollChatToBottom();
   }, 3000);
-  return () => {
-    clearInterval(timer);
+
+  const stop = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+    if (visualTimer) {
+      clearInterval(visualTimer);
+      visualTimer = null;
+    }
+    setLinkParseInlineStatus("", false);
     if (bubble && bubble.parentNode) bubble.remove();
   };
+
+  /** 进入「识图」阶段：多句文案轮换，避免长时间只显示同一句。 */
+  const startVisualStepRotation = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+    if (visualTimer) {
+      clearInterval(visualTimer);
+      visualTimer = null;
+    }
+    const vSteps = [
+      t("parseLinkVisual"),
+      t("parseLinkVisualStep1"),
+      t("parseLinkVisualStep2"),
+      t("parseLinkVisualStep3"),
+      t("parseLinkVisualStep4"),
+    ];
+    const vStarted = Date.now();
+    let vIdx = 0;
+    const applyLine = (line) => {
+      const s = String(line || "").trim();
+      if (!s) return;
+      setSystemStateMsgBodyText(bubble, s);
+      setLinkParseInlineStatus(s, true);
+      forceScrollChatToBottom();
+    };
+    applyLine(vSteps[0]);
+    visualTimer = setInterval(() => {
+      const sec = Math.max(1, Math.floor((Date.now() - vStarted) / 1000));
+      if (sec >= 40) {
+        applyLine(t("parseLinkVisualSlow", { sec }));
+        return;
+      }
+      vIdx = (vIdx + 1) % vSteps.length;
+      applyLine(vSteps[vIdx]);
+    }, 2800);
+  };
+
+  return { stop, startVisualStepRotation };
 }
 
 function renderWorkspaceTab(el, label, kind) {
@@ -420,9 +494,12 @@ function applyLang() {
     const opened = Boolean(composerCompact?.classList.contains("show-link-row"));
     toggleProductUrlBtn.textContent = opened ? t("toggleLinkHide") : t("toggleLinkShow");
   }
-  if (uploadHint) uploadHint.textContent = t("uploadHint");
+  const vel = document.getElementById("videoEngineLabel");
+  if (vel) vel.textContent = t("videoEngineLabel");
   if (parseProductUrlBtn) parseProductUrlBtn.textContent = t("parseLinkBtn");
   if (productUrlInput) productUrlInput.placeholder = t("parseLinkPh");
+  const ratioLabelEl = document.querySelector('label[for="aspectRatioSelect"] span');
+  if (ratioLabelEl) ratioLabelEl.textContent = t("ratioLabel");
   const durationLabel = document.querySelector('label[for="durationSelect"] span');
   if (durationLabel) durationLabel.textContent = t("durationLabel");
   if (langToggleBtn) langToggleBtn.textContent = currentLang === "zh" ? "EN" : "中文";
@@ -444,7 +521,8 @@ function applyLang() {
   renderVideoEditor();
   renderScriptEditor();
   renderTaskQueue();
-  updateDurationHint();
+  syncVideoEngineChips();
+  updateGenerationGateUI();
 }
 
 const VEO_MODEL_OPTIONS = [
@@ -462,11 +540,15 @@ function getGrokModel() {
   return GROK_FIXED_MODEL;
 }
 
-function getModelProvider() {
-  return hasEffectiveProductAsset() ? "veo" : "tabcode";
+function getDurationProviderKey() {
+  const e = state.videoEngine || "veo";
+  if (e === "grok") return "tabcode";
+  if (e === "jimeng") return "jimeng";
+  if (e === "ltx") return "ltx";
+  return "veo";
 }
 
-// Duration option definitions per provider
+// Duration option definitions per provider key (see getDurationProviderKey)
 const DURATION_OPTIONS = {
   tabcode: [
     { value: "6",  labelZh: "6秒（单次）",        labelEn: "6s (single)" },
@@ -477,11 +559,28 @@ const DURATION_OPTIONS = {
     { value: "8",  labelZh: "8秒",          labelEn: "8s" },
     { value: "16", labelZh: "16秒", labelEn: "16s", defaultSel: true },
   ],
+  jimeng: [
+    { value: "5", labelZh: "5秒", labelEn: "5s" },
+    { value: "10", labelZh: "10秒", labelEn: "10s", defaultSel: true },
+  ],
+  ltx: [6, 8, 10, 12, 14, 16, 18, 20].map((v) => ({
+    value: String(v),
+    labelZh: `${v}秒`,
+    labelEn: `${v}s`,
+    defaultSel: v === 10,
+  })),
 };
+
+function syncVideoEngineChips() {
+  const eng = state.videoEngine || "veo";
+  document.querySelectorAll("[data-video-engine]").forEach((btn) => {
+    btn.classList.toggle("active", btn.getAttribute("data-video-engine") === eng);
+  });
+}
 
 function updateDurationOptions() {
   if (!durationSelect) return;
-  const provider = getModelProvider();
+  const provider = getDurationProviderKey();
   const opts = DURATION_OPTIONS[provider] || DURATION_OPTIONS.veo;
   const zh = currentLang === "zh";
   const prev = state.duration;
@@ -499,7 +598,7 @@ function updateDurationOptions() {
 
 function updateDurationHint() {
   if (!durationHint) return;
-  const provider = getModelProvider();
+  const provider = getDurationProviderKey();
   const dur = Number(state.duration) || 8;
   const zh  = currentLang === "zh";
 
@@ -655,6 +754,7 @@ function _buildSplitSystemPrompt(clips, segDuration) {
     + `  ✗ NEVER include text overlays, subtitles, or captions\n`
     + `  ✗ NEVER change the product appearance, color, or brand identity between segments\n`
     + `  ✓ Each segment must feel like it belongs to the SAME video shoot\n`
+    + `  ✓ Timestamp beats (e.g. [00:02-00:04]) must evolve GRADUALLY — keep constant exposure/white balance at boundaries; NO flash, brightness spike, or strobing\n`
     + `  ✓ Include the compliance suffix from the original prompt if present\n`
     + `  ✓ Write in English only\n\n`
 
@@ -746,9 +846,9 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
     // For multi-clip: use LLM to generate truly distinct per-segment prompts
     let segmentPrompts;
     if (clips > 1) {
-      if (pollBubble) pollBubble.textContent = zh
+      if (pollBubble) setSystemStateMsgBodyText(pollBubble, zh
         ? "⏳ Grok Video：正在优化生成计划…"
-        : "⏳ Grok Video: Optimizing generation plan…";
+        : "⏳ Grok Video: Optimizing generation plan…");
       segmentPrompts = await _splitPromptForGrok(base, core, clips);
     } else {
       segmentPrompts = [core];
@@ -761,9 +861,9 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
       const n = i + 1;
       const labelZh = clips > 1 ? `Grok 任务 ${n}/${clips}` : "Grok 生成中";
       const labelEn = clips > 1 ? `Grok task ${n}/${clips}` : "Grok generating";
-      pollBubble.textContent = clips > 1
+      setSystemStateMsgBodyText(pollBubble, clips > 1
         ? (zh ? `⏳ Grok Video 生成中（${n}/${clips}，0%）…` : `⏳ Grok Video generating (${n}/${clips}, 0%)…`)
-        : (zh ? `⏳ Grok Video 生成中（0%）…` : `⏳ Grok Video generating (0%)…`);
+        : (zh ? `⏳ Grok Video 生成中（0%）…` : `⏳ Grok Video generating (0%)…`));
       updateVideoTask(taskId, { status: "running", stage: zh ? `${labelZh} 0%` : `${labelEn} 0%` });
       // Use the LLM-split segment prompt, wrapped with Grok-friendly prefix/suffix
       const clipPrompt = buildGrokVideoPrompt(segmentPrompts[i] || core, 6);
@@ -775,9 +875,9 @@ async function generateTabcodeVideo(prompt, taskId = "", targetDuration = 6) {
     let finalUrl = results[0];
     let concatFailed = false;
     for (let i = 1; i < results.length; i++) {
-      pollBubble.textContent = zh
+      setSystemStateMsgBodyText(pollBubble, zh
         ? "⏳ 视频处理中…"
-        : "⏳ Processing video…";
+        : "⏳ Processing video…");
       updateVideoTask(taskId, { status: "running", stage: zh ? "处理中" : "Processing" });
       const merged = await _grokConcat(base, finalUrl, results[i]);
       if (merged.ok && merged.url) {
@@ -837,6 +937,31 @@ function scrollToBottom() {
     return;
   }
   chatList.scrollTop = chatList.scrollHeight;
+}
+
+/** 解析链接等需要用户立即看到的状态：忽略「已上滚」以免气泡在视口外。 */
+function forceScrollChatToBottom() {
+  _userScrolledUp = false;
+  _unreadCount = 0;
+  const badge = document.getElementById("scrollBotBadge");
+  const fab = document.getElementById("scrollBotFab");
+  if (badge) {
+    badge.hidden = true;
+    badge.textContent = "0";
+  }
+  if (fab) fab.hidden = true;
+  if (chatList) chatList.scrollTop = chatList.scrollHeight;
+}
+
+function setLinkParseInlineStatus(text = "", visible = false) {
+  if (!linkParseStatusEl) return;
+  if (!visible || !String(text).trim()) {
+    linkParseStatusEl.hidden = true;
+    linkParseStatusEl.textContent = "";
+    return;
+  }
+  linkParseStatusEl.hidden = false;
+  linkParseStatusEl.textContent = text;
 }
 
 function updateChatTailWindow() {
@@ -1497,6 +1622,14 @@ function pushSystemStateMsg(text, tone = "progress", extra = {}) {
   });
 }
 
+/** Status cards keep copy in `.msg-body[data-msg-body]`; writing `article.textContent` wipes meta/body and breaks layout (looks “empty”). */
+function setSystemStateMsgBodyText(articleEl, text) {
+  if (!articleEl) return;
+  const body = articleEl.querySelector("[data-msg-body]");
+  if (body) body.textContent = String(text ?? "");
+  else articleEl.textContent = String(text ?? "");
+}
+
 function pushSystemGuideMsg(text, extra = {}) {
   return pushMsg("system", text, {
     typewriter: false,
@@ -1860,12 +1993,12 @@ function startInsightProgress() {
   const timer = setInterval(() => {
     const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
     if (sec < 8) {
-      bubble.textContent = nextInsightPulseLine();
+      setSystemStateMsgBodyText(bubble, nextInsightPulseLine());
       return;
     }
     if (sec >= 8) {
       warned = true;
-      bubble.textContent = t("insightSlow", { sec });
+      setSystemStateMsgBodyText(bubble, t("insightSlow", { sec }));
     }
   }, 1800);
   return () => {
@@ -2428,8 +2561,6 @@ function normalizeDurationForProvider(durationNum = 0, provider = "veo") {
 
 function applyDetectedVideoSettings(config = {}) {
   const duration = String(config?.duration || "").trim();
-  state.aspectRatio = LOCKED_ASPECT_RATIO;
-  if (aspectRatioSelect) aspectRatioSelect.value = LOCKED_ASPECT_RATIO;
   updateDurationOptions();
   if (durationSelect && duration) {
     const hasOption = Array.from(durationSelect.options || []).some((o) => o.value === duration);
@@ -2445,7 +2576,7 @@ async function submitSimplePromptGeneration(finalText = "") {
   const text = String(finalText || "").trim();
   if (!text) return;
   if (!canStartVideoJob()) {
-    pushSystemStateMsg(t("tooManyJobs"), "blocked");
+    pushSystemStateMsg(t("tooManyJobs", { max: MAX_CONCURRENT_VIDEO_JOBS }), "blocked");
     return;
   }
   if (chatInput) chatInput.value = "";
@@ -2462,7 +2593,7 @@ function showPromptConfigConfirmBubble(finalText = "") {
   if (!text) return false;
   const detectedRatio = "";
   const detectedDurationRaw = extractDurationFromPrompt(text);
-  const provider = getModelProvider();
+  const provider = getDurationProviderKey();
   const recommendedDuration = normalizeDurationForProvider(detectedDurationRaw, provider);
   if (!detectedRatio && !recommendedDuration) return false;
 
@@ -2499,6 +2630,70 @@ function showPromptConfigConfirmBubble(finalText = "") {
 }
 
 /**
+ * Parse small integers from Arabic or Chinese numerals (for second markers: 五、十五、23).
+ */
+function parseZhSecondToken(tok) {
+  let s = String(tok || "").replace(/\s/g, "").replace(/^第/, "");
+  if (!s) return NaN;
+  if (/^\d+(?:\.\d+)?$/.test(s)) return parseFloat(s);
+  const d = {
+    零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+  };
+  if (s.length === 1 && d[s] !== undefined) return d[s];
+  if (s === "十") return 10;
+  const mTeen = /^十([一二三四五六七八九])$/.exec(s);
+  if (mTeen) return 10 + d[mTeen[1]];
+  const mWholeTen = /^([一二三四五六七八九])十$/.exec(s);
+  if (mWholeTen) return (d[mWholeTen[1]] || 0) * 10;
+  const mCombo = /^([一二三四五六七八九])十([一二三四五六七八九])$/.exec(s);
+  if (mCombo) return (d[mCombo[1]] || 0) * 10 + (d[mCombo[2]] || 0);
+  return NaN;
+}
+
+/**
+ * Trim time range in seconds: supports "3秒到第五秒", "第3到第5秒", "1~3s".
+ */
+function parseTrimTimeRange(s) {
+  const AR = /第?\s*(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?\s*(\d+(?:\.\d+)?)\s*[秒s]/i;
+  let m = AR.exec(s);
+  if (m) {
+    const a = parseFloat(m[1]);
+    const b = parseFloat(m[2]);
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) return { start: Math.max(0, a), end: b };
+  }
+  const ZH_END = /第?\s*(\d+(?:\.\d+)?)\s*[秒s]?\s*(?:到|至|~|-|–)\s*第?\s*([一二三四五六七八九十两〇零0-9]{1,5})\s*[秒s]?/i;
+  m = ZH_END.exec(s);
+  if (m) {
+    const a = parseFloat(m[1]);
+    const b = parseZhSecondToken(m[2]);
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) return { start: Math.max(0, a), end: b };
+  }
+  const ZH_START = /第?\s*([一二三四五六七八九十两〇零]{1,5})\s*[秒s]?\s*(?:到|至|~|-|–)\s*第?\s*(\d+(?:\.\d+)?)\s*[秒s]?/i;
+  m = ZH_START.exec(s);
+  if (m) {
+    const a = parseZhSecondToken(m[1]);
+    const b = parseFloat(m[2]);
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) return { start: Math.max(0, a), end: b };
+  }
+  return null;
+}
+
+/**
+ * 「只保留第3秒」→ 保留第 3 个整秒区间 [2,3]s（与口语「第 N 秒」一条一致）。
+ */
+function parseKeepSingleSecondPhrase(s) {
+  const t = String(s || "").trim();
+  const m = /^(?:只)?(?:保留|裁剪|截取)\s*第\s*(\d+(?:\.\d+)?)\s*秒\s*$/i.exec(t);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n < 0.5) return null;
+  const i = Math.floor(n);
+  if (Math.abs(n - i) > 1e-6) return { start: Math.max(0, n), end: n + 1 };
+  if (i < 1) return null;
+  return { start: i - 1, end: i };
+}
+
+/**
  * Unified video-edit intent parser.
  * Returns { type, ...params } or null.
  *
@@ -2518,18 +2713,6 @@ function extractVideoEditIntent(raw = "") {
   if (str.length > 120) return null;
   // Explicit generation starters
   if (/^(generate|create|make a|制作|生成|帮我生成|帮我制作|请生成|请制作)/i.test(str)) return null;
-
-  // ── helpers ────────────────────────────────────────────────────────────────
-  // Time range: "1~3s" / "1秒到3秒" / "1s to 3s" / "第1到第3秒"
-  const TIME_RANGE = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/i;
-  const parseTimeRange = (s) => {
-    const m = TIME_RANGE.exec(s);
-    if (!m) return null;
-    const a = parseFloat(m[1]);
-    const b = parseFloat(m[2]);
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return null;
-    return { start: Math.max(0, a), end: b };
-  };
 
   // ── 0a. undo ──────────────────────────────────────────────────────────────
   if (/(撤销|undo|回退|上一步|还原)/i.test(str)) {
@@ -2558,11 +2741,17 @@ function extractVideoEditIntent(raw = "") {
 
   // ── 0b-multi. multi-segment keep: "保留1-3s和7-10s" ──────────────────────
   if (/(保留|裁剪|截取|trim|keep)/.test(str) && /(和|与|及|and|\+)/.test(str)) {
-    const SEG_PAT = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/gi;
+    const SEG_PAT_AR = /第?(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?(\d+(?:\.\d+)?)\s*[秒s]/gi;
     const segs = [];
     let _m;
-    while ((_m = SEG_PAT.exec(str)) !== null) {
+    while ((_m = SEG_PAT_AR.exec(str)) !== null) {
       const a = parseFloat(_m[1]), b = parseFloat(_m[2]);
+      if (Number.isFinite(a) && Number.isFinite(b) && b > a) segs.push({ start: Math.max(0, a), end: b });
+    }
+    const SEG_PAT_ZH = /第?\s*(\d+(?:\.\d+)?)\s*[秒s]?\s*[~\-–到至]\s*第?\s*([一二三四五六七八九十两〇零]{1,5})\s*[秒s]?/gi;
+    while ((_m = SEG_PAT_ZH.exec(str)) !== null) {
+      const a = parseFloat(_m[1]);
+      const b = parseZhSecondToken(_m[2]);
       if (Number.isFinite(a) && Number.isFinite(b) && b > a) segs.push({ start: Math.max(0, a), end: b });
     }
     if (segs.length >= 2) return { type: "multiTrim", segments: segs };
@@ -2570,7 +2759,9 @@ function extractVideoEditIntent(raw = "") {
 
   // ── 0b. trim / keep range (single segment) ───────────────────────────────
   if (/(裁剪|截取|只保留|保留第|保留.*[秒s]|trim|crop|剪切)/i.test(str)) {
-    const range = parseTimeRange(str);
+    const singleSec = parseKeepSingleSecondPhrase(str);
+    if (singleSec) return { type: "trim", start: singleSec.start, end: singleSec.end };
+    const range = parseTrimTimeRange(str);
     if (range) return { type: "trim", start: range.start, end: range.end };
   }
 
@@ -2590,7 +2781,7 @@ function extractVideoEditIntent(raw = "") {
   if (/(倍速|加速|减速|speed|playback|慢速|快速)/i.test(str)) {
     const speedM = str.match(/([0-2](?:\.\d+)?)\s*[xX倍速]/);
     const speed = speedM ? Math.max(0.5, Math.min(2, parseFloat(speedM[1]))) : 0;
-    const range = parseTimeRange(str);
+    const range = parseTrimTimeRange(str);
     if (speed > 0 && range) {
       return { type: "speedRange", start: range.start, end: range.end, speed };
     }
@@ -2608,7 +2799,7 @@ function extractVideoEditIntent(raw = "") {
   // Exclude "字幕" when it appears in a negative/avoidance context ("避免字幕", "字幕水印")
   const _subtitleInNegCtx = /(避免.*字幕|不要.*字幕|去掉.*字幕|禁止字幕|无字幕|字幕.*水印|水印.*字幕)/i.test(str);
   if (!_subtitleInNegCtx && /(字幕|caption|subtitle|加字|叠字)/i.test(str)) {
-    const range = parseTimeRange(str);
+    const range = parseTrimTimeRange(str);
     // Single time point: require 第 prefix to avoid matching video-duration specs like "生成一条6秒"
     let start = 0;
     let end = 0;
@@ -2625,8 +2816,9 @@ function extractVideoEditIntent(raw = "") {
     if (quotedM) {
       captionText = (quotedM[1] || quotedM[2] || "").trim();
     } else {
+      const _stripTimeRange = /第?\s*\d+(?:\.\d+)?\s*[秒s]?\s*[~\-–到至]\s*第?\s*(?:\d+(?:\.\d+)?|[一二三四五六七八九十两〇零]{1,5})\s*[秒s]?/gi;
       captionText = str
-        .replace(TIME_RANGE, "")
+        .replace(_stripTimeRange, "")
         .replace(/(?:给|在|为|对|add|insert|put|字幕|caption|subtitle|加字|叠字|第|秒|s\b|[~～：:])+/gi, " ")
         .replace(/\s+/g, " ").trim().slice(0, 60);
     }
@@ -2636,23 +2828,27 @@ function extractVideoEditIntent(raw = "") {
   }
 
   // ── 3. color grading ───────────────────────────────────────────────────────
-  if (/(调色|亮|暗|饱和|色调|对比|暖色|冷色|偏黄|偏蓝|偏绿|偏红|color|bright|dark|saturate|warm|cool|hue|contrast|vivid|cinematic|vintage|黑白|灰度|tint)/i.test(str)) {
+  // 不要用宽泛英文词（cinematic / vivid / color / contrast）作入口：分镜文案里到处都是
+  // 「cinematic lighting」「vivid texture」，会按逗号批量拆条后每条都触发调色。
+  {
     const color = {};
-    // Brightness — require explicit editing phrases to avoid matching "亮点", "亮度高" in generation prompts
     if (/(亮一点|提亮|调亮|brighter|lighten|增加亮度)/i.test(str)) color.bright = 18;
     else if (/(暗一点|降暗|调暗|darker|darken|减少亮度)/i.test(str)) color.bright = -18;
-    // Saturation — require edit-intent context; "鲜艳" alone is too common in product descriptions
-    if (/(饱和度|调饱和|更鲜艳|变鲜艳|vivid|saturate)/i.test(str)) color.sat = 20;
+    if (/(饱和度|调饱和|更鲜艳|变鲜艳)/i.test(str) || /(?:调|提高|降低)饱和度/i.test(str)) color.sat = 20;
     else if (/(去饱和|淡化|desaturate|faded|pale)/i.test(str)) color.sat = -20;
-    // Warmth/hue — require directional edit phrases; "暖色" alone common in product style descriptions
-    if (/(偏黄|偏橙|调.*暖|暖色.*调|warm.*tone|warm.*filter|golden)/i.test(str)) color.hue = 15;
-    else if (/(偏蓝|调.*冷|冷色.*调|cool.*tone|cool.*filter|cooler)/i.test(str)) color.hue = -15;
-    // Contrast — "对比" alone is common in "对比鲜明"; require "度" or explicit action
-    if (/(对比度|调.*对比|增.*对比|cinematic|contrast)/i.test(str)) color.contrast = 20;
-    // Vintage/film look — "电影感" alone is common in generation prompts; require effect/filter context
-    if (/(vintage|胶片.*效果|film.*grain|调.*电影感|电影.*滤镜)/i.test(str)) { color.sat = 15; color.hue = 8; color.contrast = 15; }
-    // Black & white
-    if (/(黑白|灰度|grayscale|black.*white)/i.test(str)) { color.sat = -100; }
+    if (/(偏黄|偏橙|调.*暖|暖色.*调|warm\s*tone|warm\s*filter)/i.test(str)) color.hue = 15;
+    else if (/(偏蓝|调.*冷|冷色.*调|cool\s*tone|cool\s*filter|cooler)/i.test(str)) color.hue = -15;
+    if (/(对比度|调.*对比|增.*对比|提高对比|降低对比)/i.test(str)) color.contrast = 20;
+    if (/(vintage|胶片.*效果|film.*grain|调.*电影感|电影.*滤镜)/i.test(str)) {
+      color.sat = 15;
+      color.hue = 8;
+      color.contrast = 15;
+    }
+    if (/(黑白|灰度|grayscale|black.*white)/i.test(str)) color.sat = -100;
+    if (/(调色|color\s*grading|colour\s*grading)/i.test(str) && Object.keys(color).length === 0) {
+      color.contrast = 12;
+      color.sat = 6;
+    }
     if (Object.keys(color).length > 0) {
       return { type: "color", ...color };
     }
@@ -2805,6 +3001,12 @@ function sanitizePromptForVeo(raw = "") {
   if (!/no\s+text/i.test(text)) {
     text += " No text overlay, no subtitles, no captions, no on-screen characters in any language.";
   }
+  if (!/stable exposure|brightness spike|abrupt.*lighting|first 0-4|0s to 4s/i.test(text)) {
+    text +=
+      " Stable exposure and white balance for the whole clip; smooth gradual transitions between shots; "
+      + "no sudden brightness spikes, flashes, strobing, or harsh lighting jumps at any timestamp. "
+      + "First 0-4 seconds: hold luminance steady — no flash, fade-to-white, or exposure pop.";
+  }
   return text.slice(0, 1600);
 }
 
@@ -2829,11 +3031,10 @@ function buildSingleVeoFallbackPrompt() {
     anchorSummary ? `[Anchors] ${anchorSummary}.` : "",
     `[Context] For ${region}, aimed at ${target}, ${modelText}.`,
     `[Action] Focus on ${points}.`,
-    `[00:00-00:02] Hero intro shot and product silhouette.`,
-    `[00:02-00:04] Medium shot of key usage moment.`,
-    `[00:04-00:06] Macro close-up for texture and material details.`,
-    `[00:06-00:08] Confident closing composition with conversion intent.`,
-    `[Technical] Aspect ratio ${ratio}, duration ${duration}s, natural camera movement, realistic texture.`,
+    `[00:00-00:04] Continuous hero build — wide to medium, same lighting and exposure throughout (no flash at 2s).`,
+    `[00:04-00:06] Detail and texture; maintain identical color grade and exposure as prior beats.`,
+    `[00:06-00:08] Confident closing composition; single coherent lighting setup, no new light sources.`,
+    `[Technical] Aspect ratio ${ratio}, duration ${duration}s, smooth camera, realistic texture, constant exposure.`,
   ].join(" ");
 }
 
@@ -2843,7 +3044,12 @@ async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
   const anchorHint = buildProductAnchorSummary("en");
   const needsRewrite = hasCjkChars(source);
   if (!needsRewrite) {
-    return sanitizePromptForVeo([source, anchorHint ? `Preserve these product anchors exactly: ${anchorHint}.` : ""].filter(Boolean).join(" ")) || source;
+    if (!anchorHint) return sanitizePromptForVeo(source) || source;
+    // 本地草稿/hydrate 往往已含 Product anchors，避免再拼一段同义约束
+    if (/product anchors|preserve these product anchors/i.test(source)) {
+      return sanitizePromptForVeo(source) || source;
+    }
+    return sanitizePromptForVeo(`${source} Preserve these product anchors exactly: ${anchorHint}.`) || source;
   }
   try {
     updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提示词语义对齐中" : "Aligning prompt semantics" });
@@ -2860,6 +3066,7 @@ async function rewritePromptForVeoSingle(base, rawPrompt, taskId = "") {
               + "Do not change the product category, silhouette, color family, materials, or key details when anchors are provided.\n"
               + "Output must be plain text only (no markdown), max 220 words.\n"
               + "Must include four timestamp shots: [00:00-00:02], [00:02-00:04], [00:04-00:06], [00:06-00:08].\n"
+              + "Timestamp boundaries must be seamless: same lighting and exposure across cuts — no sudden brightening, flash, or exposure pop (especially near 2s).\n"
               + "Must avoid text overlays/subtitles/captions and avoid quotation marks.",
           },
           { role: "user", content: [source, anchorHint ? `Product anchors to preserve exactly: ${anchorHint}.` : ""].filter(Boolean).join("\n") },
@@ -2970,6 +3177,50 @@ function buildPlayableUrlFromGcs(gcsUri) {
   return `${getApiBase()}/api/veo/play?gcs_uri=${encodeURIComponent(uri)}`;
 }
 
+/** Parse gs://… from our /api/veo/play?gcs_uri=… proxy URL. */
+function extractGcsFromPlayUrl(url) {
+  const s = String(url || "");
+  if (!s.includes("/api/veo/play")) return "";
+  try {
+    const u = new URL(s, "http://local.invalid/");
+    const g = u.searchParams.get("gcs_uri");
+    return g ? String(g).trim() : "";
+  } catch (_e) {
+    return "";
+  }
+}
+
+/**
+ * Single-segment Veo URLs (poll / 16s fallback) skip server-side concat mitigate;
+ * run the same hqdn3d+fade pass and serve /video-edits/… for playback.
+ */
+async function applyVeoFlickerMitigate(base, gcsHint, playableUrl) {
+  const direct = String(playableUrl || "").trim();
+  const gcs = String(gcsHint || "").trim();
+  if (String(state.videoEngine || "veo") !== "veo") return { videoUrl: direct, gcsUri: gcs };
+  if (direct && /\/video-edits\//.test(direct)) return { videoUrl: direct, gcsUri: gcs };
+
+  const fromPlay = extractGcsFromPlayUrl(direct);
+  const effectiveGcs = (gcs.startsWith("gs://") ? gcs : "") || fromPlay;
+  const body = { project_id: "qy-shoplazza-02" };
+  if (effectiveGcs) body.gcs_uri = effectiveGcs;
+  else if (direct.startsWith("data:video/")) body.video_data_url = direct;
+  else if (/^https?:\/\//i.test(direct)) body.video_http_url = direct;
+  else return { videoUrl: direct, gcsUri: gcs };
+
+  try {
+    const r = await postJson(`${base}/api/veo/mitigate-output`, body, 420000);
+    if (r?.ok && r?.video_url) {
+      const rel = String(r.video_url).trim();
+      const abs = rel.startsWith("http") ? rel : toAbsoluteVideoUrl(rel);
+      return { videoUrl: abs, gcsUri: "" };
+    }
+  } catch (_e) {
+    /* keep original */
+  }
+  return { videoUrl: direct, gcsUri: gcs };
+}
+
 function buildVideoSourceCandidates(videoUrl, gcsUri = "") {
   const direct = String(videoUrl || "").trim();
   const proxy = buildPlayableUrlFromGcs(gcsUri);
@@ -3009,7 +3260,60 @@ function renderChainSummary(chainResp) {
   void chainResp;
 }
 
-function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "", actualDurationSec = null) {
+/** Reset timeline/mask/BGM edits so a new result card does not inherit the previous clip's edit state. */
+function resetVideoEditStateForNewCard() {
+  state.videoEdit = {
+    ...state.videoEdit,
+    maskText: "",
+    maskStyle: "elegant",
+    maskFont: "sans",
+    maskColor: "#ffffff",
+    x: 50,
+    y: 88,
+    w: 78,
+    h: 14,
+    opacity: 95,
+    rotation: 0,
+    speed: "1.0",
+    temp: 0,
+    tint: 0,
+    sat: 0,
+    vibrance: 0,
+    bgmExtract: false,
+    bgmMood: "elegant",
+    bgmVolume: 70,
+    bgmReplaceMode: "auto",
+    localBgmUrl: "",
+    localBgmName: "",
+    localBgmDataUrl: "",
+    activeModule: "mask",
+    timeline: {
+      playhead: 0,
+      selectedTrack: "mask",
+      pendingRangeStart: null,
+      pendingRangeHoverSec: null,
+      trackState: {
+        mask: { visible: true, locked: false },
+        color: { visible: true, locked: false },
+        bgm: { visible: true, locked: false },
+        motion: { visible: true, locked: false },
+      },
+      keyframes: { mask: [], color: [], bgm: [], motion: [] },
+    },
+    subtitles: [],
+    _renderHash: null,
+  };
+}
+
+function appendExportedVideoCard(url) {
+  const u = String(url || "").trim();
+  if (!u) return;
+  resetVideoEditStateForNewCard();
+  renderGeneratedVideoCard(u, "", "", "", null, { titleKey: "videoEditExportCardTitle" });
+  updateActiveVideoCardState();
+}
+
+function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", taskId = "", actualDurationSec = null, cardOptions = null) {
   // Always return to chat-first preview mode after a new video is produced.
   // Editors should open only when user clicks action buttons on the video card.
   state.videoEditorOpen = false;
@@ -3025,9 +3329,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   const cardPrompt = state.lastPrompt;
   const cardStoryboard = state.lastStoryboard;
   const actualDuration = Number(actualDurationSec || 0);
-  const cardDuration = actualDuration > 0
-    ? String(Math.round(actualDuration * 10) / 10)
-    : String(state.duration || "8");
   const taskSourceLabel = String(state.taskMap?.[taskId]?.sourceLabel || "").trim();
   const taskRunLabel = String(state.taskMap?.[taskId]?.title || "").trim();
   const card = document.createElement("article");
@@ -3042,7 +3343,6 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     <div class="msg-card-meta-right">
       ${taskRunLabel ? `<span class="msg-card-status card-source-run status-dot-info">${sanitizeInputValue(taskRunLabel)}</span>` : ""}
       ${taskSourceLabel ? `<span class="msg-card-status card-source-route status-dot-info">${sanitizeInputValue(taskSourceLabel)}</span>` : ""}
-      <span class="msg-card-status status-dot-info">${t("cardDurationShort")} · ${sanitizeInputValue(cardDuration)}s</span>
       <span class="msg-card-status card-binding-script-name status-dot-done">${t("cardScriptNameShort")}</span>
       <span class="msg-card-status card-binding-video-editor status-dot-done" hidden>${t("cardVideoEditorOpen")}</span>
       <span class="msg-card-status card-binding-script-editor status-dot-done" hidden>${t("cardScriptEditorOpen")}</span>
@@ -3053,7 +3353,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   `;
   const title = document.createElement("div");
   title.className = "video-msg-title";
-  title.textContent = t("done");
+  title.textContent = t(cardOptions?.titleKey || "done");
 
   const surface = document.createElement("div");
   surface.className = "video-edit-surface";
@@ -3122,14 +3422,34 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
   });
   video.addEventListener("loadedmetadata", () => {
     const dur = Number(video.duration || 0);
+    const expectedSec = Number(actualDurationSec || 0) > 0
+      ? Number(actualDurationSec)
+      : Number(state.duration || 8);
+    const playSrc = String(video.currentSrc || video.src || "");
+    // 裁剪/调色/变速等导出在 /video-edits/：时长与容器元数据常与「生成目标」不一致，勿用初剪目标去比对
+    const isPostEditExport = /\/video-edits\//.test(playSrc);
     const is16sTask = /\b16(\.0)?s\b/i.test(String(state.taskMap?.[taskId]?.title || ""))
       || String(state.duration || "") === "16";
-    if (is16sTask && Number.isFinite(dur) && dur > 0 && dur < 14.5) {
+    if (is16sTask && !isPostEditExport && Number.isFinite(dur) && dur > 0 && dur < 14.5) {
       pushSystemStateMsg(
         currentLang === "zh"
-          ? `⚠️ 当前播放源时长仅 ${dur.toFixed(1)} 秒，未达到 16 秒目标，请重试。`
-          : `⚠️ Current playback source is only ${dur.toFixed(1)}s, below the 16s target. Please retry.`,
+          ? "⚠️ 当前播放源未达到 16 秒目标，请重试。"
+          : "⚠️ Playback is below the 16s target. Please retry.",
         "blocked"
+      );
+    }
+    // 初剪成片：元数据时长离谱时提示。二次导出（/video-edits/）经 ffmpeg 重编码后 duration 常失真，勿与「生成目标」对比以免误报（如变速后显示 125s）。
+    if (
+      !isPostEditExport
+      && Number.isFinite(dur) && dur > 0
+      && Number.isFinite(expectedSec) && expectedSec > 0
+      && dur > Math.max(expectedSec * 5, 90)
+    ) {
+      pushSystemStateMsg(
+        currentLang === "zh"
+          ? "提示：播放器显示时长与目标不一致时，多为视频元数据异常；可尝试重新生成、下载后用本地播放器打开。"
+          : "Note: if duration looks wrong in the player, metadata may be off — try regenerating, downloading, or a local player.",
+        "progress"
       );
     }
   });
@@ -3156,46 +3476,7 @@ function renderGeneratedVideoCard(videoUrl, gcsUri = "", operationName = "", tas
     state.lastStoryboard = cardStoryboard;
     state.activeVideoCardId = cardId;
     // Reset per-card edit state so previous card's edits don't bleed into this card
-    state.videoEdit = {
-      ...state.videoEdit,
-      maskText: "",
-      maskStyle: "elegant",
-      maskFont: "sans",
-      maskColor: "#ffffff",
-      x: 50,
-      y: 88,
-      w: 78,
-      h: 14,
-      opacity: 95,
-      rotation: 0,
-      speed: "1.0",
-      temp: 0,
-      tint: 0,
-      sat: 0,
-      vibrance: 0,
-      bgmExtract: false,
-      bgmMood: "elegant",
-      bgmVolume: 70,
-      bgmReplaceMode: "auto",
-      localBgmUrl: "",
-      localBgmName: "",
-      localBgmDataUrl: "",
-      activeModule: "mask",
-      timeline: {
-        playhead: 0,
-        selectedTrack: "mask",
-        pendingRangeStart: null,
-        pendingRangeHoverSec: null,
-        trackState: {
-          mask: { visible: true, locked: false },
-          color: { visible: true, locked: false },
-          bgm: { visible: true, locked: false },
-          motion: { visible: true, locked: false },
-        },
-        keyframes: { mask: [], color: [], bgm: [], motion: [] },
-      },
-      _renderHash: null,  // force re-render
-    };
+    resetVideoEditStateForNewCard();
     if (focusScript) {
       state.scriptEditorOpen = true;
     } else {
@@ -3289,16 +3570,16 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     promptA = promptA || (
       basePrompt
       + " SEGMENT 1/2 — PRODUCT HERO OPENING: "
-      + "[00:00-00:02] Camera pushes in from wide, product silhouette emerging against background. "
-      + "[00:02-00:04] Medium close-up on the product's primary feature with sharp focus and studio lighting. "
-      + "[00:04-00:06] Detail shot — texture and key design element highlighted. "
-      + "[00:06-00:08] Hero framing — product centered, mood and color palette fully established."
+      + "[00:00-00:02] Slow push-in from wide; hold consistent key light — no exposure jump. "
+      + "[00:02-00:04] Ease into medium close-up; same lighting setup and white balance as previous beat. "
+      + "[00:04-00:06] Detail texture; no new light sources or brightness pop. "
+      + "[00:06-00:08] Hero framing; single coherent grade end-to-end."
     );
     promptB = promptB || (
       basePrompt
       + " SEGMENT 2/2 — USAGE & CLOSING: "
-      + "[00:00-00:02] Lifestyle context — product in its intended use environment, different angle from Segment 1. "
-      + "[00:02-00:04] Close-up of product during natural use, secondary feature visible. "
+      + "[00:00-00:02] Lifestyle context — match Segment 1 color temperature; gradual angle change only. "
+      + "[00:02-00:04] Close-up during use; maintain exposure continuity — avoid flash or sudden brightening. "
       + "[00:04-00:06] Emotional moment — satisfaction and connection with the product. "
       + "[00:06-00:08] Confident closing hero shot — product alone, perfect lighting, camera holds still for final reveal."
     );
@@ -3336,9 +3617,9 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
       }
       const elapsed = Math.floor((Date.now() - start) / 1000);
       const totalElapsed = Math.floor((Date.now() - workflowStartedAt) / 1000);
-      statusBubble.textContent = zh
+      setSystemStateMsgBodyText(statusBubble, zh
         ? `⏳ 生成中（总计 ${totalElapsed}s）…`
-        : `⏳ Generating (${totalElapsed}s total)…`;
+        : `⏳ Generating (${totalElapsed}s total)…`);
       updateVideoTask(taskId, { status: "running", stage: zh ? `生成中（总计${totalElapsed}s）` : `Generating (${totalElapsed}s total)` });
       const waitMs = elapsed < 40 ? 3000 : 12000;
       await new Promise((r) => setTimeout(r, waitMs));
@@ -3381,7 +3662,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     }
   }
 
-  statusBubble.textContent = zh ? "⏳ 生成中…" : "⏳ Generating…";
+  setSystemStateMsgBodyText(statusBubble, zh ? "⏳ 生成中…" : "⏳ Generating…");
   updateVideoTask(taskId, { status: "running", stage: zh ? "生成中" : "Generating" });
   scrollToBottom();
   const startA = await submitSafe(promptA, "A");
@@ -3389,7 +3670,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   if (!opA) throw new Error(zh ? "任务提交失败" : "Submit failed");
   const resA = await pollUntilDone(opA, "2/5");
 
-  statusBubble.textContent = zh ? "⏳ 处理中…" : "⏳ Processing…";
+  setSystemStateMsgBodyText(statusBubble, zh ? "⏳ 处理中…" : "⏳ Processing…");
   updateVideoTask(taskId, { status: "running", stage: zh ? "处理中" : "Processing" });
   scrollToBottom();
   let bridgeFrameB64 = "";
@@ -3408,7 +3689,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     }
   } catch (_e) {}
 
-  statusBubble.textContent = zh ? "⏳ 继续生成中…" : "⏳ Continuing generation…";
+  setSystemStateMsgBodyText(statusBubble, zh ? "⏳ 继续生成中…" : "⏳ Continuing generation…");
   updateVideoTask(taskId, { status: "running", stage: zh ? "继续生成中" : "Continuing generation" });
   scrollToBottom();
   const seg2Body = { ...segBody, prompt: promptB };
@@ -3459,7 +3740,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   if (!opB) throw new Error(zh ? "任务提交失败" : "Submit failed");
   const resB = await pollUntilDone(opB, "4/5");
 
-  statusBubble.textContent = zh ? "⏳ 正在完成输出…" : "⏳ Finalizing output…";
+  setSystemStateMsgBodyText(statusBubble, zh ? "⏳ 正在完成输出…" : "⏳ Finalizing output…");
   updateVideoTask(taskId, { status: "running", stage: zh ? "输出处理中" : "Finalizing output" });
   scrollToBottom();
 
@@ -3500,7 +3781,7 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     }
   } catch (_outerErr) {}
 
-  const playable = String(
+  let playable = String(
     concatUrl
     || resA.url
     || buildPlayableUrlFromGcs(resA.gcs)
@@ -3508,6 +3789,11 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
     || buildPlayableUrlFromGcs(resB.gcs)
     || ""
   ).trim();
+  if (!concatUrl && playable) {
+    const segGcs = String(resA.gcs || resB.gcs || "").trim();
+    const mit = await applyVeoFlickerMitigate(base, segGcs, playable);
+    playable = mit.videoUrl;
+  }
   if (statusBubble.parentNode) statusBubble.remove();
   if (!playable) throw new Error(zh ? "16s 视频播放地址缺失" : "16s video URL missing");
 
@@ -3527,28 +3813,24 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   if (!durationLooksValid) {
     pushSystemStateMsg(
       zh
-        ? `⚠️ 当前结果实际仅约 ${actualDurationSec.toFixed(1)} 秒，未达到 16 秒目标。trace_id=${concatTraceId || "-"}`
-        : `⚠️ Current output is only about ${actualDurationSec.toFixed(1)}s, below the 16s target. trace_id=${concatTraceId || "-"}`,
+        ? `⚠️ 当前结果未达到 16 秒目标。trace_id=${concatTraceId || "-"}`
+        : `⚠️ Output is below the 16s target. trace_id=${concatTraceId || "-"}`,
       "blocked"
     );
   }
 
   pushSystemStateMsg(
     durationLooksValid
-      ? (zh
-          ? `16 秒视频生成完成（实际 ${actualDurationSec.toFixed(1)} 秒）。`
-          : `16s video ready (actual ${actualDurationSec.toFixed(1)}s).`)
-      : (zh
-          ? `视频已生成，但未达到 16 秒目标（当前 ${actualDurationSec.toFixed(1)} 秒）。`
-          : `Video generated, but the 16s target was not met (current ${actualDurationSec.toFixed(1)}s).`),
+      ? (zh ? "16 秒视频生成完成。" : "16s video ready.")
+      : (zh ? "视频已生成，但未达到 16 秒目标。" : "Video generated, but the 16s target was not met."),
     durationLooksValid ? "done" : "blocked"
   );
   updateVideoTask(taskId, {
     status: durationLooksValid ? "done" : "failed",
     stage: durationLooksValid
       ? (zh ? "16秒任务完成" : "16s completed")
-      : (zh ? `时长异常（${actualDurationSec.toFixed(1)}秒）` : `Duration mismatch (${actualDurationSec.toFixed(1)}s)`),
-    title: `${taskTitlePrefix || "#?"} · ${Math.round(actualDurationSec * 10) / 10}s`,
+      : (zh ? "时长异常" : "Duration mismatch"),
+    title: taskTitlePrefix || "#?",
     resultDurationSec: actualDurationSec,
   });
   // When concat succeeds, bind card strictly to concat output; do NOT provide
@@ -3560,9 +3842,75 @@ async function generate16sWithProgress(base, startBody, finalPrompt, workflowSta
   renderGeneratedVideoCard(playable, cardBoundGcs, cardOpName, taskId, actualDurationSec);
 }
 
+function getAgentFirstFrameDataUrl() {
+  if (state.frameMode && state.firstFrame) return String(state.firstFrame || "");
+  const item = state.images?.[0];
+  return item?.dataUrl ? String(item.dataUrl) : "";
+}
+
+/** Comfy LTX 预设分辨率（与 backend comfyui_ltxv_api._RES_TO_LATENT 一致） */
+function ltxResolutionFromAspect(ratio) {
+  const r = ratio || "16:9";
+  if (r === "9:16") return "1080x1920";
+  if (r === "1:1") return "1920x1080";
+  return "1920x1080";
+}
+
+async function generateAgentComfyLtx(finalPrompt, taskId, base) {
+  const dur = Number(state.duration) || 10;
+  const body = {
+    prompt: finalPrompt,
+    model: "LTX-2 (Pro)",
+    duration: dur,
+    resolution: ltxResolutionFromAspect(state.aspectRatio),
+    fps: 25,
+    generate_audio: false,
+  };
+  const local = getAgentFirstFrameDataUrl();
+  if (local) body.image_base64 = local;
+  else {
+    const url = state.productImageUrls?.[0];
+    if (url) body.image_url = String(url).trim();
+  }
+  updateVideoTask(taskId, {
+    status: "running",
+    stage: currentLang === "zh" ? "LTX 生成中（ComfyUI）" : "LTX generating (ComfyUI)",
+  });
+  const data = await postJson(`${base}/api/comfyui-ltxv/generate`, body, 600000);
+  const videoUrl = data.video_url;
+  if (!videoUrl) throw new Error(currentLang === "zh" ? "未返回视频地址" : "No video URL");
+  renderGeneratedVideoCard(videoUrl, "", "", taskId, dur);
+}
+
+async function generateAgentJimeng(finalPrompt, taskId, base) {
+  const dur = Number(state.duration) === 5 ? 5 : 10;
+  const body = {
+    prompt: finalPrompt,
+    model: "3.0",
+    ratio: state.aspectRatio === "9:16" ? "9:16" : state.aspectRatio === "1:1" ? "1:1" : "16:9",
+    duration: dur,
+    resolution: "720p",
+  };
+  const local = getAgentFirstFrameDataUrl();
+  if (local) body.image_base64 = local;
+  else {
+    const url = state.productImageUrls?.[0];
+    if (url) body.image_url = String(url).trim();
+  }
+  updateVideoTask(taskId, {
+    status: "running",
+    stage: currentLang === "zh" ? "即梦生成中" : "Jimeng generating",
+  });
+  const data = await postJson(`${base}/api/jimeng/video`, body, 1200000);
+  const urls = data.video_urls || [];
+  const videoUrl = urls[0];
+  if (!videoUrl) throw new Error(currentLang === "zh" ? "即梦未返回视频地址" : "Jimeng returned no video URL");
+  renderGeneratedVideoCard(videoUrl, "", "", taskId, dur);
+}
+
 async function generateVideo(promptOverride = "") {
   if (!canStartVideoJob()) {
-    pushSystemStateMsg(t("tooManyJobs"), "blocked");
+    pushSystemStateMsg(t("tooManyJobs", { max: MAX_CONCURRENT_VIDEO_JOBS }), "blocked");
     return;
   }
   // New generation should not keep old split-panel state.
@@ -3590,15 +3938,42 @@ async function generateVideo(promptOverride = "") {
       await hydrateWorkflowTexts(false);
     }
     const finalPrompt = String(promptOverride || state.lastPrompt || buildPrompt()).trim();
-    state.aspectRatio = LOCKED_ASPECT_RATIO;
-    if (aspectRatioSelect) aspectRatioSelect.value = LOCKED_ASPECT_RATIO;
+    syncStateFromSimpleControls();
     state.lastPrompt = finalPrompt;
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
     pushSystemStateMsg(t("submit"), "progress");
     updateVideoTask(taskId, { status: "queued", stage: currentLang === "zh" ? "提交任务中" : "Submitting job" });
-    const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const base = getApiBase();
-    const safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
+    const engine = state.videoEngine || "veo";
+    let safePrompt = String(finalPrompt || "").trim();
+    if (engine === "veo") {
+      safePrompt = await rewritePromptForVeoSingle(base, finalPrompt, taskId);
+    }
+
+    if (engine === "grok") {
+      const targetDuration = Number(state.duration) || 6;
+      const grokPrompt = buildGrokVideoPrompt(finalPrompt, targetDuration);
+      await generateTabcodeVideo(grokPrompt, taskId, targetDuration);
+      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
+      releaseSlotOnce();
+      return;
+    }
+
+    if (engine === "ltx") {
+      await generateAgentComfyLtx(finalPrompt, taskId, base);
+      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
+      releaseSlotOnce();
+      return;
+    }
+
+    if (engine === "jimeng") {
+      await generateAgentJimeng(finalPrompt, taskId, base);
+      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
+      releaseSlotOnce();
+      return;
+    }
+
+    const useFrameMode = Boolean(state.frameMode && state.firstFrame && state.lastFrame);
     const imagePayload = buildVeoReferencePayload();
     const startBody = {
       project_id: "qy-shoplazza-02",
@@ -3623,17 +3998,10 @@ async function generateVideo(promptOverride = "") {
     } else {
       Object.assign(startBody, imagePayload);
     }
-    if (getModelProvider() === "tabcode") {
-      const targetDuration = Number(state.duration) || 6;
-      const grokPrompt = buildGrokVideoPrompt(safePrompt, targetDuration);
-      await generateTabcodeVideo(grokPrompt, taskId, targetDuration);
-      finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
-      releaseSlotOnce();
-      return;
-    }
 
     if (isChainDuration(state.duration)) {
-      await generate16sWithProgress(base, startBody, finalPrompt, Date.now(), taskId);
+      const wfStart = state.taskMap?.[taskId]?.startedAt || Date.now();
+      await generate16sWithProgress(base, startBody, finalPrompt, wfStart, taskId);
       finishVideoTask(taskId, true, currentLang === "zh" ? "完成" : "Done");
       releaseSlotOnce();
       return;
@@ -3651,6 +4019,7 @@ async function generateVideo(promptOverride = "") {
     const zh = currentLang === "zh";
     const pollBubble = pushSystemStateMsg(zh ? "视频生成中（Fast 模式），预计 60-90 秒…" : "Generating video (Fast mode), ~60-90s…", "progress");
     const pollStartedAt = Date.now();
+    const taskTimerStartMs = state.taskMap?.[taskId]?.startedAt || pollStartedAt;
     const POLL_SOFT_TIMEOUT_MS = 300000;
     const POLL_SOFT_STEP_MS = 180000;
     const POLL_HARD_TIMEOUT_MS = 1800000;
@@ -3667,30 +4036,30 @@ async function generateVideo(promptOverride = "") {
         if (pollBubble.parentNode) pollBubble.remove();
         return;
       }
-      const elapsedMs = Date.now() - pollStartedAt;
-      const elapsedSec = Math.floor(elapsedMs / 1000);
-      pollBubble.textContent = zh
-        ? `视频生成中（${elapsedSec}s）…`
-        : `Generating video (${elapsedSec}s)…`;
-      updateVideoTask(taskId, { status: "running", stage: zh ? `轮询中（总计${elapsedSec}s）` : `Polling (${elapsedSec}s total)` });
+      const pollElapsedMs = Date.now() - pollStartedAt;
+      const taskElapsedSec = Math.max(0, Math.floor((Date.now() - taskTimerStartMs) / 1000));
+      setSystemStateMsgBodyText(pollBubble, zh
+        ? `视频生成中（${taskElapsedSec}s）…`
+        : `Generating video (${taskElapsedSec}s)…`);
+      updateVideoTask(taskId, { status: "running", stage: zh ? `轮询中（总计${taskElapsedSec}s）` : `Polling (${taskElapsedSec}s total)` });
 
-      if (elapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
+      if (pollElapsedMs > nextSoftTimeoutAt && Date.now() - lastContinueNoticeAt > 30000) {
         lastContinueNoticeAt = Date.now();
-        pushSystemStateMsg(t("pollContinue", { sec: elapsedSec }), "progress");
+        pushSystemStateMsg(t("pollContinue", { sec: taskElapsedSec }), "progress");
         nextSoftTimeoutAt += POLL_SOFT_STEP_MS;
       }
-      if (elapsedMs > POLL_HARD_TIMEOUT_MS) {
+      if (pollElapsedMs > POLL_HARD_TIMEOUT_MS) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
         pushSystemStateMsg(zh
-          ? `视频生成超时（总计 ${elapsedSec}s）。请稍后重试或简化提示词。`
-          : `Video generation timed out (${elapsedSec}s total). Retry later or simplify the prompt.`, "blocked");
+          ? `视频生成超时（总计 ${taskElapsedSec}s）。请稍后重试或简化提示词。`
+          : `Video generation timed out (${taskElapsedSec}s total). Retry later or simplify the prompt.`, "blocked");
         finishVideoTask(taskId, false, zh ? "超时" : "Timeout");
         releaseSlotOnce();
         return;
       }
 
-      if (elapsedMs < 30000) {
+      if (pollElapsedMs < 30000) {
         scheduleNext(2000);
         return;
       }
@@ -3747,11 +4116,14 @@ async function generateVideo(promptOverride = "") {
           releaseSlotOnce();
           return;
         }
-        const videoUrl = pickPlayableUrl(status);
-        const gcsUri = String(status?.video_uris?.[0] || "").trim();
+        let videoUrl = pickPlayableUrl(status);
+        let gcsUri = String(status?.video_uris?.[0] || "").trim();
         if (videoUrl || gcsUri) {
           pollStopped = true;
           if (pollBubble.parentNode) pollBubble.remove();
+          const mit = await applyVeoFlickerMitigate(base, gcsUri, videoUrl);
+          videoUrl = mit.videoUrl;
+          gcsUri = mit.gcsUri;
           renderGeneratedVideoCard(videoUrl, gcsUri, operationName, taskId);
           finishVideoTask(taskId, true, zh ? "完成" : "Done");
           releaseSlotOnce();
@@ -3765,7 +4137,7 @@ async function generateVideo(promptOverride = "") {
         releaseSlotOnce();
         return;
       }
-      scheduleNext(elapsedMs < 90000 ? 10000 : 15000);
+      scheduleNext(pollElapsedMs < 90000 ? 10000 : 15000);
     };
     function scheduleNext(ms) { if (!pollStopped) setTimeout(doPoll, ms); }
     scheduleNext(2000);
@@ -3830,8 +4202,7 @@ async function onUpload(files) {
     pushSystemReplyMsg(withLead(t("parseFallback"), "general"));
   }
   if (SIMPLE_AGENT_MODE) {
-    chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
-    state.lastPrompt = chatInput.value.trim();
+    state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
     state.lastStoryboard = buildStoryboardText();
     syncSimpleControlsFromState();
     // Show parse result immediately so user sees it before they can submit
@@ -3843,7 +4214,7 @@ async function onUpload(files) {
       }),
       "done"
     );
-    // Hydrate in background; silently update prompt if improved
+    // 仅在一次 hydrate 之后写入输入框，避免先草稿再覆盖造成的「回填两次」观感
     try { await hydrateWorkflowTexts(true); } catch (_e) {}
     if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
     return;
@@ -3872,24 +4243,52 @@ async function onUpload(files) {
 
 async function onSend() {
   if (SIMPLE_AGENT_MODE) {
+    // 先快照输入框：若随后执行商品链接解析，可能把提示词覆盖成长文案，导致剪辑短指令丢失并误走「生成视频」。
+    const promptSnapshot = String(chatInput.value || "").trim();
     const linkText = String(productUrlInput?.value || "").trim();
-    const promptText = String(chatInput.value || "").trim();
-    const firstUrlMatch = (linkText || promptText).match(/(?:https?:\/\/|www\.)[^\s]+/i);
-    const urlCandidate = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : "";
+    const urlCandidate =
+      normalizeProductUrlForApi(linkText) || normalizeProductUrlForApi(promptSnapshot) || "";
+    const looksLikeEditCommand =
+      Boolean(state.lastVideoUrl) &&
+      promptSnapshot.length > 0 &&
+      promptSnapshot.length <= 120 &&
+      Boolean(extractVideoEditIntent(promptSnapshot));
     const needPrefillFromUrl = Boolean(
       urlCandidate && (!state.productName || !state.mainBusiness || !state.sellingPoints || !hasEffectiveProductAsset())
-    );
+    ) && !looksLikeEditCommand;
     if (needPrefillFromUrl) {
       await parseShopProductByUrl(urlCandidate);
     }
-    const finalText = String(chatInput.value || "").trim() || promptText;
+    const finalText = String(chatInput.value || "").trim() || promptSnapshot;
     if (!finalText) return;
-    // Single dispatch for all video-edit intents
-    const handled = await dispatchVideoEditIntent(finalText);
-    if (handled) {
-      if (chatInput) chatInput.value = "";
-      pushMsg("user", finalText, { typewriter: false });
-      return;
+    // 视频编辑意图：仅当以 /edit 开头时解析，避免与生成提示词混淆
+    const trimmed = finalText.trimStart();
+    const editMatch = /^\/edit\b(?:\s+|$)/i.exec(trimmed);
+    if (editMatch) {
+      const editPayload = trimmed.slice(editMatch[0].length).trimStart();
+      if (!editPayload) {
+        pushSystemStateMsg(t("editPrefixEmpty"), "blocked");
+        return;
+      }
+      const handled = await dispatchVideoEditIntent(editPayload);
+      if (handled) {
+        if (chatInput) chatInput.value = "";
+        pushMsg("user", finalText, { typewriter: false });
+        return;
+      }
+    }
+    // 已有成片时：短句且可被识别为剪辑意图 → 直接走编辑（倍速/裁剪/调色等），无需 /edit。
+    // 避免「整体加速1.5倍」等误走视频生成链路（会出现「已开始生成视频」「生成中总计 xs」）。
+    if (state.lastVideoUrl) {
+      const editOnly = finalText.trim();
+      if (editOnly.length <= 120 && extractVideoEditIntent(editOnly)) {
+        const handledEdit = await dispatchVideoEditIntent(editOnly);
+        if (handledEdit) {
+          if (chatInput) chatInput.value = "";
+          pushMsg("user", finalText, { typewriter: false });
+          return;
+        }
+      }
     }
     if (showPromptConfigConfirmBubble(finalText)) return;
     // If a video is loaded and the text looks like a question/analysis/edit request → Agent Run
@@ -4147,19 +4546,10 @@ async function enhancePromptByAgent() {
 }
 
 async function parseShopProductByUrl(inputUrl = "") {
-  const normalizeProductUrl = (raw = "") => {
-    const cleaned = String(raw || "")
-      .replace(/[<>"'`]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!cleaned) return "";
-    const firstUrlMatch = cleaned.match(/https?:\/\/[^\s]+/i);
-    const picked = firstUrlMatch?.[0] ? String(firstUrlMatch[0]).trim() : cleaned;
-    if (/^www\./i.test(picked)) return `https://${picked}`;
-    // Allow bare domains like amazon.com/xxx by auto-prepending scheme.
-    if (/^[a-z0-9.-]+\.[a-z]{2,}(?:\/|$)/i.test(picked)) return `https://${picked}`;
-    return picked;
-  };
+  // 按钮 click 会传入 MouseEvent，不能当 URL 字符串用。
+  const raw =
+    (typeof inputUrl === "string" ? inputUrl.trim() : "") ||
+    String(productUrlInput?.value || "").trim();
   const inferProductNameFromUrl = (rawUrl = "") => {
     const text = String(rawUrl || "").trim();
     if (!text) return "";
@@ -4190,11 +4580,18 @@ async function parseShopProductByUrl(inputUrl = "") {
     return urlLike.length === parts.length;
   };
 
-  const url = normalizeProductUrl(inputUrl || productUrlInput?.value || "");
+  const url = normalizeProductUrlForApi(raw);
   if (!url) return;
   if (productUrlInput) productUrlInput.value = url;
   const base = getApiBase();
-  const stopParseProgress = startLinkParseProgress();
+  const parseProgress = startLinkParseProgress();
+  let parseUiEnded = false;
+  const endParseUi = () => {
+    if (parseUiEnded) return;
+    parseUiEnded = true;
+    parseProgress.stop();
+  };
+  if (parseProductUrlBtn) parseProductUrlBtn.disabled = true;
   try {
     const data = await postJson(
       `${base}/api/agent/shop-product-insight`,
@@ -4204,7 +4601,6 @@ async function parseShopProductByUrl(inputUrl = "") {
       },
       45000
     );
-    stopParseProgress();
     let insight = data?.insight || {};
     const parsedImageUrls = Array.isArray(insight.image_urls)
       ? insight.image_urls.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 10)
@@ -4224,6 +4620,7 @@ async function parseShopProductByUrl(inputUrl = "") {
       : [];
 
     if (imageItems.length) {
+      parseProgress.startVisualStepRotation();
       try {
         const visualResp = await analyzeImageInsight(imageItems);
         insight = mergeInsightPayloads(insight, visualResp?.insight || {});
@@ -4248,6 +4645,7 @@ async function parseShopProductByUrl(inputUrl = "") {
           state.lastPrompt = draft;
         }
       }
+      endParseUi();
       pushSystemGuideMsg(t("parseLinkWeak"));
       showUploadScreenshotGuide();
       showUploadRefQuickAction();
@@ -4271,11 +4669,6 @@ async function parseShopProductByUrl(inputUrl = "") {
     if (imageItems.length) {
       state.images = imageItems.slice(0, 6);
       state.skipImageConfirmed = false;
-      pushImageMsg(state.images);
-    } else if (!state.images.length) {
-      pushSystemGuideMsg(t("parseLinkWeakInfo"));
-      showUploadScreenshotGuide();
-      showUploadRefQuickAction();
     }
     state.workflowHydrated = false;
     updateGenerationGateUI();
@@ -4291,6 +4684,16 @@ async function parseShopProductByUrl(inputUrl = "") {
     if (shouldOverwriteDraft) {
       chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("url"));
       state.lastPrompt = String(chatInput.value || "").trim();
+    }
+
+    endParseUi();
+
+    if (imageItems.length) {
+      pushImageMsg(state.images);
+    } else if (!state.images.length) {
+      pushSystemGuideMsg(t("parseLinkWeakInfo"));
+      showUploadScreenshotGuide();
+      showUploadRefQuickAction();
     }
     const refillOk = Boolean(state.productName && state.mainBusiness && state.template);
     if (!refillOk) {
@@ -4309,18 +4712,19 @@ async function parseShopProductByUrl(inputUrl = "") {
         "blocked"
       );
     }
-    pushSystemStateMsg(t("parseLinkDone"), "done");
-    pushSystemStateMsg(
-      t("parseDone", {
-        product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
-        business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
-        style: state.template || "clean",
-      }),
-      "done"
-    );
-  } catch (_e) {
-    stopParseProgress();
-    pushSystemStateMsg(t("parseLinkFail"), "blocked");
+    const summaryLine = t("parseDone", {
+      product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
+      business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
+      style: state.template || "clean",
+    });
+    pushSystemStateMsg(`${t("parseLinkDone")}\n\n${summaryLine}`, "done");
+  } catch (e) {
+    endParseUi();
+    const detail = String(e?.message || e || "").trim();
+    const short = detail && detail.length < 220;
+    pushSystemStateMsg(short ? `${t("parseLinkFail")} (${detail})` : t("parseLinkFail"), "blocked");
+  } finally {
+    if (parseProductUrlBtn) parseProductUrlBtn.disabled = false;
   }
 }
 
@@ -4373,11 +4777,9 @@ function consumeLandingParams() {
             if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
           } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName("landing-reference")); }
           stopProgress();
-          chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
-          state.lastPrompt = chatInput.value.trim();
+          state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
           state.lastStoryboard = buildStoryboardText();
           syncSimpleControlsFromState();
-          // Show immediately — don't wait for hydrateWorkflowTexts
           pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
@@ -4412,11 +4814,9 @@ function consumeLandingParams() {
             if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")); }
           } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(state.images[0]?.name || "ai-product")); }
           stopProgress();
-          chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
-          state.lastPrompt = chatInput.value.trim();
+          state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
           state.lastStoryboard = buildStoryboardText();
           syncSimpleControlsFromState();
-          // Show immediately — don't wait for hydrateWorkflowTexts
           pushSystemStateMsg(t("parseDone", {
             product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
             business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
@@ -4454,7 +4854,7 @@ function consumeLandingPrefill() {
 function scheduleLandingPrefillAfterWelcome() {
   const draft = (queryParams.get("draft") || "").trim();
   if (!draft) return;
-  const welcomeText = t("welcome");
+  const welcomeText = t("welcome", { max: MAX_CONCURRENT_VIDEO_JOBS });
   const baseDelay = Math.max(1400, Math.min(4200, welcomeText.length * 26));
   setTimeout(() => {
     consumeLandingPrefill();
@@ -4532,11 +4932,9 @@ function scheduleLandingPrefillAfterWelcome() {
           if (hasInsight) { applyInsightToState(insight); } else { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(`ref-${idx + 1}`)); }
         } catch (_) { usedFallback = true; applyInsightToState(buildFallbackInsightFromName(`ref-${idx + 1}`)); }
         stopProgress();
-        chatInput.value = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image"));
-        state.lastPrompt = chatInput.value.trim();
+        state.lastPrompt = sanitizePromptForUser(buildAutoPromptDraftFromParsed("image")).trim();
         state.lastStoryboard = buildStoryboardText();
         syncSimpleControlsFromState();
-        // Show immediately — don't wait for hydrateWorkflowTexts
         pushSystemStateMsg(t("parseDone", {
           product: state.productName || (currentLang === "zh" ? "未识别商品" : "unknown"),
           business: state.mainBusiness || (currentLang === "zh" ? "鞋服配饰" : "fashion"),
@@ -4700,6 +5098,7 @@ if (productUrlInput) {
 if (aspectRatioSelect) {
   aspectRatioSelect.addEventListener("change", () => {
     state.aspectRatio = aspectRatioSelect.value || "16:9";
+    if (state.videoEditorOpen) renderVideoEditor();
   });
 }
 
@@ -4997,6 +5396,16 @@ function _updateEditCmdsBar() {
 
 applyLang();
 syncSimpleControlsFromState();
+(function initVideoEngineChipsOnce() {
+  document.querySelectorAll("[data-video-engine]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.videoEngine = btn.getAttribute("data-video-engine") || "veo";
+      syncVideoEngineChips();
+      updateDurationOptions();
+    });
+  });
+  syncVideoEngineChips();
+})();
 updateDurationOptions();
 updateGenerationGateUI();
 applyWorkspaceMode();
@@ -5008,6 +5417,7 @@ initVideoEditCallbacks({
   renderVideoEditor,
   applyVideoEditsToPreview,
   scrollToBottom,
+  appendExportedVideoCard,
 });
 initVideoEditorCallbacks({
   openEditorPanel,
@@ -5053,7 +5463,7 @@ initAgentRunCallbacks({
 _loadVideoHistory(); // restore undo stack from localStorage
 _initEditCmdsBar();  // quick-edit chips below chat input
 consumeLandingParams();
-pushSystemGuideMsg(t("welcome"), { typewriter: true });
+pushSystemGuideMsg(t("welcome", { max: MAX_CONCURRENT_VIDEO_JOBS }), { typewriter: true });
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
 
 // ── Scroll-to-bottom FAB setup ──────────────────────────────────────────────

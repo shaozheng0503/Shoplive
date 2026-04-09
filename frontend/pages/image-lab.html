@@ -33,8 +33,8 @@
         <aside class="panel ltxv-form-panel">
           <div class="ltxv-header">
             <div class="ltxv-badge">AI VIDEO</div>
-            <h2 class="ltxv-title">LTX-2.3 视频生成</h2>
-            <p class="muted">文字 / 图片 → 高质量视频，最长 20 秒</p>
+            <h2 class="ltxv-title">多模型视频生成</h2>
+            <p class="muted">LTX 2.3 · 即梦 3.x · Veo 3.1 Fast，自选引擎与参数后生成</p>
           </div>
 
           <label>视频描述</label>
@@ -52,6 +52,9 @@
           <div class="ltxv-engine-row">
             <button type="button" class="ltxv-opt-btn active" data-engine="comfyui-ltxv">
               LTX 2.3<span class="ltxv-opt-sub">6–20s 自定义时长</span>
+            </button>
+            <button type="button" class="ltxv-opt-btn" data-engine="jimeng">
+              即梦 3.0<span class="ltxv-opt-sub">5s / 10s</span>
             </button>
             <button type="button" class="ltxv-opt-btn" data-engine="veo">
               Veo 3.1 Fast<span class="ltxv-opt-sub">8s / 16s 续写</span>
@@ -98,6 +101,32 @@
               <input id="ltxvAudio" type="checkbox" />
               自动生成环境音效
             </label>
+          </div>
+
+          <!-- Jimeng (即梦) settings -->
+          <div id="jimengSettings" style="display:none">
+            <label>即梦模型</label>
+            <div class="ltxv-model-row">
+              <button type="button" class="ltxv-opt-btn active" data-jimeng-model="3.0">
+                即梦 3.0<span class="ltxv-opt-sub">标准 · 2 积分</span>
+              </button>
+              <button type="button" class="ltxv-opt-btn" data-jimeng-model="3.5-pro">
+                即梦 3.5 Pro<span class="ltxv-opt-sub">高质 · 3 积分</span>
+              </button>
+            </div>
+
+            <label>画幅比例</label>
+            <div class="ltxv-ratio-row">
+              <button type="button" class="ltxv-opt-btn active" data-jimeng-ratio="16:9">横版 16:9</button>
+              <button type="button" class="ltxv-opt-btn" data-jimeng-ratio="9:16">竖版 9:16</button>
+              <button type="button" class="ltxv-opt-btn" data-jimeng-ratio="1:1">方形 1:1</button>
+            </div>
+
+            <label>时长</label>
+            <div class="ltxv-model-row">
+              <button type="button" class="ltxv-opt-btn" data-jimeng-dur="5">5 秒</button>
+              <button type="button" class="ltxv-opt-btn active" data-jimeng-dur="10">10 秒</button>
+            </div>
           </div>
 
           <!-- Veo settings -->

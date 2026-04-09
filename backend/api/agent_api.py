@@ -109,6 +109,11 @@ def _extract_amazon_asin(url: str) -> str:
     m = re.search(r"/dp/([A-Z0-9]{10})(?:[/?]|$)", txt, re.IGNORECASE)
     if not m:
         m = re.search(r"/gp/product/([A-Z0-9]{10})(?:[/?]|$)", txt, re.IGNORECASE)
+    if not m:
+        # 部分分享链接仅带 query ?asin= 或移动端路径差异
+        m = re.search(r"(?:[?&])asin=([A-Z0-9]{10})\b", txt, re.IGNORECASE)
+    if not m:
+        m = re.search(r"/gp/aw/d/([A-Z0-9]{10})(?:[/?]|$)", txt, re.IGNORECASE)
     if m:
         return m.group(1).upper()
     return ""
@@ -617,8 +622,110 @@ def register_agent_routes(
                 if asin else ""
             ) or product_url
 
-            # Cache hit: skip scraping + image fetching entirely
             _cache_key = make_cache_key(canonical_url)
+
+            # Strong-match preset MUST run before generic cache. Otherwise a prior scrape may have
+            # cached a weak/empty insight under the same canonical key and the preset path would
+            # never run (user sees "parse failed" forever for that ASIN).
+            preset = _AMAZON_STRONG_MATCH_PRESETS.get(asin)
+            if preset:
+                try:
+                    _cached_preset = product_insight_cache.get(_cache_key)
+                    if _cached_preset is not None and str(_cached_preset.get("source") or "") == "preset_strong_match":
+                        audit_log.record(
+                            tool="parse_product_url",
+                            action="cache_hit",
+                            input_summary={"url_domain": urlparse(product_url).netloc, "language": language},
+                            output_summary={"cached": True, "preset": True},
+                            status="success",
+                            duration_ms=int((time.monotonic() - _t0) * 1000),
+                        )
+                        return jsonify({**_cached_preset, "cache_hit": True})
+                    image_items = _load_preset_image_cache(asin)
+                    if not image_items:
+                        try:
+                            from shoplive.backend.async_executor import parallel_fetch_images
+                            parallel_results = parallel_fetch_images(
+                                preset.get("image_urls", [])[:4],
+                                proxy,
+                                fetch_fn=fetch_image_as_base64,
+                                max_images=4,
+                                timeout_seconds=45,
+                            )
+                            image_items = [
+                                {"base64": r["base64"], "mime_type": r["mime_type"], "url": r["url"]}
+                                for r in parallel_results if r["ok"]
+                            ]
+                        except Exception:
+                            image_items = []
+                    if not image_items:
+                        for _u in preset.get("image_urls", [])[:4]:
+                            try:
+                                _b64, _mime = _fetch_image_with_headers_as_base64(_u, proxy, build_proxies)
+                                image_items.append({"base64": _b64, "mime_type": _mime, "url": _u})
+                            except Exception:
+                                continue
+                    if image_items:
+                        _save_preset_image_cache(asin, image_items[:4])
+
+                    insight = {
+                        "product_name": preset.get("product_name", ""),
+                        "main_business": preset.get("main_business", "消费电子"),
+                        "style_template": preset.get("style_template", "clean"),
+                        "selling_points": preset.get("selling_points", [])[:6],
+                        "target_user": preset.get("target_user", ""),
+                        "sales_region": preset.get("sales_region", ""),
+                        "brand_direction": preset.get("brand_direction", ""),
+                        "product_anchors": preset.get("product_anchors", {}),
+                        "review_highlights": [],
+                        "review_positive_points": [],
+                        "review_negative_points": [],
+                        "review_summary": "",
+                        "image_urls": preset.get("image_urls", [])[:10],
+                        "image_items": image_items,
+                        "platform": "amazon",
+                        "price": "",
+                        "currency": "",
+                        "fetch_source": "preset_strong_match",
+                        "fetch_confidence": "high",
+                        "main_image_confidence": "high" if image_items else "medium",
+                        "review_extraction_method": "preset",
+                    }
+                    _result = {
+                        "ok": True,
+                        "status_code": 200,
+                        "url": canonical_url,
+                        "insight": insight,
+                        "source": "preset_strong_match",
+                        "confidence": "high",
+                        "fallback_reason": "",
+                        "cache_hit": False,
+                    }
+                    product_insight_cache.set(_cache_key, _result)
+                    _cleanup_inflight_key(_cache_key)
+                    audit_log.record(
+                        tool="parse_product_url",
+                        action="strong_match_preset",
+                        input_summary={"asin": asin, "url_domain": urlparse(product_url).netloc},
+                        output_summary={"image_count": len(image_items), "product_name": insight["product_name"][:80]},
+                        status="success",
+                        duration_ms=int((time.monotonic() - _t0) * 1000),
+                    )
+                    return jsonify(_result)
+                except Exception as _preset_exc:
+                    audit_log.record(
+                        tool="parse_product_url",
+                        action="strong_match_preset_failed",
+                        input_summary={"asin": asin, "url_domain": urlparse(product_url).netloc},
+                        output_summary={},
+                        status="error",
+                        error_code="PRESET_FAILED",
+                        error_message=str(_preset_exc)[:300],
+                        duration_ms=int((time.monotonic() - _t0) * 1000),
+                    )
+                    # Fall through to generic cache + scrape instead of returning HTTP 500
+
+            # Cache hit: skip scraping + image fetching entirely
             _cached = product_insight_cache.get(_cache_key)
             if _cached is not None:
                 audit_log.record(
@@ -647,81 +754,6 @@ def register_agent_routes(
                 if _cached is not None:
                     return jsonify({**_cached, "cache_hit": True, "deduped": True})
                 # Other thread failed — fall through to our own attempt
-
-            # Strong-match fast path for known Amazon ASINs (stable quality + lower latency).
-            preset = _AMAZON_STRONG_MATCH_PRESETS.get(asin)
-            if preset:
-                image_items = _load_preset_image_cache(asin)
-                if not image_items:
-                    try:
-                        from shoplive.backend.async_executor import parallel_fetch_images
-                        parallel_results = parallel_fetch_images(
-                            preset.get("image_urls", [])[:4],
-                            proxy,
-                            fetch_fn=fetch_image_as_base64,
-                            max_images=4,
-                            timeout_seconds=45,
-                        )
-                        image_items = [
-                            {"base64": r["base64"], "mime_type": r["mime_type"], "url": r["url"]}
-                            for r in parallel_results if r["ok"]
-                        ]
-                    except Exception:
-                        image_items = []
-                if not image_items:
-                    for _u in preset.get("image_urls", [])[:4]:
-                        try:
-                            _b64, _mime = _fetch_image_with_headers_as_base64(_u, proxy, build_proxies)
-                            image_items.append({"base64": _b64, "mime_type": _mime, "url": _u})
-                        except Exception:
-                            continue
-                if image_items:
-                    _save_preset_image_cache(asin, image_items[:4])
-
-                insight = {
-                    "product_name": preset.get("product_name", ""),
-                    "main_business": preset.get("main_business", "消费电子"),
-                    "style_template": preset.get("style_template", "clean"),
-                    "selling_points": preset.get("selling_points", [])[:6],
-                    "target_user": preset.get("target_user", ""),
-                    "sales_region": preset.get("sales_region", ""),
-                    "brand_direction": preset.get("brand_direction", ""),
-                    "product_anchors": preset.get("product_anchors", {}),
-                    "review_highlights": [],
-                    "review_positive_points": [],
-                    "review_negative_points": [],
-                    "review_summary": "",
-                    "image_urls": preset.get("image_urls", [])[:10],
-                    "image_items": image_items,
-                    "platform": "amazon",
-                    "price": "",
-                    "currency": "",
-                    "fetch_source": "preset_strong_match",
-                    "fetch_confidence": "high",
-                    "main_image_confidence": "high" if image_items else "medium",
-                    "review_extraction_method": "preset",
-                }
-                _result = {
-                    "ok": True,
-                    "status_code": 200,
-                    "url": canonical_url,
-                    "insight": insight,
-                    "source": "preset_strong_match",
-                    "confidence": "high",
-                    "fallback_reason": "",
-                    "cache_hit": False,
-                }
-                product_insight_cache.set(_cache_key, _result)
-                _cleanup_inflight_key(_cache_key)
-                audit_log.record(
-                    tool="parse_product_url",
-                    action="strong_match_preset",
-                    input_summary={"asin": asin, "url_domain": urlparse(product_url).netloc},
-                    output_summary={"image_count": len(image_items), "product_name": insight["product_name"][:80]},
-                    status="success",
-                    duration_ms=int((time.monotonic() - _t0) * 1000),
-                )
-                return jsonify(_result)
 
             platform = guess_platform_by_url(canonical_url)
             parser = get_platform_parser(platform)

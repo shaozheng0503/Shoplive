@@ -40,6 +40,16 @@ class TestProductInsightRequest:
         req = ProductInsightRequest(product_url="  https://www.amazon.com/dp/B0X  ")
         assert req.product_url == "https://www.amazon.com/dp/B0X"
 
+    def test_bare_domain_prepends_https(self):
+        req = ProductInsightRequest(
+            product_url="amazon.com/Soundcore/dp/B0CZDHS41T/?ref=test",
+        )
+        assert req.product_url.startswith("https://amazon.com/")
+
+    def test_strips_tabs_and_newlines_from_bare_url(self):
+        req = ProductInsightRequest(product_url="  amazon.com/dp/B0TAB\t")
+        assert req.product_url == "https://amazon.com/dp/B0TAB"
+
     def test_language_en_accepted(self):
         req = ProductInsightRequest(product_url="https://a.com", language="en")
         assert req.language == "en"
@@ -56,9 +66,9 @@ class TestProductInsightRequest:
         errors = exc_info.value.errors(include_url=False)
         assert any("product_url" in str(e["loc"]) for e in errors)
 
-    def test_invalid_url_no_protocol_rejected(self):
-        with pytest.raises(ValidationError):
-            ProductInsightRequest(product_url="www.amazon.com/dp/B0TEST")
+    def test_bare_www_url_gets_https_prefix(self):
+        req = ProductInsightRequest(product_url="www.amazon.com/dp/B0TEST")
+        assert req.product_url == "https://www.amazon.com/dp/B0TEST"
 
     def test_empty_url_rejected(self):
         with pytest.raises(ValidationError):
