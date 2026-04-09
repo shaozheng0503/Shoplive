@@ -4220,7 +4220,7 @@ async function generateVideo(promptOverride = "") {
               ? `视频生成被安全策略拦截：${opError.slice(0, 120)}。请简化提示词后重试。`
               : `Video blocked by safety policy: ${opError.slice(0, 120)}. Simplify prompt and retry.`, "blocked");
           } else {
-            appendRetryButton(pushSystemStateMsg(t("genFail"), "blocked"), finalText);
+            appendRetryButton(pushSystemStateMsg(t("genFail"), "blocked"), finalPrompt);
           }
           finishVideoTask(taskId, false, zh ? "失败" : "Failed");
           releaseSlotOnce();
@@ -4242,7 +4242,7 @@ async function generateVideo(promptOverride = "") {
       } catch (_e) {
         pollStopped = true;
         if (pollBubble.parentNode) pollBubble.remove();
-        appendRetryButton(pushSystemStateMsg(t("pollFail"), "blocked"), finalText);
+        appendRetryButton(pushSystemStateMsg(t("pollFail"), "blocked"), finalPrompt);
         finishVideoTask(taskId, false, zh ? "轮询异常" : "Polling error");
         releaseSlotOnce();
         return;
@@ -4263,7 +4263,7 @@ async function generateVideo(promptOverride = "") {
       : detailRaw;
     appendRetryButton(
       pushSystemStateMsg(detail ? `${t("genFail")} (${detail})` : t("genFail"), "blocked"),
-      finalText
+      state.lastPrompt   // finalPrompt is const inside try; lastPrompt is set = finalPrompt at the top of the try block
     );
     finishVideoTask(taskId, false, currentLang === "zh" ? "任务失败" : "Failed");
     releaseSlotOnce();
