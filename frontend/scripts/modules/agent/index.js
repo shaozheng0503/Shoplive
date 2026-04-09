@@ -4370,24 +4370,20 @@ async function onSend() {
         pushSystemStateMsg(t("editPrefixEmpty"), "blocked");
         return;
       }
+      if (chatInput) chatInput.value = "";
+      pushMsg("user", finalText, { typewriter: false });
       const handled = await dispatchVideoEditIntent(editPayload);
-      if (handled) {
-        if (chatInput) chatInput.value = "";
-        pushMsg("user", finalText, { typewriter: false });
-        return;
-      }
+      if (handled) return;
     }
     // 已有成片时：短句且可被识别为剪辑意图 → 直接走编辑（倍速/裁剪/调色等），无需 /edit。
     // 避免「整体加速1.5倍」等误走视频生成链路（会出现「已开始生成视频」「生成中总计 xs」）。
     if (state.lastVideoUrl) {
       const editOnly = finalText.trim();
       if (editOnly.length <= 120 && extractVideoEditIntent(editOnly)) {
+        if (chatInput) chatInput.value = "";
+        pushMsg("user", finalText, { typewriter: false });
         const handledEdit = await dispatchVideoEditIntent(editOnly);
-        if (handledEdit) {
-          if (chatInput) chatInput.value = "";
-          pushMsg("user", finalText, { typewriter: false });
-          return;
-        }
+        if (handledEdit) return;
       }
     }
     if (showPromptConfigConfirmBubble(finalText)) return;
