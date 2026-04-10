@@ -3863,6 +3863,18 @@ body {
   display: flex;
 }
 
+.composer.composer-compact.show-link-row .hot-video-link-row {
+  display: none;
+}
+
+.composer.composer-compact.show-hot-video-row .compact-link-row {
+  display: none;
+}
+
+.composer.composer-compact.show-hot-video-row .hot-video-link-row {
+  display: flex;
+}
+
 .composer.composer-compact .compact-link-row input {
   flex: 1;
   min-width: 280px;
@@ -3896,6 +3908,10 @@ body {
   border: 1px solid rgba(63, 134, 255, 0.22);
   color: #2a4a6e;
   font-weight: 500;
+}
+
+.composer.composer-compact .hot-video-link-row button {
+  white-space: nowrap;
 }
 
 .composer.composer-compact .compact-chip {

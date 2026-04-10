@@ -1,10 +1,10 @@
 import { createTransientBackoffByPreset } from "../../shared/polling.js";
 import { currentLang, setCurrentLang, i18n, shortFeedback, feedbackDeck, insightPulseDeck, targetBatches, brandBatches, REGION_ITEMS, t, shuffle, nextLead, withLead, nextInsightPulseLine } from './i18n.js';
 import { state, smartOptionCache, MAX_CONCURRENT_VIDEO_JOBS, CHAT_TAIL_LIMIT_WHEN_SPLIT } from './state.js';
-import { getApiBase, postJson, postSse, normalizeProductUrlForApi, toAbsoluteVideoUrl } from './utils.js';
+import { getApiBase, postJson, postSse, normalizeHttpUrlForApi, normalizeProductUrlForApi, toAbsoluteVideoUrl } from './utils.js';
 import { initVideoEditCallbacks, pushVideoUrlToHistory, _loadVideoHistory, applyRangedSpeedToCurrentVideo, applyColorGradingToCurrentVideo, applyBgmEditToCurrentVideo, pollRenderJob, applyTrimToCurrentVideo, applyMultiTrimToCurrentVideo, applySubtitleStyleToCurrentVideo, applyUndoLastEdit, applyAsrSubtitlesToCurrentVideo, applyImageOverlayToCurrentVideo, applySubtitleToCurrentVideo, applyPlaybackSpeedToCurrentVideo, applyFadeToCurrentVideo } from './video-edit-ops.js';
 import { initVideoEditorCallbacks, applyVideoEditsToPreview, renderVideoEditor, clampNum, fmtSec, getVideoDurationSec, getTimelineSnapCandidates, snapTimelineSec, ensureTimelineState, buildTrackSegmentsHtml, getTrackRangesByKeyframes, isTrackActiveAtTime, buildTimelineRowsHtml, revokeLocalObjectUrl, readFileAsDataUrl, setupSurfaceFullscreen, setupMaskDrag } from './video-editor-ui.js';
-import { initWorkspaceCallbacks, buildStoryboardText, buildWorkflowInput, hasWorkflowRequiredInput, callShopliveWorkflow, hydrateWorkflowTexts, applyWorkspaceMode, updateWorkspaceTabs, updateWorkspaceToolbarVisibility, updateToolbarIndicator, buildSegmentedStoryboard, buildStoryboardFromPromptSegments, parseStoryboardSegments, renderScriptEditor } from './workspace.js';
+import { initWorkspaceCallbacks, buildStoryboardText, buildWorkflowInput, hasWorkflowRequiredInput, callShopliveWorkflow, hydrateWorkflowTexts, hydrateHotVideoRemakeWorkspace, applyWorkspaceMode, updateWorkspaceTabs, updateWorkspaceToolbarVisibility, updateToolbarIndicator, buildSegmentedStoryboard, buildStoryboardFromPromptSegments, parseStoryboardSegments, renderScriptEditor } from './workspace.js';
 import { initAgentRunCallbacks, callAgentRunAndRender } from './agent-run.js';
 
 const chatList = document.getElementById("chatList");
@@ -28,6 +28,11 @@ const productUrlInput = document.getElementById("productUrlInput");
 const parseProductUrlBtn = document.getElementById("parseProductUrlBtn");
 const linkParseStatusEl = document.getElementById("linkParseStatus");
 const toggleProductUrlBtn = document.getElementById("toggleProductUrlBtn");
+const hotVideoUrlInput = document.getElementById("hotVideoUrlInput");
+const parseHotVideoBtn = document.getElementById("parseHotVideoBtn");
+const hotVideoParseStatusEl = document.getElementById("hotVideoParseStatus");
+const toggleHotVideoBtn = document.getElementById("toggleHotVideoBtn");
+const startHotVideoRemakeBtn = document.getElementById("startHotVideoRemakeBtn");
 const workspaceEl = document.getElementById("workspace");
 const composerCompact = document.querySelector(".composer.composer-compact");
 const workspaceToolbar = document.querySelector(".workspace-toolbar");
@@ -119,7 +124,9 @@ function buildProductAnchorSummary(lang = currentLang) {
 function openProductAssetPicker() {
   if (composerCompact && !composerCompact.classList.contains("show-link-row")) {
     composerCompact.classList.add("show-link-row");
+    composerCompact.classList.remove("show-hot-video-row");
     if (toggleProductUrlBtn) toggleProductUrlBtn.textContent = t("toggleLinkHide");
+    if (toggleHotVideoBtn) toggleHotVideoBtn.textContent = t("toggleHotVideoShow");
   }
   if (window._agentOpenRefModal) window._agentOpenRefModal();
   else imageInput?.click();
@@ -474,6 +481,50 @@ function startLinkParseProgress() {
   return { stop, startVisualStepRotation };
 }
 
+function startHotVideoParseProgress() {
+  if (state.entryFocusMode) {
+    state.entryFocusMode = false;
+    applyWorkspaceMode();
+  }
+  const steps = [
+    t("hotVideoWorking"),
+    t("hotVideoStep1"),
+    t("hotVideoStep2"),
+    t("hotVideoStep3"),
+    t("hotVideoStep4"),
+  ];
+  const startedAt = Date.now();
+  let stepIdx = 0;
+  let timer = null;
+  forceScrollChatToBottom();
+  setHotVideoInlineStatus(steps[0], true);
+  const bubble = pushSystemStateMsg(steps[0], "progress");
+  forceScrollChatToBottom();
+  timer = setInterval(() => {
+    const sec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+    let line = "";
+    if (sec < 24) {
+      stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+      line = steps[stepIdx];
+    } else {
+      line = t("hotVideoSlow", { sec });
+    }
+    setSystemStateMsgBodyText(bubble, line);
+    setHotVideoInlineStatus(line, true);
+    forceScrollChatToBottom();
+  }, 3000);
+  return {
+    stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      setHotVideoInlineStatus("", false);
+      if (bubble && bubble.parentNode) bubble.remove();
+    },
+  };
+}
+
 function renderWorkspaceTab(el, label, kind) {
   if (!el) return;
   const safeLabel = label || "";
@@ -494,10 +545,17 @@ function applyLang() {
     const opened = Boolean(composerCompact?.classList.contains("show-link-row"));
     toggleProductUrlBtn.textContent = opened ? t("toggleLinkHide") : t("toggleLinkShow");
   }
+  if (toggleHotVideoBtn) {
+    const opened = Boolean(composerCompact?.classList.contains("show-hot-video-row"));
+    toggleHotVideoBtn.textContent = opened ? t("toggleHotVideoHide") : t("toggleHotVideoShow");
+  }
   const vel = document.getElementById("videoEngineLabel");
   if (vel) vel.textContent = t("videoEngineLabel");
   if (parseProductUrlBtn) parseProductUrlBtn.textContent = t("parseLinkBtn");
   if (productUrlInput) productUrlInput.placeholder = t("parseLinkPh");
+  if (parseHotVideoBtn) parseHotVideoBtn.textContent = t("parseHotVideoBtn");
+  if (hotVideoUrlInput) hotVideoUrlInput.placeholder = t("parseHotVideoPh");
+  if (startHotVideoRemakeBtn) startHotVideoRemakeBtn.textContent = t("startHotVideoRemake");
   const ratioLabelEl = document.querySelector('label[for="aspectRatioSelect"] span');
   if (ratioLabelEl) ratioLabelEl.textContent = t("ratioLabel");
   const durationLabel = document.querySelector('label[for="durationSelect"] span');
@@ -962,6 +1020,38 @@ function setLinkParseInlineStatus(text = "", visible = false) {
   }
   linkParseStatusEl.hidden = false;
   linkParseStatusEl.textContent = text;
+}
+
+function setHotVideoInlineStatus(text = "", visible = false) {
+  if (!hotVideoParseStatusEl) return;
+  if (!visible || !String(text).trim()) {
+    hotVideoParseStatusEl.hidden = true;
+    hotVideoParseStatusEl.textContent = "";
+    return;
+  }
+  hotVideoParseStatusEl.hidden = false;
+  hotVideoParseStatusEl.textContent = text;
+}
+
+function updateHotVideoRemakeAction() {
+  if (!startHotVideoRemakeBtn) return;
+  const ready = Boolean(state.hotVideoRemake?.remakePrompt);
+  startHotVideoRemakeBtn.disabled = !ready;
+}
+
+function formatHotVideoShareStrategy(strategy = "") {
+  const key = String(strategy || "").trim();
+  if (!key) return "";
+  const map = {
+    direct: "hotVideoStrategyDirect",
+    redirect_direct: "hotVideoStrategyRedirectDirect",
+    html_extract: "hotVideoStrategyHtmlExtract",
+    rendered_html_extract: "hotVideoStrategyRenderedHtmlExtract",
+    unresolved_page: "hotVideoStrategyUnresolvedPage",
+    cache_hit: "hotVideoStrategyCacheHit",
+    passthrough: "hotVideoStrategyPassthrough",
+  };
+  return t(map[key] || "hotVideoStrategyPassthrough");
 }
 
 function updateChatTailWindow() {
@@ -4654,6 +4744,67 @@ async function enhancePromptByAgent() {
   }
 }
 
+function formatHotVideoStructure(structure = []) {
+  const items = Array.isArray(structure) ? structure : [];
+  const lines = items
+    .map((item) => {
+      const title = String(item?.title || "").trim();
+      const summary = String(item?.summary || "").trim();
+      const beats = Array.isArray(item?.beats) ? item.beats.map((x) => String(x || "").trim()).filter(Boolean).slice(0, 3) : [];
+      return [title, summary, beats.join(" / ")].filter(Boolean).join(" - ");
+    })
+    .filter(Boolean)
+    .slice(0, 3);
+  return lines.join("\n");
+}
+
+function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
+  const analysis = data?.analysis && typeof data.analysis === "object" ? data.analysis : data || {};
+  const remakeScript = String(analysis.remake_script || data?.remake_script || "").trim();
+  const remakePrompt = sanitizePromptForUser(String(analysis.remake_prompt || data?.remake_prompt || "").trim());
+  const summary = String(analysis.summary || data?.summary || "").trim();
+  const hook = String(analysis.hook || data?.hook || "").trim();
+  const notes = String(analysis.analysis_notes || data?.analysis_notes || "").trim();
+  const structureLines = formatHotVideoStructure(analysis.structure || data?.structure || []);
+  const resolvedVideoUrl = String(data?.resolved_video_url || analysis?.resolved_video_url || "").trim();
+  const resolvedPageUrl = String(data?.resolved_page_url || analysis?.resolved_page_url || "").trim();
+  const shareResolution = data?.share_resolution && typeof data.share_resolution === "object" ? data.share_resolution : {};
+  const strategyLabel = formatHotVideoShareStrategy(String(shareResolution.strategy || "").trim());
+  if (!remakePrompt && !remakeScript) {
+    throw new Error(currentLang === "zh" ? "未拿到有效复刻结果" : "No remake package returned");
+  }
+  if (remakePrompt) {
+    if (chatInput) chatInput.value = remakePrompt;
+  }
+  hydrateHotVideoRemakeWorkspace({
+    sourceUrl,
+    summary,
+    hook,
+    structure: analysis.structure || data?.structure || [],
+    remakePrompt,
+    remakeScript,
+    shotPlan: analysis.shot_plan || data?.shot_plan || [],
+    resolvedVideoUrl,
+    resolvedPageUrl,
+    shareResolution,
+  });
+  state.videoEditorOpen = false;
+  updateHotVideoRemakeAction();
+  openEditorPanel("script");
+  const summaryLines = [
+    t("hotVideoSummaryTitle"),
+    summary,
+    hook ? t("hotVideoSummaryHook", { value: hook }) : "",
+    structureLines ? t("hotVideoSummaryStructure", { value: structureLines }) : "",
+    notes ? t("hotVideoSummaryNotes", { value: notes }) : "",
+    strategyLabel ? t("hotVideoSummaryStrategy", { value: strategyLabel }) : "",
+    resolvedVideoUrl && resolvedVideoUrl !== sourceUrl ? t("hotVideoSummaryResolvedVideo", { value: resolvedVideoUrl }) : "",
+    resolvedPageUrl && resolvedPageUrl !== sourceUrl ? t("hotVideoSummaryResolvedPage", { value: resolvedPageUrl }) : "",
+    t("hotVideoReady"),
+  ].filter(Boolean);
+  pushSystemStateMsg(summaryLines.join("\n\n"), "done");
+}
+
 async function parseShopProductByUrl(inputUrl = "") {
   // 按钮 click 会传入 MouseEvent，不能当 URL 字符串用。
   const raw =
@@ -4834,6 +4985,59 @@ async function parseShopProductByUrl(inputUrl = "") {
     pushSystemStateMsg(short ? `${t("parseLinkFail")} (${detail})` : t("parseLinkFail"), "blocked");
   } finally {
     if (parseProductUrlBtn) parseProductUrlBtn.disabled = false;
+  }
+}
+
+async function parseHotVideoRemake(inputUrl = "") {
+  const raw =
+    (typeof inputUrl === "string" ? inputUrl.trim() : "") ||
+    String(hotVideoUrlInput?.value || "").trim();
+  const url = normalizeHttpUrlForApi(raw);
+  if (!url) {
+    pushSystemStateMsg(t("hotVideoFail"), "blocked");
+    return;
+  }
+  if (hotVideoUrlInput) hotVideoUrlInput.value = url;
+  state.hotVideoRemake = null;
+  updateHotVideoRemakeAction();
+  if (parseHotVideoBtn) parseHotVideoBtn.disabled = true;
+  const progress = startHotVideoParseProgress();
+  try {
+    const base = getApiBase();
+    const data = await postJson(
+      `${base}/api/hot-video/remake/analyze`,
+      {
+        video_url: url,
+        language: currentLang,
+        remake_goal: currentLang === "zh" ? "带货转化" : "conversion",
+        product_name: state.productName || "",
+        main_business: state.mainBusiness || "",
+        selling_points: state.sellingPoints || "",
+        target_user: state.targetUser || "",
+        sales_region: state.salesRegion || "",
+        brand_direction: state.brandInfo || "",
+        product_anchors: state.productAnchors || {},
+        duration: Number(state.duration || 16),
+        aspect_ratio: state.aspectRatio || "16:9",
+        video_engine: state.videoEngine || "veo",
+      },
+      120000
+    );
+    progress.stop();
+    applyHotVideoRemakeResult(data, url);
+    setHotVideoInlineStatus(t("hotVideoDone"), true);
+  } catch (e) {
+    progress.stop();
+    const detail = String(e?.message || e || "").trim();
+    const friendly = /未解析到可下载的视频直链|did not resolve to a downloadable video url/i.test(detail)
+      ? t("hotVideoFailShareUnresolved")
+      : detail
+        ? `${t("hotVideoFail")} (${detail})`
+        : t("hotVideoFail");
+    setHotVideoInlineStatus(friendly, true);
+    pushSystemStateMsg(friendly, "blocked");
+  } finally {
+    if (parseHotVideoBtn) parseHotVideoBtn.disabled = false;
   }
 }
 
@@ -5195,10 +5399,24 @@ uploadBtn?.addEventListener("click", () => {
 if (toggleProductUrlBtn) {
   toggleProductUrlBtn.addEventListener("click", () => {
     if (!composerCompact) return;
-    composerCompact.classList.toggle("show-link-row");
+    const shouldOpen = !composerCompact.classList.contains("show-link-row");
+    composerCompact.classList.toggle("show-link-row", shouldOpen);
+    composerCompact.classList.remove("show-hot-video-row");
     const opened = composerCompact.classList.contains("show-link-row");
     toggleProductUrlBtn.textContent = opened ? t("toggleLinkHide") : t("toggleLinkShow");
+    if (toggleHotVideoBtn) toggleHotVideoBtn.textContent = t("toggleHotVideoShow");
     if (opened) productUrlInput?.focus();
+  });
+}
+if (toggleHotVideoBtn) {
+  toggleHotVideoBtn.addEventListener("click", () => {
+    if (!composerCompact) return;
+    const shouldOpen = !composerCompact.classList.contains("show-hot-video-row");
+    composerCompact.classList.toggle("show-hot-video-row", shouldOpen);
+    composerCompact.classList.remove("show-link-row");
+    toggleHotVideoBtn.textContent = shouldOpen ? t("toggleHotVideoHide") : t("toggleHotVideoShow");
+    if (toggleProductUrlBtn) toggleProductUrlBtn.textContent = t("toggleLinkShow");
+    if (shouldOpen) hotVideoUrlInput?.focus();
   });
 }
 imageInput?.addEventListener("change", (e) => onUpload(e.target.files));
@@ -5210,6 +5428,24 @@ if (productUrlInput) {
     if (e.key !== "Enter") return;
     e.preventDefault();
     parseShopProductByUrl();
+  });
+}
+if (parseHotVideoBtn) parseHotVideoBtn.addEventListener("click", parseHotVideoRemake);
+if (hotVideoUrlInput) {
+  hotVideoUrlInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    parseHotVideoRemake();
+  });
+}
+if (startHotVideoRemakeBtn) {
+  startHotVideoRemakeBtn.addEventListener("click", () => {
+    const prompt = String(state.hotVideoRemake?.remakePrompt || state.lastPrompt || chatInput?.value || "").trim();
+    if (!prompt) {
+      pushSystemStateMsg(t("hotVideoFail"), "blocked");
+      return;
+    }
+    submitSimplePromptGeneration(prompt);
   });
 }
 if (aspectRatioSelect) {
@@ -5580,6 +5816,7 @@ initAgentRunCallbacks({
 _loadVideoHistory(); // restore undo stack from localStorage
 _initEditCmdsBar();  // quick-edit chips below chat input
 consumeLandingParams();
+updateHotVideoRemakeAction();
 pushSystemGuideMsg(t("welcome", { max: MAX_CONCURRENT_VIDEO_JOBS }), { typewriter: true });
 if (!SIMPLE_AGENT_MODE) scheduleLandingPrefillAfterWelcome();
 

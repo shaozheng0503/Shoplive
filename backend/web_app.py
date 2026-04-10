@@ -67,6 +67,7 @@ from shoplive.backend.api.agent_api import register_agent_routes
 from shoplive.backend.api.veo_api import register_veo_routes
 from shoplive.backend.api.media_api import register_media_routes
 from shoplive.backend.api.video_edit_api import register_video_edit_routes
+from shoplive.backend.api.hot_video_api import register_hot_video_routes
 from shoplive.backend.api.tabcode_api import register_tabcode_routes
 from shoplive.backend.api.ltxv_api import register_ltxv_routes
 from shoplive.backend.api.comfyui_ltxv_api import register_comfyui_ltxv_routes
@@ -238,6 +239,17 @@ register_video_edit_routes(
     normalize_timeline_video_segments=normalize_timeline_video_segments,
     concat_videos_ffmpeg=concat_videos_ffmpeg,
     video_edit_export_dir=VIDEO_EDIT_EXPORT_DIR,
+)
+register_hot_video_routes(
+    app,
+    json_error=json_error,
+    parse_common_payload=parse_common_payload,
+    get_access_token=get_access_token,
+    build_proxies=build_proxies,
+    download_video_to_file=download_video_to_file,
+    call_litellm_chat=call_litellm_chat,
+    extract_chat_content=extract_chat_content,
+    try_parse_json_object=try_parse_json_object,
 )
 register_tabcode_routes(app)
 register_jimeng_routes(

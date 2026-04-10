@@ -52,6 +52,7 @@ export const state = {
   workflowHydrated: false,
   skipImageConfirmed: false,
   entryFocusMode: false,
+  hotVideoRemake: null,
   lastModelAdviceKey: "",
   activeVideoCardId: "",
   videoUrlHistory: [],    // max-10 undo stack — push before each export

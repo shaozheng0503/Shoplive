@@ -21,4 +21,11 @@ def _clear_module_caches():
         _ASR_CACHE.clear()
     except ImportError:
         pass
+    try:
+        from shoplive.backend.api.hot_video_api import _ASR_CACHE as _HOT_VIDEO_ASR_CACHE
+        from shoplive.backend.api.hot_video_api import _ANALYSIS_CACHE
+        _HOT_VIDEO_ASR_CACHE.clear()
+        _ANALYSIS_CACHE.clear()
+    except ImportError:
+        pass
     yield

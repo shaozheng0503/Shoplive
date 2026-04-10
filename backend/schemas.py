@@ -15,6 +15,31 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator
 
 
+def _extract_http_url_candidate(raw: str) -> str:
+    s = (
+        str(raw or "")
+        .replace("\ufeff", "")
+        .replace("\u200b", "")
+        .replace("\u201c", "")
+        .replace("\u201d", "")
+        .replace("\u2018", "")
+        .replace("\u2019", "")
+        .strip()
+    )
+    if not s:
+        return ""
+    patterns = [
+        r"https?:\/\/[^\s<>\"'`]+",
+        r"\bwww\.[a-z0-9.-]+\.[a-z]{2,}[^\s<>\"'`]*",
+        r"\b[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(?:\/[^\s<>\"'`]*)?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, s, re.IGNORECASE)
+        if match:
+            return str(match.group(0)).rstrip("),.;，。!！")
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Common / Shared
 # ---------------------------------------------------------------------------
@@ -237,6 +262,102 @@ class VideoWorkflowRequest(BaseModel):
         default="",
         description="Raw user prompt for build_enhance_template step.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Hot Video Remake
+# ---------------------------------------------------------------------------
+
+class HotVideoRemakeRequest(CommonPayload):
+    """Analyze a reference video and return a remake-ready package."""
+
+    video_url: str = Field(
+        description="Publicly accessible video URL to analyze. Must start with http:// or https://.",
+    )
+    language: Literal["zh", "en"] = Field(
+        default="zh",
+        description="Output language for the analysis package.",
+    )
+    max_lines: int = Field(
+        default=18,
+        ge=1,
+        le=40,
+        description="Maximum subtitle lines to extract during ASR.",
+    )
+    remake_goal: str = Field(
+        default="带货转化",
+        description="Goal of the remake, e.g. 带货转化 / 种草 / 品牌展示.",
+    )
+    product_name: str = Field(
+        default="",
+        description="Your product name to swap into the remake.",
+    )
+    main_business: str = Field(
+        default="",
+        description="Main business/category of your product.",
+    )
+    selling_points: str = Field(
+        default="",
+        description="Comma-separated selling points of your own product.",
+    )
+    target_user: str = Field(
+        default="",
+        description="Target audience for the remake output.",
+    )
+    sales_region: str = Field(
+        default="",
+        description="Sales region for the remake output.",
+    )
+    brand_direction: str = Field(
+        default="",
+        description="Brand tone or positioning to preserve in the remake.",
+    )
+    product_anchors: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured product anchors such as category, colors, materials, silhouette and key_details.",
+    )
+    duration: int = Field(
+        default=16,
+        ge=4,
+        le=30,
+        description="Target duration in seconds for the remake output.",
+    )
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = Field(
+        default="16:9",
+        description="Target aspect ratio for the remake output.",
+    )
+    video_engine: Literal["veo", "ltx", "jimeng", "grok"] = Field(
+        default="veo",
+        description="Target video engine so prompt style can be adapted.",
+    )
+    api_base: str = Field(default="", description="LiteLLM API base URL.")
+    api_key: str = Field(default="", description="LiteLLM API key.")
+
+    @field_validator("video_url")
+    @classmethod
+    def validate_video_url(cls, v: str) -> str:
+        v = (
+            str(v or "")
+            .strip()
+            .replace("\ufeff", "")
+            .replace("\u200b", "")
+        )
+        candidate = _extract_http_url_candidate(v)
+        if candidate:
+            v = candidate
+        v = re.sub(r"[\n\r\t\f\v]+", "", v).strip()
+        if not v:
+            raise ValueError("video_url must be a valid http/https URL")
+        if v.startswith("http://") or v.startswith("https://"):
+            if not urlparse(v).netloc:
+                raise ValueError("video_url must be a valid http/https URL")
+            return v
+        candidate = "https://" + v.lstrip("/")
+        parsed = urlparse(candidate)
+        host = (parsed.netloc or "").lower()
+        if not host or "." not in host or re.search(r"[<>\"']", v):
+            raise ValueError("video_url must be a valid http/https URL")
+        return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -963,6 +1084,7 @@ TOOL_SCHEMAS: Dict[str, type] = {
     "chat_with_llm": AgentChatRequest,
     "agent_run": AgentRunRequest,
     "run_video_workflow": VideoWorkflowRequest,
+    "analyze_hot_video_remake": HotVideoRemakeRequest,
     "generate_video": VeoStartRequest,
     "chain_video_segments": VeoChainRequest,
     "check_video_status": VeoStatusRequest,

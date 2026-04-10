@@ -100,6 +100,12 @@ export async function callShopliveWorkflow(action, extra = {}) {
 export async function hydrateWorkflowTexts(force = false) {
   if (state.workflowHydrating) return;
   if (!force && state.workflowHydrated && state.lastStoryboard && state.lastPrompt) return;
+  if (!force && state.hotVideoRemake?.remakePrompt && state.hotVideoRemake?.remakeScript) {
+    state.lastStoryboard = String(state.hotVideoRemake.remakeScript || "").trim() || state.lastStoryboard;
+    state.lastPrompt = _sanitizePromptForUser(String(state.hotVideoRemake.remakePrompt || "").trim()) || state.lastPrompt;
+    state.workflowHydrated = true;
+    return;
+  }
   if (!hasWorkflowRequiredInput()) {
     if (!state.lastStoryboard) state.lastStoryboard = buildStoryboardText();
     if (!state.lastPrompt) state.lastPrompt = _buildPrompt();
@@ -133,6 +139,30 @@ export async function hydrateWorkflowTexts(force = false) {
   } finally {
     state.workflowHydrating = false;
   }
+}
+
+export function hydrateHotVideoRemakeWorkspace(remake = {}) {
+  const payload = remake && typeof remake === "object" ? remake : {};
+  const shotPlan = Array.isArray(payload.shotPlan) ? payload.shotPlan : (Array.isArray(payload.shot_plan) ? payload.shot_plan : []);
+  let remakeScript = String(payload.remakeScript || payload.remake_script || "").trim();
+  const durationValue = Number(payload.duration || state.duration || 8);
+  const segCount = durationValue >= 16 ? Math.floor(durationValue / 8) : 1;
+  if ((!remakeScript || segCount > 1) && shotPlan.length) {
+    const shotPlanStoryboard = buildStoryboardFromShotPlan(shotPlan, segCount);
+    if (shotPlanStoryboard) remakeScript = shotPlanStoryboard;
+  }
+  const remakePrompt = _sanitizePromptForUser(String(payload.remakePrompt || payload.remake_prompt || "").trim());
+  if (remakeScript) state.lastStoryboard = remakeScript;
+  if (remakePrompt) state.lastPrompt = remakePrompt;
+  state.hotVideoRemake = {
+    ...(state.hotVideoRemake && typeof state.hotVideoRemake === "object" ? state.hotVideoRemake : {}),
+    ...payload,
+    shotPlan,
+    remakeScript: remakeScript || String(payload.remakeScript || payload.remake_script || "").trim(),
+    remakePrompt: remakePrompt || _sanitizePromptForUser(String(payload.remakePrompt || payload.remake_prompt || "").trim()),
+  };
+  state.workflowHydrated = Boolean(state.lastStoryboard || state.lastPrompt);
+  state.canUseEditors = true;
 }
 
 export function applyWorkspaceMode() {
@@ -273,6 +303,41 @@ export function buildStoryboardFromPromptSegments(prompts = [], segDuration = 8)
     .join("\n\n");
 }
 
+function buildStoryboardFromShotPlan(shotPlan = [], segCount = 1) {
+  const items = Array.isArray(shotPlan) ? shotPlan : [];
+  if (!items.length) return "";
+  const targetSegCount = Math.max(1, Number(segCount) || 1);
+  const totalDuration = items.reduce((sum, item) => sum + Math.max(1, Number(item?.duration_seconds || 0)), 0) || targetSegCount;
+  const segmentTarget = totalDuration / targetSegCount;
+  const segments = Array.from({ length: targetSegCount }, () => []);
+  let currentSeg = 0;
+  let currentDur = 0;
+  items.forEach((item, idx) => {
+    const shotTitle = String(item?.shot || item?.title || (currentLang === "zh" ? `镜头${idx + 1}` : `Shot ${idx + 1}`)).trim();
+    const visual = String(item?.visual || "").trim();
+    const voiceover = String(item?.voiceover || "").trim();
+    const onscreenText = String(item?.onscreen_text || "").trim();
+    const line = [
+      `${shotTitle}：${visual || (currentLang === "zh" ? "延续参考视频节奏推进" : "Continue the reference pacing")}`,
+      voiceover ? (currentLang === "zh" ? `口播：${voiceover}` : `Voiceover: ${voiceover}`) : "",
+      onscreenText ? (currentLang === "zh" ? `字幕：${onscreenText}` : `Caption: ${onscreenText}`) : "",
+    ].filter(Boolean).join("；");
+    segments[currentSeg].push(line);
+    currentDur += Math.max(1, Number(item?.duration_seconds || 0));
+    const shouldAdvance = currentSeg < targetSegCount - 1 && currentDur >= segmentTarget;
+    const remainingItems = items.length - idx - 1;
+    const remainingSegments = targetSegCount - currentSeg - 1;
+    if (shouldAdvance && remainingItems >= remainingSegments) {
+      currentSeg += 1;
+      currentDur = 0;
+    }
+  });
+  return buildStoryboardFromPromptSegments(
+    segments.map((seg) => seg.join("\n")).filter(Boolean),
+    Math.max(1, Math.round(totalDuration / targetSegCount)),
+  );
+}
+
 export function parseStoryboardSegments(storyboardText = "") {
   const raw = String(storyboardText || "").trim();
   if (!raw) return [];
@@ -311,6 +376,36 @@ export function renderScriptEditor() {
     : buildSegmentedStoryboard(segCount);
 
   const durationLabel = currentLang === "zh" ? "视频时长" : "Duration";
+  const remakeMeta = state.hotVideoRemake && typeof state.hotVideoRemake === "object" ? state.hotVideoRemake : null;
+  const remakeSummary = remakeMeta ? String(remakeMeta.summary || "").trim() : "";
+  const remakeHook = remakeMeta ? String(remakeMeta.hook || "").trim() : "";
+  const remakeSourceUrl = remakeMeta ? String(remakeMeta.sourceUrl || "").trim() : "";
+  const remakeResolvedVideoUrl = remakeMeta ? String(remakeMeta.resolvedVideoUrl || "").trim() : "";
+  const remakeResolvedPageUrl = remakeMeta ? String(remakeMeta.resolvedPageUrl || "").trim() : "";
+  const remakeShareStrategy = remakeMeta ? String(remakeMeta.shareResolution?.strategy || "").trim() : "";
+  const shareStrategyLabelMap = {
+    direct: currentLang === "zh" ? "直接视频链接" : "Direct video URL",
+    redirect_direct: currentLang === "zh" ? "短链跳转后直达视频" : "Redirected share link to direct video",
+    html_extract: currentLang === "zh" ? "页面 HTML 提取视频直链" : "Extracted video URL from page HTML",
+    rendered_html_extract: currentLang === "zh" ? "渲染页面后提取视频直链" : "Extracted video URL from rendered page",
+    unresolved_page: currentLang === "zh" ? "仅拿到页面，未解析出视频直链" : "Only page URL resolved, no direct video URL",
+    cache_hit: currentLang === "zh" ? "命中缓存结果" : "Used cached resolution",
+    passthrough: currentLang === "zh" ? "原样使用输入链接" : "Used input URL as-is",
+  };
+  const remakeShareStrategyLabel = remakeShareStrategy ? (shareStrategyLabelMap[remakeShareStrategy] || remakeShareStrategy) : "";
+  const remakeMetaHtml = remakeMeta
+    ? `
+    <div class="summary-card" style="margin-bottom:12px;">
+      <div class="info-grid">
+        ${remakeHook ? `<div class="info-item"><div class="info-icon">🎣</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "参考钩子" : "Reference hook"}</div><div class="info-value">${_sanitizeInputValue(remakeHook)}</div></div></div>` : ""}
+        ${remakeSummary ? `<div class="info-item"><div class="info-icon">🧠</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "复刻摘要" : "Remake summary"}</div><div class="info-value">${_sanitizeInputValue(remakeSummary)}</div></div></div>` : ""}
+        ${remakeSourceUrl ? `<div class="info-item"><div class="info-icon">🔗</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "参考链接" : "Reference URL"}</div><div class="info-value">${_sanitizeInputValue(remakeSourceUrl)}</div></div></div>` : ""}
+        ${remakeShareStrategyLabel ? `<div class="info-item"><div class="info-icon">🧭</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "解析策略" : "Resolution strategy"}</div><div class="info-value">${_sanitizeInputValue(remakeShareStrategyLabel)}</div></div></div>` : ""}
+        ${remakeResolvedVideoUrl && remakeResolvedVideoUrl !== remakeSourceUrl ? `<div class="info-item"><div class="info-icon">🎬</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "视频直链" : "Resolved video URL"}</div><div class="info-value">${_sanitizeInputValue(remakeResolvedVideoUrl)}</div></div></div>` : ""}
+        ${remakeResolvedPageUrl && remakeResolvedPageUrl !== remakeSourceUrl ? `<div class="info-item"><div class="info-icon">🌐</div><div class="info-main"><div class="info-title">${currentLang === "zh" ? "落地页面" : "Resolved page URL"}</div><div class="info-value">${_sanitizeInputValue(remakeResolvedPageUrl)}</div></div></div>` : ""}
+      </div>
+    </div>`
+    : "";
   let segmentHtml = "";
   for (let i = 0; i < segCount; i++) {
     const letter = String.fromCharCode(65 + i);
@@ -329,6 +424,7 @@ export function renderScriptEditor() {
       <button class="editor-close-btn" id="closeScriptPanelBtn">${t("closePanel")}</button>
     </div>
     <p class="editor-hint">${t("scriptEditHint")}</p>
+    ${remakeMetaHtml}
     <div class="editor-duration-row" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <label class="editor-label" style="margin:0;">${durationLabel}</label>
       <select id="scriptDurationSelect" style="padding:4px 8px;border-radius:8px;border:1px solid #c0d2ec;">
