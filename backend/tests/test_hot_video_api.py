@@ -4,6 +4,19 @@ import pytest
 from flask import Flask, jsonify
 
 
+class _VertexResp:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
 @pytest.fixture()
 def hot_video_client():
     from shoplive.backend.api.hot_video_api import register_hot_video_routes
@@ -46,9 +59,10 @@ def hot_video_client():
 class TestHotVideoAnalyzeApi:
     endpoint = "/api/hot-video/remake/analyze"
 
-    def test_returns_llm_analysis_payload(self, monkeypatch, hot_video_client):
-        client, llm_state = hot_video_client
+    def test_returns_vertex_analysis_payload(self, monkeypatch, hot_video_client):
+        client, _llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
+        import requests
 
         monkeypatch.setattr(
             mod,
@@ -68,30 +82,32 @@ class TestHotVideoAnalyzeApi:
                 },
             },
         )
-        llm_state["response"] = (
-            200,
-            {
-                "ok": True,
-                "response": {
-                    "choices": [{
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "summary": "这是一条高转化参考视频。",
-                                    "hook": "前三秒直接展示结果",
-                                    "structure": [{"title": "钩子", "summary": "先抛结果", "beats": ["结果先行"]}],
-                                    "shot_plan": [{"shot": "镜头1", "duration_seconds": 4, "visual": "近景展示", "voiceover": "直接上结果", "onscreen_text": "先看效果"}],
-                                    "voiceover_script": "直接上结果，再解释原因。",
-                                    "remake_script": "[脚本 A]\n镜头1：直接上结果。",
-                                    "remake_prompt": "hero video prompt",
-                                    "analysis_notes": "保留节奏，替换商品。",
-                                },
-                                ensure_ascii=False,
-                            )
+        monkeypatch.setattr(
+            requests,
+            "post",
+            lambda *args, **kwargs: _VertexResp(
+                {
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "text": json.dumps(
+                                    {
+                                        "summary": "这是一条高转化参考视频。",
+                                        "hook": "前三秒直接展示结果",
+                                        "structure": [{"title": "钩子", "summary": "先抛结果", "beats": ["结果先行"]}],
+                                        "shot_plan": [{"shot": "镜头1", "duration_seconds": 4, "visual": "近景展示", "voiceover": "直接上结果", "onscreen_text": "先看效果"}],
+                                        "voiceover_script": "直接上结果，再解释原因。",
+                                        "remake_script": "[脚本 A]\n镜头1：直接上结果。",
+                                        "remake_prompt": "hero video prompt",
+                                        "analysis_notes": "保留节奏，替换商品。",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }]
                         }
                     }]
-                },
-            },
+                }
+            ),
         )
 
         resp = client.post(
@@ -99,7 +115,6 @@ class TestHotVideoAnalyzeApi:
             json={
                 "video_url": "https://v.douyin.com/abc/",
                 "language": "zh",
-                "api_key": "demo-key",
                 "product_name": "测试商品",
                 "selling_points": "卖点1,卖点2",
             },
@@ -107,15 +122,16 @@ class TestHotVideoAnalyzeApi:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
-        assert data["source"] == "llm"
+        assert data["source"] == "vertex"
         assert data["summary"] == "这是一条高转化参考视频。"
         assert data["resolved_video_url"] == "https://cdn.example.com/video.mp4"
         assert data["share_resolution"]["strategy"] == "html_extract"
         assert data["remake_prompt"] == "hero video prompt"
 
-    def test_falls_back_without_api_key(self, monkeypatch, hot_video_client):
+    def test_falls_back_when_vertex_analysis_fails(self, monkeypatch, hot_video_client):
         client, _llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
+        import requests
 
         monkeypatch.setattr(
             mod,
@@ -134,6 +150,11 @@ class TestHotVideoAnalyzeApi:
                     "strategy": "html_extract",
                 },
             },
+        )
+        monkeypatch.setattr(
+            requests,
+            "post",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vertex unavailable")),
         )
 
         resp = client.post(
@@ -154,6 +175,52 @@ class TestHotVideoAnalyzeApi:
         assert data["share_resolution"]["strategy"] == "html_extract"
         assert data["resolved_page_url"] == "https://www.xiaohongshu.com/explore/demo"
 
+    def test_fallback_keeps_share_resolution_when_asr_stage_fails(self, monkeypatch, hot_video_client):
+        client, _llm_state = hot_video_client
+        from shoplive.backend.api import hot_video_api as mod
+        import requests
+
+        monkeypatch.setattr(
+            mod,
+            "_run_video_asr",
+            lambda *args, **kwargs: {
+                "ok": False,
+                "subtitles": [],
+                "raw_text": "",
+                "cached": False,
+                "asr_error": "connection reset",
+                "resolved_video_url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=demo123",
+                "resolved_page_url": "https://www.iesdouyin.com/share/video/123",
+                "share_resolution": {
+                    "input_url": "https://v.douyin.com/demo",
+                    "resolved_video_url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=demo123",
+                    "resolved_page_url": "https://www.iesdouyin.com/share/video/123",
+                    "strategy": "html_extract",
+                },
+            },
+        )
+        monkeypatch.setattr(
+            requests,
+            "post",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vertex unavailable")),
+        )
+
+        resp = client.post(
+            self.endpoint,
+            json={
+                "video_url": "https://v.douyin.com/demo",
+                "language": "zh",
+                "product_name": "测试商品",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["source"] == "fallback"
+        assert data["asr_error"] == "connection reset"
+        assert data["share_resolution"]["strategy"] == "html_extract"
+        assert data["resolved_page_url"] == "https://www.iesdouyin.com/share/video/123"
+
     def test_validation_rejects_invalid_video_url(self, hot_video_client):
         client, _llm_state = hot_video_client
         resp = client.post(self.endpoint, json={"video_url": "not-a-url"})
@@ -165,6 +232,7 @@ class TestHotVideoAnalyzeApi:
     def test_validation_accepts_share_text_with_embedded_url(self, monkeypatch, hot_video_client):
         client, _llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
+        import requests
 
         captured = {}
 
@@ -181,6 +249,13 @@ class TestHotVideoAnalyzeApi:
             }
 
         monkeypatch.setattr(mod, "_run_video_asr", _fake_asr)
+        monkeypatch.setattr(
+            requests,
+            "post",
+            lambda *args, **kwargs: _VertexResp(
+                {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
+            ),
+        )
         resp = client.post(
             self.endpoint,
             json={
@@ -224,3 +299,29 @@ def test_run_video_asr_returns_400_when_share_link_unresolved():
     assert payload["ok"] is False
     assert "未解析到可下载的视频直链" in payload["error"]
     assert called["download"] is False
+
+
+def test_run_video_asr_preserves_share_resolution_when_download_fails():
+    from shoplive.backend.api.hot_video_api import _run_video_asr
+
+    result = _run_video_asr(
+        {"video_url": "https://v.douyin.com/abc123/", "language": "zh"},
+        json_error=lambda message, status=400, **extra: ({"ok": False, "error": message, **extra}, status),
+        parse_common_payload=lambda payload: ("demo-project", "/tmp/fake-key.json", payload.get("proxy", ""), payload.get("model", "")),
+        get_access_token=lambda *_args, **_kwargs: "fake-token",
+        build_proxies=lambda *_args, **_kwargs: {},
+        download_video_to_file=lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionResetError("connection reset")),
+        resolve_share_url=lambda *_args, **_kwargs: {
+            "input_url": "https://v.douyin.com/abc123/",
+            "resolved_video_url": "https://aweme.snssdk.com/aweme/v1/play/?video_id=demo123",
+            "resolved_page_url": "https://www.iesdouyin.com/share/video/123",
+            "strategy": "html_extract",
+        },
+    )
+
+    assert isinstance(result, dict)
+    assert result["ok"] is False
+    assert "connection reset" in result["asr_error"]
+    assert result["resolved_video_url"] == "https://aweme.snssdk.com/aweme/v1/play/?video_id=demo123"
+    assert result["resolved_page_url"] == "https://www.iesdouyin.com/share/video/123"
+    assert result["share_resolution"]["strategy"] == "html_extract"

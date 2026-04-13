@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, Tuple
 from flask import g, jsonify
 
 from shoplive.backend.audit import AuditedOp
+from shoplive.backend.common.helpers import extract_vertex_text
 from shoplive.backend.share_url_resolver import resolve_video_share_url
 from shoplive.backend.scraper.fetchers import fetch_html_with_playwright
 from shoplive.backend.schemas import HotVideoRemakeRequest
@@ -250,7 +251,7 @@ def _normalize_analysis_payload(parsed: Dict, req_dict: Dict, subtitles: List[Di
     voiceover_script = str(parsed.get("voiceover_script") or parsed.get("subtitle_style") or fallback["voiceover_script"]).strip()
     remake_script = str(parsed.get("remake_script") or fallback["remake_script"]).strip()
     remake_prompt = str(parsed.get("remake_prompt") or fallback["remake_prompt"]).strip()
-    analysis_notes = str(parsed.get("analysis_notes") or parsed.get("caution") or fallback.get("analysis_notes") or "").strip()
+    analysis_notes = str(parsed.get("analysis_notes") or parsed.get("caution") or "").strip()
     structure = _clean_structure(parsed.get("structure"), language) or fallback["structure"]
     shot_plan = _clean_shot_plan(parsed.get("shot_plan"), language, int(req_dict.get("duration") or 16), hook, transcript)
     return {
@@ -333,6 +334,56 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
     ]
 
 
+def _build_analysis_prompt(req_dict: Dict, subtitles: List[Dict], transcript: str) -> str:
+    messages = _build_analysis_messages(req_dict, subtitles, transcript)
+    return "\n\n".join(
+        str(message.get("content") or "").strip()
+        for message in messages
+        if str(message.get("content") or "").strip()
+    )
+
+
+def _build_analysis_response_schema() -> Dict[str, object]:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "summary": {"type": "STRING"},
+            "hook": {"type": "STRING"},
+            "structure": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "summary": {"type": "STRING"},
+                        "beats": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"},
+                        },
+                    },
+                },
+            },
+            "shot_plan": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "shot": {"type": "STRING"},
+                        "duration_seconds": {"type": "NUMBER"},
+                        "visual": {"type": "STRING"},
+                        "voiceover": {"type": "STRING"},
+                        "onscreen_text": {"type": "STRING"},
+                    },
+                },
+            },
+            "voiceover_script": {"type": "STRING"},
+            "remake_script": {"type": "STRING"},
+            "remake_prompt": {"type": "STRING"},
+            "analysis_notes": {"type": "STRING"},
+        },
+    }
+
+
 def _run_video_asr(
     payload: Dict,
     *,
@@ -371,6 +422,7 @@ def _run_video_asr(
     project_id, key_file, proxy, _ = parse_common_payload(payload)
     resolution = resolve_share_url(video_url, proxy, 20)
     resolved_video_url = str(resolution.get("resolved_video_url") or video_url).strip() or video_url
+    resolved_page_url = str(resolution.get("resolved_page_url") or resolved_video_url).strip() or resolved_video_url
     if str(resolution.get("strategy") or "").strip() == "unresolved_page":
         return json_error(
             (
@@ -380,71 +432,85 @@ def _run_video_asr(
             ),
             400,
         )
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir) / "hot_video_asr.mp4"
-        download_video_to_file(resolved_video_url, tmp_path, proxy)
-        video_bytes = tmp_path.read_bytes()
-    if len(video_bytes) > 20 * 1024 * 1024:
-        return json_error("视频文件过大（>20MB），暂不支持爆款视频解析", 400)
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / "hot_video_asr.mp4"
+            download_video_to_file(resolved_video_url, tmp_path, proxy)
+            video_bytes = tmp_path.read_bytes()
+        if len(video_bytes) > 20 * 1024 * 1024:
+            return json_error("视频文件过大（>20MB），暂不支持爆款视频解析", 400)
 
-    token = get_access_token(key_file, proxy, 20)
-    lang_name = "Chinese" if language == "zh" else "English"
-    prompt = (
-        f"Watch this short video carefully and produce timestamped subtitles in {lang_name}. "
-        f"Return at most {max_lines} lines. "
-        "Format each line exactly as: [START_SEC-END_SEC] TEXT\n"
-        "Return only the timestamp lines. If there is no speech, return '无语音内容'."
-    )
-    video_b64 = base64.b64encode(video_bytes).decode("ascii")
-    url = (
-        f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
-        f"/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
-    )
-    body = {
-        "contents": [{
-            "role": "user",
-            "parts": [
-                {"inline_data": {"mime_type": "video/mp4", "data": video_b64}},
-                {"text": prompt},
-            ],
-        }],
-        "generation_config": {"temperature": 0.1, "max_output_tokens": 2048},
-    }
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=utf-8",
-    }
-    resp = _req.post(url, json=body, headers=headers, proxies=build_proxies(proxy) or None, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
-    raw_text = ""
-    for cand in (data.get("candidates") or []):
-        for part in (cand.get("content", {}).get("parts") or []):
-            raw_text += part.get("text", "")
+        token = get_access_token(key_file, proxy, 20)
+        lang_name = "Chinese" if language == "zh" else "English"
+        prompt = (
+            f"Watch this short video carefully and produce timestamped subtitles in {lang_name}. "
+            f"Return at most {max_lines} lines. "
+            "Format each line exactly as: [START_SEC-END_SEC] TEXT\n"
+            "Return only the timestamp lines. If there is no speech, return '无语音内容'."
+        )
+        video_b64 = base64.b64encode(video_bytes).decode("ascii")
+        url = (
+            f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
+            f"/locations/global/publishers/google/models/gemini-2.5-flash:generateContent"
+        )
+        body = {
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"inline_data": {"mime_type": "video/mp4", "data": video_b64}},
+                    {"text": prompt},
+                ],
+            }],
+            "generation_config": {"temperature": 0.1, "max_output_tokens": 2048},
+        }
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        resp = _req.post(url, json=body, headers=headers, proxies=build_proxies(proxy) or None, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        raw_text = ""
+        for cand in (data.get("candidates") or []):
+            for part in (cand.get("content", {}).get("parts") or []):
+                raw_text += part.get("text", "")
 
-    line_pat = re.compile(r"\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]\s*(.+)")
-    subtitles = []
-    for line in raw_text.splitlines():
-        match = line_pat.search(line.strip())
-        if not match:
-            continue
-        start = float(match.group(1))
-        end = float(match.group(2))
-        text = match.group(3).strip()
-        if end > start and text:
-            subtitles.append({"start": start, "end": end, "text": text})
-        if len(subtitles) >= max_lines:
-            break
-    _ASR_CACHE[cache_key] = (subtitles, raw_text, time.time())
-    return {
-        "ok": True,
-        "subtitles": subtitles,
-        "raw_text": raw_text,
-        "cached": False,
-        "resolved_video_url": resolved_video_url,
-        "resolved_page_url": str(resolution.get("resolved_page_url") or resolved_video_url).strip() or resolved_video_url,
-        "share_resolution": resolution,
-    }
+        line_pat = re.compile(r"\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]\s*(.+)")
+        subtitles = []
+        for line in raw_text.splitlines():
+            match = line_pat.search(line.strip())
+            if not match:
+                continue
+            start = float(match.group(1))
+            end = float(match.group(2))
+            text = match.group(3).strip()
+            if end > start and text:
+                subtitles.append({"start": start, "end": end, "text": text})
+            if len(subtitles) >= max_lines:
+                break
+        _ASR_CACHE[cache_key] = (subtitles, raw_text, time.time())
+        return {
+            "ok": True,
+            "subtitles": subtitles,
+            "raw_text": raw_text,
+            "cached": False,
+            "resolved_video_url": resolved_video_url,
+            "resolved_page_url": resolved_page_url,
+            "share_resolution": resolution,
+            "asr_error": "",
+        }
+    except Exception as exc:
+        logger.warning("hot video ASR stage failed for %s: %s", video_url, exc)
+        return {
+            "ok": False,
+            "subtitles": [],
+            "raw_text": "",
+            "cached": False,
+            "resolved_video_url": resolved_video_url,
+            "resolved_page_url": resolved_page_url,
+            "share_resolution": resolution,
+            "asr_error": str(exc),
+        }
 
 
 def register_hot_video_routes(
@@ -501,6 +567,7 @@ def register_hot_video_routes(
             subtitles = asr_result.get("subtitles") or []
             transcript = str(asr_result.get("raw_text") or "").strip()
             asr_cached = bool(asr_result.get("cached"))
+            asr_error = str(asr_result.get("asr_error") or "").strip()
             resolved_video_url = str(asr_result.get("resolved_video_url") or resolved_video_url).strip() or resolved_video_url
             resolved_page_url = str(asr_result.get("resolved_page_url") or resolved_page_url).strip() or resolved_page_url
             share_resolution = asr_result.get("share_resolution") if isinstance(asr_result.get("share_resolution"), dict) else share_resolution
@@ -531,41 +598,55 @@ def register_hot_video_routes(
         cached_analysis = _ANALYSIS_CACHE.get(cache_key)
         if cached_analysis and time.time() - cached_analysis[1] < _ANALYSIS_CACHE_TTL:
             analysis = cached_analysis[0]
-            source = "llm_cached"
+            source = "vertex_cached"
         else:
             analysis = {}
             source = "fallback"
-            api_base = (
-                payload.get("api_base")
-                or os.getenv("LITELLM_API_BASE")
-                or "https://litellm.shoplazza.site"
-            ).strip().rstrip("/")
-            api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
-            model = (payload.get("model") or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
             proxy = str(payload.get("proxy") or "").strip()
-            if api_key:
-                try:
-                    status_code, data_wrap = call_litellm_chat(
-                        api_base=api_base,
-                        api_key=api_key,
-                        model=model,
-                        messages=_build_analysis_messages(payload, subtitles, transcript),
-                        proxy=proxy,
-                        temperature=0.4,
-                        max_tokens=1800,
-                    )
-                    if status_code < 400 and data_wrap.get("ok"):
-                        raw_content = extract_chat_content(data_wrap.get("response", {}))
-                        parsed = try_parse_json_object(raw_content)
-                        analysis = _normalize_analysis_payload(parsed, payload, subtitles, transcript, asr_error)
-                        source = "llm"
-                        _ANALYSIS_CACHE[cache_key] = (analysis, time.time())
-                    else:
-                        analysis = _build_fallback_analysis(payload, subtitles, transcript, f"llm_status:{status_code}")
-                except Exception as exc:
-                    analysis = _build_fallback_analysis(payload, subtitles, transcript, str(exc))
-            else:
-                analysis = _build_fallback_analysis(payload, subtitles, transcript, "missing_api_key")
+            try:
+                import requests as _req
+
+                project_id, key_file, _proxy, _ = parse_common_payload(payload)
+                model = (
+                    payload.get("model")
+                    or os.getenv("HOT_VIDEO_ANALYSIS_MODEL")
+                    or "gemini-2.5-flash"
+                ).strip()
+                location = str(payload.get("location") or "global").strip()
+                token = get_access_token(key_file, proxy, 20)
+                url = (
+                    f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
+                    f"/locations/{location}/publishers/google/models/{model}:generateContent"
+                )
+                resp = _req.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                    json={
+                        "contents": [{
+                            "role": "user",
+                            "parts": [{"text": _build_analysis_prompt(payload, subtitles, transcript)}],
+                        }],
+                        "generationConfig": {
+                            "temperature": 0.2,
+                            "maxOutputTokens": 4096,
+                            "responseMimeType": "application/json",
+                            "responseSchema": _build_analysis_response_schema(),
+                        },
+                    },
+                    proxies=build_proxies(proxy) or None,
+                    timeout=120,
+                )
+                resp.raise_for_status()
+                raw_content = extract_vertex_text(resp.json())
+                parsed = try_parse_json_object(raw_content)
+                analysis = _normalize_analysis_payload(parsed, payload, subtitles, transcript, asr_error)
+                source = "vertex"
+                _ANALYSIS_CACHE[cache_key] = (analysis, time.time())
+            except Exception as exc:
+                analysis = _build_fallback_analysis(payload, subtitles, transcript, str(exc))
 
         if not analysis:
             analysis = _build_fallback_analysis(payload, subtitles, transcript, asr_error or "empty_analysis")

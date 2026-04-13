@@ -12,6 +12,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,39 @@ from shoplive.backend.infra import (
 
 MAX_INLINE_VIDEO_B64_CHARS = 40 * 1024 * 1024
 MAX_INLINE_VIDEO_BYTES = 30 * 1024 * 1024
+
+_GENERIC_VIDEO_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+    "Mobile/15E148 Safari/604.1"
+)
+_DOUYIN_ANDROID_UA = (
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/123.0.0.0 Mobile Safari/537.36"
+)
+
+
+def _video_download_header_candidates(video_url: str) -> List[Dict[str, str]]:
+    raw = str(video_url or "").strip()
+    host = (urlparse(raw).netloc or "").lower()
+    headers: List[Dict[str, str]] = [{
+        "User-Agent": _GENERIC_VIDEO_UA,
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }]
+    if any(token in host for token in ("douyinvod.com", "aweme.snssdk.com", "iesdouyin.com", "douyin.com")):
+        headers[0]["Referer"] = "https://www.iesdouyin.com/"
+        headers.append({
+            "User-Agent": _DOUYIN_ANDROID_UA,
+            "Accept": "*/*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://www.iesdouyin.com/",
+            "Range": "bytes=0-",
+        })
+    elif any(token in host for token in ("xhscdn.com", "xiaohongshu.com", "xhslink.com")):
+        headers[0]["Referer"] = "https://www.xiaohongshu.com/"
+    return headers
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +187,25 @@ def download_video_to_file(video_url: str, output_file: Path, proxy: str):
         return
     if raw.startswith("http://") or raw.startswith("https://"):
         _MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024  # 2 GB hard cap
-        resp = requests.get(raw, timeout=180, proxies=build_proxies(proxy), stream=True)
-        resp.raise_for_status()
+        last_error = None
+        resp = None
+        for headers in _video_download_header_candidates(raw):
+            try:
+                resp = requests.get(
+                    raw,
+                    timeout=180,
+                    proxies=build_proxies(proxy),
+                    stream=True,
+                    headers=headers,
+                    allow_redirects=True,
+                )
+                resp.raise_for_status()
+                break
+            except Exception as exc:
+                last_error = exc
+                resp = None
+        if resp is None:
+            raise last_error or RuntimeError("视频下载失败")
         content_length = int(resp.headers.get("Content-Length") or 0)
         if content_length and content_length > _MAX_VIDEO_BYTES:
             raise ValueError(f"视频文件过大 ({content_length / 1e9:.1f} GB)，超出下载上限 2 GB")

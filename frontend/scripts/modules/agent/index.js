@@ -4765,11 +4765,15 @@ function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
   const summary = String(analysis.summary || data?.summary || "").trim();
   const hook = String(analysis.hook || data?.hook || "").trim();
   const notes = String(analysis.analysis_notes || data?.analysis_notes || "").trim();
+  const asrError = String(data?.asr_error || "").trim();
+  const source = String(data?.source || "").trim().toLowerCase();
   const structureLines = formatHotVideoStructure(analysis.structure || data?.structure || []);
   const resolvedVideoUrl = String(data?.resolved_video_url || analysis?.resolved_video_url || "").trim();
   const resolvedPageUrl = String(data?.resolved_page_url || analysis?.resolved_page_url || "").trim();
   const shareResolution = data?.share_resolution && typeof data.share_resolution === "object" ? data.share_resolution : {};
   const strategyLabel = formatHotVideoShareStrategy(String(shareResolution.strategy || "").trim());
+  const usedFallback = Boolean(asrError);
+  const usedLlmFallback = !usedFallback && source === "fallback";
   if (!remakePrompt && !remakeScript) {
     throw new Error(currentLang === "zh" ? "未拿到有效复刻结果" : "No remake package returned");
   }
@@ -4797,12 +4801,23 @@ function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
     hook ? t("hotVideoSummaryHook", { value: hook }) : "",
     structureLines ? t("hotVideoSummaryStructure", { value: structureLines }) : "",
     notes ? t("hotVideoSummaryNotes", { value: notes }) : "",
+    usedFallback ? t("hotVideoSummaryAsrWarning", {
+      value: currentLang === "zh"
+        ? "未完成真实视频字幕提取，当前结果基于兜底模板。"
+        : "Real subtitle extraction did not complete. This result is based on the fallback template.",
+    }) : "",
+    usedLlmFallback ? t("hotVideoSummaryLlmWarning", {
+      value: currentLang === "zh"
+        ? "已完成真实视频转写，但 LLM 分析服务鉴权失败，当前结构化拆解来自兜底模板。"
+        : "Real video transcription completed, but the LLM analysis service authentication failed. The structured breakdown is based on the fallback template.",
+    }) : "",
     strategyLabel ? t("hotVideoSummaryStrategy", { value: strategyLabel }) : "",
     resolvedVideoUrl && resolvedVideoUrl !== sourceUrl ? t("hotVideoSummaryResolvedVideo", { value: resolvedVideoUrl }) : "",
     resolvedPageUrl && resolvedPageUrl !== sourceUrl ? t("hotVideoSummaryResolvedPage", { value: resolvedPageUrl }) : "",
-    t("hotVideoReady"),
+    t(usedFallback ? "hotVideoReadyFallback" : "hotVideoReady"),
   ].filter(Boolean);
   pushSystemStateMsg(summaryLines.join("\n\n"), "done");
+  return { usedFallback, usedLlmFallback };
 }
 
 async function parseShopProductByUrl(inputUrl = "") {
@@ -5024,8 +5039,11 @@ async function parseHotVideoRemake(inputUrl = "") {
       120000
     );
     progress.stop();
-    applyHotVideoRemakeResult(data, url);
-    setHotVideoInlineStatus(t("hotVideoDone"), true);
+    const resultMeta = applyHotVideoRemakeResult(data, url) || {};
+    setHotVideoInlineStatus(
+      t(resultMeta.usedFallback ? "hotVideoDoneFallback" : resultMeta.usedLlmFallback ? "hotVideoDoneLlmFallback" : "hotVideoDone"),
+      true
+    );
   } catch (e) {
     progress.stop();
     const detail = String(e?.message || e || "").trim();
