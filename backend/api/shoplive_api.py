@@ -152,10 +152,8 @@ def register_shoplive_routes(
                 or "https://litellm.shoplazza.site"
             ).strip().rstrip("/")
             api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
-            model = (payload.get("model") or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+            model = (payload.get("model") or os.getenv("VERTEX_MODEL") or os.getenv("LITELLM_MODEL") or "gemini-2.5-flash").strip()
             proxy = (payload.get("proxy") or "").strip()
-            if not api_key:
-                return json_error("video prompt api_key 不能为空（可通过 payload.api_key 或 LITELLM_API_KEY 提供）")
 
             normalized = normalize_shoplive_brief(
                 {
@@ -218,7 +216,7 @@ def register_shoplive_routes(
                 or "https://litellm.shoplazza.site"
             ).strip().rstrip("/")
             api_key = (payload.get("api_key") or os.getenv("LITELLM_API_KEY") or "").strip()
-            model = (payload.get("model") or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+            model = (payload.get("model") or os.getenv("VERTEX_MODEL") or os.getenv("LITELLM_MODEL") or "gemini-2.5-flash").strip()
             proxy = (payload.get("proxy") or "").strip()
 
             def _base(ready: bool, **extra) -> dict:
@@ -252,7 +250,7 @@ def register_shoplive_routes(
                 if _cached_script:
                     script = _cached_script["script"]
                     script_source = "llm_cached"
-                elif api_key:
+                else:
                     try:
                         status_code, data_wrap = _build_shoplive_script_via_llm(
                             normalized=normalized,

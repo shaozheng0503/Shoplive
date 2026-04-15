@@ -622,15 +622,14 @@ def register_hot_video_routes(
             source = "fallback"
             proxy = str(payload.get("proxy") or "").strip()
             try:
-                api_base = (
-                    os.getenv("LITELLM_API_BASE") or "https://litellm.shoplazza.site"
-                ).rstrip("/")
-                api_key = (os.getenv("LITELLM_API_KEY") or "").strip()
+                api_base = ""
+                api_key = ""
                 model = (
                     payload.get("model")
                     or os.getenv("HOT_VIDEO_ANALYSIS_MODEL")
+                    or os.getenv("VERTEX_MODEL")
                     or os.getenv("LITELLM_MODEL")
-                    or "azure-gpt-5"
+                    or "gemini-2.5-flash"
                 ).strip()
                 messages = _build_analysis_messages(payload, subtitles, transcript)
                 status_code, data_wrap = call_litellm_chat(

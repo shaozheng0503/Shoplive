@@ -680,6 +680,291 @@ def call_litellm_chat_stream(
     )
 
 
+# ---------------------------------------------------------------------------
+# Vertex AI / Gemini direct wrappers
+# Same external interface as call_litellm_chat / call_litellm_chat_stream so
+# callers need zero changes — just swap the import alias in web_app.py.
+# api_base and api_key params are accepted but ignored; credentials come from
+# GOOGLE_APPLICATION_CREDENTIALS + VERTEX_PROJECT env vars.
+# ---------------------------------------------------------------------------
+
+def _resolve_vertex_model(model: str) -> str:
+    """Map arbitrary model names to a valid Vertex Gemini model ID.
+
+    Priority:
+      1. If model already looks like a Gemini ID (starts with 'gemini-'), use as-is.
+      2. Otherwise fall back to VERTEX_MODEL env var.
+      3. Hard default: gemini-2.5-flash.
+    """
+    if model and model.lower().startswith("gemini-"):
+        return model
+    return (os.getenv("VERTEX_MODEL") or "gemini-2.5-flash").strip()
+
+
+def _openai_messages_to_vertex(messages: List[Dict]) -> Tuple[Optional[Dict], List[Dict]]:
+    """Convert OpenAI messages list → (system_instruction, contents) for Gemini."""
+    system_parts: List[Dict] = []
+    contents: List[Dict] = []
+    for msg in messages:
+        role = str(msg.get("role") or "user").lower()
+        content = msg.get("content") or ""
+        if role == "system":
+            text = content if isinstance(content, str) else str(content)
+            if text:
+                system_parts.append({"text": text})
+            continue
+        vertex_role = "model" if role == "assistant" else "user"
+        if role == "tool":
+            # Tool result: convert to functionResponse part
+            name = str(msg.get("name") or msg.get("tool_call_id") or "tool")
+            try:
+                result = json.loads(content) if isinstance(content, str) else content
+            except Exception:
+                result = {"content": str(content)}
+            contents.append({"role": "user", "parts": [{"functionResponse": {"name": name, "response": result}}]})
+            continue
+        # Build parts from content
+        if isinstance(content, str):
+            parts: List[Dict] = [{"text": content}] if content else []
+        elif isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        parts.append({"text": item.get("text", "")})
+                    elif item.get("type") == "image_url":
+                        url = (item.get("image_url") or {}).get("url", "")
+                        if url.startswith("data:"):
+                            try:
+                                mime, b64 = url[5:].split(";base64,", 1)
+                                parts.append({"inlineData": {"mimeType": mime, "data": b64}})
+                            except Exception:
+                                pass
+        else:
+            parts = [{"text": str(content)}] if content else []
+        # tool_calls from assistant turn
+        for tc in (msg.get("tool_calls") or []):
+            fn = tc.get("function") or {}
+            fn_name = fn.get("name", "")
+            fn_args_str = fn.get("arguments", "{}")
+            try:
+                fn_args = json.loads(fn_args_str)
+            except Exception:
+                fn_args = {}
+            parts.append({"functionCall": {"name": fn_name, "args": fn_args}})
+        if parts:
+            contents.append({"role": vertex_role, "parts": parts})
+    system_instruction = {"parts": system_parts} if system_parts else None
+    return system_instruction, contents
+
+
+def _openai_tools_to_vertex(tools: List[Dict]) -> List[Dict]:
+    """Convert OpenAI function-calling tools → Vertex functionDeclarations."""
+    decls = []
+    for tool in (tools or []):
+        if tool.get("type") == "function":
+            fn = tool.get("function") or {}
+            decl: Dict[str, Any] = {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+            }
+            if fn.get("parameters"):
+                decl["parameters"] = fn["parameters"]
+            decls.append(decl)
+    return [{"functionDeclarations": decls}] if decls else []
+
+
+def _vertex_response_to_openai(data: Dict) -> Dict:
+    """Wrap a Vertex generateContent response into OpenAI chat completion shape.
+
+    This lets all existing extract_chat_content / extract_tool_calls callers
+    work without modification.
+    """
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return {"choices": []}
+    cand = candidates[0] if isinstance(candidates[0], dict) else {}
+    parts = (cand.get("content") or {}).get("parts") or []
+    text_parts: List[str] = []
+    tool_calls: List[Dict] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if "text" in part:
+            text_parts.append(part["text"])
+        elif "functionCall" in part:
+            fc = part["functionCall"]
+            tool_calls.append({
+                "id": f"call_{fc.get('name', 'fn')}_{len(tool_calls)}",
+                "type": "function",
+                "function": {
+                    "name": fc.get("name", ""),
+                    "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
+                },
+            })
+    message: Dict[str, Any] = {"role": "assistant", "content": "\n".join(text_parts) or None}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return {
+        "choices": [{"message": message, "finish_reason": cand.get("finishReason", "stop")}],
+        "model": data.get("modelVersion", ""),
+    }
+
+
+def _vertex_gen_config(temperature, max_tokens, top_p, json_mode: bool = False) -> Dict:
+    cfg: Dict[str, Any] = {}
+    if temperature is not None:
+        cfg["temperature"] = temperature
+    if max_tokens is not None:
+        cfg["maxOutputTokens"] = max_tokens
+    if top_p is not None:
+        cfg["topP"] = top_p
+    if json_mode:
+        cfg["responseMimeType"] = "application/json"
+    return cfg
+
+
+def _messages_want_json(messages: List[Dict]) -> bool:
+    """Return True when any system/user message explicitly requests JSON output.
+    Used to auto-enable responseMimeType=application/json on Vertex calls.
+    """
+    _json_signals = ("json", "JSON", "application/json")
+    for msg in messages:
+        text = str(msg.get("content") or "")
+        if any(s in text for s in _json_signals):
+            return True
+    return False
+
+
+def call_vertex_chat(
+    *,
+    api_base: str = "",   # ignored – kept for drop-in compat with call_litellm_chat callers
+    api_key: str = "",    # ignored – kept for drop-in compat
+    model: str,
+    messages: List[Dict],
+    proxy: str = "",
+    temperature=None,
+    max_tokens=None,
+    top_p=None,
+    tools: Optional[List[Dict]] = None,
+) -> Tuple[int, Dict]:
+    """Direct Vertex AI / Gemini replacement for call_litellm_chat.
+
+    Reads credentials from GOOGLE_APPLICATION_CREDENTIALS and project from
+    VERTEX_PROJECT (default: qy-shoplazza-02).
+    """
+    key_file = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    project_id = (os.getenv("VERTEX_PROJECT") or "qy-shoplazza-02").strip()
+    location = (os.getenv("VERTEX_LOCATION") or "us-central1").strip()
+    gemini_model = _resolve_vertex_model(model)
+
+    system_instruction, contents = _openai_messages_to_vertex(messages)
+    body: Dict[str, Any] = {"contents": contents}
+    if system_instruction:
+        body["systemInstruction"] = system_instruction
+    # Auto-enable JSON mode when the prompt requests JSON output — this forces
+    # Gemini to return bare JSON without markdown code fences.
+    json_mode = not tools and _messages_want_json(messages)
+    cfg = _vertex_gen_config(temperature, max_tokens, top_p, json_mode=json_mode)
+    if cfg:
+        body["generationConfig"] = cfg
+    if tools:
+        vtools = _openai_tools_to_vertex(tools)
+        if vtools:
+            body["tools"] = vtools
+
+    token = get_access_token(key_file, proxy)
+    url = (
+        f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
+        f"/locations/{location}/publishers/google/models/{gemini_model}:generateContent"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=(10, 90), proxies=build_proxies(proxy))
+        if "json" in (resp.headers.get("content-type") or ""):
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {"raw": resp.text}
+        else:
+            data = {"raw": resp.text}
+        response_data = _vertex_response_to_openai(data) if resp.ok else data
+        return resp.status_code, {"ok": resp.ok, "status_code": resp.status_code, "response": response_data}
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        raise RuntimeError(f"Vertex AI chat call failed: {e}") from e
+
+
+def call_vertex_chat_stream(
+    *,
+    api_base: str = "",   # ignored
+    api_key: str = "",    # ignored
+    model: str,
+    messages: List[Dict],
+    proxy: str = "",
+    temperature=None,
+    max_tokens=None,
+    top_p=None,
+) -> Iterator[Dict[str, Any]]:
+    """Streaming Vertex AI / Gemini replacement for call_litellm_chat_stream.
+
+    Yields the same {"type": "delta"/"done", ...} events as call_litellm_chat_stream.
+    """
+    key_file = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    project_id = (os.getenv("VERTEX_PROJECT") or "qy-shoplazza-02").strip()
+    location = (os.getenv("VERTEX_LOCATION") or "us-central1").strip()
+    gemini_model = _resolve_vertex_model(model)
+
+    system_instruction, contents = _openai_messages_to_vertex(messages)
+    body: Dict[str, Any] = {"contents": contents}
+    if system_instruction:
+        body["systemInstruction"] = system_instruction
+    cfg = _vertex_gen_config(temperature, max_tokens, top_p)
+    if cfg:
+        body["generationConfig"] = cfg
+
+    token = get_access_token(key_file, proxy)
+    url = (
+        f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
+        f"/locations/{location}/publishers/google/models/{gemini_model}:streamGenerateContent?alt=sse"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    full_chunks: List[str] = []
+    try:
+        with requests.post(url, headers=headers, json=body, timeout=(10, 120),
+                           proxies=build_proxies(proxy), stream=True) as resp:
+            if not resp.ok:
+                ct = (resp.headers.get("content-type") or "").lower()
+                err_data: Any = resp.json() if "json" in ct else {"raw": resp.text[:500]}
+                raise RuntimeError(f"Vertex AI stream failed status={resp.status_code}: {err_data}")
+            for line in resp.iter_lines(decode_unicode=True):
+                txt = str(line or "").strip()
+                if not txt.startswith("data:"):
+                    continue
+                payload_str = txt[5:].strip()
+                if not payload_str:
+                    continue
+                try:
+                    chunk = json.loads(payload_str)
+                except Exception:
+                    continue
+                for cand in (chunk.get("candidates") or []):
+                    for part in ((cand.get("content") or {}).get("parts") or []):
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            delta = part["text"]
+                            if delta:
+                                full_chunks.append(delta)
+                                yield {"type": "delta", "delta": delta}
+        yield {"type": "done", "content": "".join(full_chunks), "ok": True, "status_code": 200}
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        raise RuntimeError(f"Vertex AI stream call failed: {e}") from e
+
+
 def extract_gs_paths(obj) -> List[str]:
     found = set()
 

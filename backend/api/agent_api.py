@@ -1226,7 +1226,7 @@ def register_agent_routes(
                 or "https://litellm.shoplazza.site"
             ).strip().rstrip("/")
             api_key = (req.api_key or os.getenv("LITELLM_API_KEY") or "").strip()
-            model = (req.model or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+            model = (req.model or os.getenv("VERTEX_MODEL") or os.getenv("LITELLM_MODEL") or "gemini-2.5-flash").strip()
             proxy = req.proxy
             messages = req.messages
             prompt = req.prompt
@@ -1238,8 +1238,8 @@ def register_agent_routes(
             if not model:
                 return json_error(
                     "agent model 不能为空",
-                    recovery_suggestion="Set model in the request payload (e.g., 'azure-gpt-5'), "
-                                        "or configure the LITELLM_MODEL environment variable.",
+                    recovery_suggestion="Set model in the request payload (e.g., 'gemini-2.5-flash'), "
+                                        "or configure the VERTEX_MODEL environment variable.",
                     error_code="MISSING_MODEL",
                 )
 
@@ -1449,6 +1449,7 @@ def register_agent_routes(
           error        {"ok", "error", "error_code"}
         """
         import shoplive.backend.common.helpers as _h
+        _h.call_litellm_chat = _h.call_vertex_chat
         from shoplive.backend.tool_registry import build_openai_tools
 
         _t0 = time.monotonic()
@@ -1456,7 +1457,7 @@ def register_agent_routes(
 
         api_base = (req.api_base or os.getenv("LITELLM_API_BASE") or "https://litellm.shoplazza.site").rstrip("/")
         api_key  = req.api_key or os.getenv("LITELLM_API_KEY") or ""
-        model    = (req.model or os.getenv("LITELLM_MODEL") or "azure-gpt-5").strip()
+        model    = (req.model or os.getenv("VERTEX_MODEL") or os.getenv("LITELLM_MODEL") or "gemini-2.5-flash").strip()
         proxy    = req.proxy
         max_rounds = req.max_rounds
         context  = req.context or {}
