@@ -29,7 +29,7 @@ def _patch_llm(return_value=None, side_effect=None):
         kwargs["return_value"] = return_value
     if side_effect is not None:
         kwargs["side_effect"] = side_effect
-    return patch.object(_helpers_mod, "call_litellm_chat", **kwargs)
+    return patch.object(_helpers_mod, "call_vertex_chat", **kwargs)
 
 
 # ---------------------------------------------------------------------------

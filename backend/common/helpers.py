@@ -942,6 +942,8 @@ def call_vertex_chat_stream(
                 ct = (resp.headers.get("content-type") or "").lower()
                 err_data: Any = resp.json() if "json" in ct else {"raw": resp.text[:500]}
                 raise RuntimeError(f"Vertex AI stream failed status={resp.status_code}: {err_data}")
+            # Force UTF-8: Vertex returns UTF-8 but requests may guess ISO-8859-1
+            resp.encoding = "utf-8"
             for line in resp.iter_lines(decode_unicode=True):
                 txt = str(line or "").strip()
                 if not txt.startswith("data:"):

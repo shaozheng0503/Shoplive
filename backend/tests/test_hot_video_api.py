@@ -21,8 +21,11 @@ class _VertexResp:
 def hot_video_client():
     from shoplive.backend.api.hot_video_api import register_hot_video_routes
 
+    # Control LLM behaviour per-test: set "raise" to an exception to simulate failure,
+    # or set "response" to control what call_litellm_chat returns.
     llm_state = {
         "response": (200, {"ok": True, "response": {"choices": [{"message": {"content": "{}"}}]}}),
+        "raise": None,
     }
 
     def _json_error(message, status=400, **extra):
@@ -31,6 +34,8 @@ def hot_video_client():
         return jsonify(payload), status
 
     def _call_litellm_chat(**_kwargs):
+        if llm_state.get("raise"):
+            raise llm_state["raise"]
         return llm_state["response"]
 
     def _extract_chat_content(data):
@@ -60,9 +65,20 @@ class TestHotVideoAnalyzeApi:
     endpoint = "/api/hot-video/remake/analyze"
 
     def test_returns_vertex_analysis_payload(self, monkeypatch, hot_video_client):
-        client, _llm_state = hot_video_client
+        client, llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
-        import requests
+
+        analysis_json = {
+            "summary": "这是一条高转化参考视频。",
+            "hook": "前三秒直接展示结果",
+            "structure": [{"title": "钩子", "summary": "先抛结果", "beats": ["结果先行"]}],
+            "shot_plan": [{"shot": "镜头1", "duration_seconds": 4, "visual": "近景展示", "voiceover": "直接上结果", "onscreen_text": "先看效果"}],
+            "voiceover_script": "直接上结果，再解释原因。",
+            "remake_script": "[脚本 A]\n镜头1：直接上结果。",
+            "remake_prompt": "hero video prompt",
+            "analysis_notes": "",
+        }
+        llm_state["response"] = (200, {"ok": True, "response": {"choices": [{"message": {"content": json.dumps(analysis_json, ensure_ascii=False)}}]}})
 
         monkeypatch.setattr(
             mod,
@@ -82,33 +98,6 @@ class TestHotVideoAnalyzeApi:
                 },
             },
         )
-        monkeypatch.setattr(
-            requests,
-            "post",
-            lambda *args, **kwargs: _VertexResp(
-                {
-                    "candidates": [{
-                        "content": {
-                            "parts": [{
-                                "text": json.dumps(
-                                    {
-                                        "summary": "这是一条高转化参考视频。",
-                                        "hook": "前三秒直接展示结果",
-                                        "structure": [{"title": "钩子", "summary": "先抛结果", "beats": ["结果先行"]}],
-                                        "shot_plan": [{"shot": "镜头1", "duration_seconds": 4, "visual": "近景展示", "voiceover": "直接上结果", "onscreen_text": "先看效果"}],
-                                        "voiceover_script": "直接上结果，再解释原因。",
-                                        "remake_script": "[脚本 A]\n镜头1：直接上结果。",
-                                        "remake_prompt": "hero video prompt",
-                                        "analysis_notes": "保留节奏，替换商品。",
-                                    },
-                                    ensure_ascii=False,
-                                )
-                            }]
-                        }
-                    }]
-                }
-            ),
-        )
 
         resp = client.post(
             self.endpoint,
@@ -122,16 +111,17 @@ class TestHotVideoAnalyzeApi:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["ok"] is True
-        assert data["source"] == "vertex"
+        assert data["source"] == "litellm"
         assert data["summary"] == "这是一条高转化参考视频。"
         assert data["resolved_video_url"] == "https://cdn.example.com/video.mp4"
         assert data["share_resolution"]["strategy"] == "html_extract"
         assert data["remake_prompt"] == "hero video prompt"
 
     def test_falls_back_when_vertex_analysis_fails(self, monkeypatch, hot_video_client):
-        client, _llm_state = hot_video_client
+        client, llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
-        import requests
+
+        llm_state["raise"] = RuntimeError("vertex unavailable")
 
         monkeypatch.setattr(
             mod,
@@ -150,11 +140,6 @@ class TestHotVideoAnalyzeApi:
                     "strategy": "html_extract",
                 },
             },
-        )
-        monkeypatch.setattr(
-            requests,
-            "post",
-            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vertex unavailable")),
         )
 
         resp = client.post(
@@ -176,9 +161,10 @@ class TestHotVideoAnalyzeApi:
         assert data["resolved_page_url"] == "https://www.xiaohongshu.com/explore/demo"
 
     def test_fallback_keeps_share_resolution_when_asr_stage_fails(self, monkeypatch, hot_video_client):
-        client, _llm_state = hot_video_client
+        client, llm_state = hot_video_client
         from shoplive.backend.api import hot_video_api as mod
-        import requests
+
+        llm_state["raise"] = RuntimeError("llm unavailable")
 
         monkeypatch.setattr(
             mod,
@@ -198,11 +184,6 @@ class TestHotVideoAnalyzeApi:
                     "strategy": "html_extract",
                 },
             },
-        )
-        monkeypatch.setattr(
-            requests,
-            "post",
-            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("vertex unavailable")),
         )
 
         resp = client.post(
@@ -249,13 +230,6 @@ class TestHotVideoAnalyzeApi:
             }
 
         monkeypatch.setattr(mod, "_run_video_asr", _fake_asr)
-        monkeypatch.setattr(
-            requests,
-            "post",
-            lambda *args, **kwargs: _VertexResp(
-                {"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}
-            ),
-        )
         resp = client.post(
             self.endpoint,
             json={

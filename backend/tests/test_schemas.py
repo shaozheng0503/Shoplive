@@ -368,6 +368,7 @@ class TestToolSchemasRegistry:
             "extend_video_ltxv",
             "generate_video_jimeng",
             "generate_image_jimeng",
+            "analyze_hot_video_remake",
         }
         assert expected == set(TOOL_SCHEMAS.keys())
 

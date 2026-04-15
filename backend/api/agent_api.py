@@ -1449,7 +1449,6 @@ def register_agent_routes(
           error        {"ok", "error", "error_code"}
         """
         import shoplive.backend.common.helpers as _h
-        _h.call_litellm_chat = _h.call_vertex_chat
         from shoplive.backend.tool_registry import build_openai_tools
 
         _t0 = time.monotonic()
@@ -1511,7 +1510,7 @@ def register_agent_routes(
                         messages = messages[:1] + messages[-(AGENT_MAX_HISTORY - 1):]
                     yield _pack("thinking", {"round": round_num, "message": "calling LLM..."})
 
-                    sc, wrap = _h.call_litellm_chat(
+                    sc, wrap = _h.call_vertex_chat(
                         api_base=api_base, api_key=api_key, model=model,
                         messages=messages, proxy=proxy,
                         temperature=req.temperature, max_tokens=req.max_tokens,
@@ -1592,7 +1591,7 @@ def register_agent_routes(
                 else:
                     # max_rounds exhausted — ask LLM for final summary
                     yield _pack("thinking", {"round": max_rounds + 1, "message": "generating summary..."})
-                    sc2, wrap2 = _h.call_litellm_chat(
+                    sc2, wrap2 = _h.call_vertex_chat(
                         api_base=api_base, api_key=api_key, model=model,
                         messages=messages, proxy=proxy,
                         temperature=req.temperature, max_tokens=req.max_tokens,
