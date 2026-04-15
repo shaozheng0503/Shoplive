@@ -40,6 +40,19 @@ def _resolve_share_url_with_render(video_url: str, proxy: str, timeout_seconds: 
     )
 
 
+def _ts_to_sec(t: str) -> float:
+    """Convert a timestamp token to float seconds.
+    Accepts plain seconds ("2.5"), or colon-separated ("00:02", "1:02:03").
+    """
+    t = t.strip()
+    if ":" in t:
+        s = 0.0
+        for part in t.split(":"):
+            s = s * 60 + float(part)
+        return s
+    return float(t)
+
+
 def _normalize_text_list(value, limit: int) -> List[str]:
     if isinstance(value, list):
         items = value
@@ -172,13 +185,13 @@ def _build_fallback_analysis(req_dict: Dict, subtitles: List[Dict], transcript: 
     if not hook:
         hook = "先给结果，再解释为什么值得买" if language == "zh" else "Lead with the payoff, then explain why it matters."
     summary = (
-        f"该参考视频更偏向“{goal}”导向，开头用强钩子抢注意力，中段快速推进卖点，结尾用明确 CTA 收口。"
+        f'该参考视频更偏向"{goal}"导向，开头用强钩子抢注意力，中段快速推进卖点，结尾用明确 CTA 收口。'
         if language == "zh"
         else f"This reference video is optimized for {goal}, opening with a sharp hook, moving quickly through value beats, and closing with a direct CTA."
     )
     if product_name:
         summary += (
-            f" 复刻时需要把商品主体替换为“{product_name}”。"
+            f' 复刻时需要把商品主体替换为"{product_name}"。'
             if language == "zh"
             else f" Replace the hero product with {product_name} in the remake."
         )
@@ -192,7 +205,7 @@ def _build_fallback_analysis(req_dict: Dict, subtitles: List[Dict], transcript: 
     remake_script_lines = [
         "[脚本 A]" if int(req_dict.get("duration") or 16) >= 12 else "",
         f"镜头1：{hook}。前 2-3 秒直接给结果或反差画面。",
-        f"镜头2：围绕“{product_name or '商品'}”展开 1-2 个核心卖点，结合真实使用场景。",
+        f'镜头2：围绕"{product_name or "商品"}"展开 1-2 个核心卖点，结合真实使用场景。',
         "镜头3：用价格、痛点反转、前后对比或体验细节收口，并给出行动召唤。",
     ]
     remake_script = "\n".join([line for line in remake_script_lines if line])
@@ -292,16 +305,19 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
         "analysis_notes": "string",
     }
     system_prompt = (
-        "你是短视频爆款拆解与复刻专家。"
-        "请基于参考视频的字幕与用户商品信息，提炼真正可执行的复刻结构。"
-        "默认输出“结构复刻 + 商品替换 + 文案改写”，不要逐字照搬原视频。"
-        "必须只输出一个 JSON 对象，禁止输出 Markdown、解释或额外前后缀。"
+        "你是短视频爆款拆解与复刻专家。\n"
+        "任务：基于参考视频的字幕/转录与用户商品信息，输出一套可直接执行的复刻方案。\n"
+        "原则：结构复刻 + 商品替换 + 文案改写，不逐字照搬原视频。\n"
+        "输出格式：严格输出一个合法 JSON 对象，字段完整，禁止输出 Markdown 代码块、多余解释或任何前后缀文字。\n"
+        'analysis_notes 字段：若正常完成分析留空 ("")，仅在确实有重要提示时填写。'
         if language == "zh"
         else
-        "You are an expert at breaking down viral short videos and turning them into executable remakes. "
-        "Use the reference transcript and the user's product context to produce a structure-first remake package. "
-        "Default to structure imitation plus rewritten copy rather than word-for-word copying. "
-        "Return exactly one JSON object and nothing else."
+        "You are an expert at breaking down viral short videos and turning them into executable remake packages.\n"
+        "Task: Use the reference transcript/subtitles and the product context to output a ready-to-use remake plan.\n"
+        "Principle: Imitate structure, replace product, rewrite copy - do NOT copy verbatim.\n"
+        "Output format: Return exactly one valid JSON object with all fields populated. "
+        "No markdown fences, no explanation, no extra text before or after.\n"
+        'analysis_notes field: Leave empty ("") if the analysis is complete; only fill in if there is a genuinely important caveat.'
     )
     user_payload = {
         "response_schema": schema_desc,
@@ -475,17 +491,19 @@ def _run_video_asr(
             for part in (cand.get("content", {}).get("parts") or []):
                 raw_text += part.get("text", "")
 
-        line_pat = re.compile(r"\[(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)\]\s*(.+)")
+        # Match both [0.0-2.5] (seconds) and [00:00-00:02] (MM:SS / HH:MM:SS) formats
+        _ts = r"(?:\d+(?::\d{2})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+        line_pat = re.compile(rf"\[({_ts})-({_ts})\]\s*(.+)")
         subtitles = []
         for line in raw_text.splitlines():
             match = line_pat.search(line.strip())
             if not match:
                 continue
-            start = float(match.group(1))
-            end = float(match.group(2))
+            start = _ts_to_sec(match.group(1))
+            end = _ts_to_sec(match.group(2))
             text = match.group(3).strip()
             if end > start and text:
-                subtitles.append({"start": start, "end": end, "text": text})
+                subtitles.append({"start": round(start, 2), "end": round(end, 2), "text": text})
             if len(subtitles) >= max_lines:
                 break
         _ASR_CACHE[cache_key] = (subtitles, raw_text, time.time())
@@ -604,48 +622,39 @@ def register_hot_video_routes(
             source = "fallback"
             proxy = str(payload.get("proxy") or "").strip()
             try:
-                import requests as _req
-
-                project_id, key_file, _proxy, _ = parse_common_payload(payload)
+                api_base = (
+                    os.getenv("LITELLM_API_BASE") or "https://litellm.shoplazza.site"
+                ).rstrip("/")
+                api_key = (os.getenv("LITELLM_API_KEY") or "").strip()
                 model = (
                     payload.get("model")
                     or os.getenv("HOT_VIDEO_ANALYSIS_MODEL")
-                    or "gemini-2.5-flash"
+                    or os.getenv("LITELLM_MODEL")
+                    or "azure-gpt-5"
                 ).strip()
-                location = str(payload.get("location") or "global").strip()
-                token = get_access_token(key_file, proxy, 20)
-                url = (
-                    f"https://aiplatform.googleapis.com/v1/projects/{project_id}"
-                    f"/locations/{location}/publishers/google/models/{model}:generateContent"
+                messages = _build_analysis_messages(payload, subtitles, transcript)
+                status_code, data_wrap = call_litellm_chat(
+                    api_base=api_base,
+                    api_key=api_key,
+                    model=model,
+                    messages=messages,
+                    proxy=proxy,
+                    temperature=0.2,
+                    max_tokens=4096,
                 )
-                resp = _req.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json; charset=utf-8",
-                    },
-                    json={
-                        "contents": [{
-                            "role": "user",
-                            "parts": [{"text": _build_analysis_prompt(payload, subtitles, transcript)}],
-                        }],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "maxOutputTokens": 4096,
-                            "responseMimeType": "application/json",
-                            "responseSchema": _build_analysis_response_schema(),
-                        },
-                    },
-                    proxies=build_proxies(proxy) or None,
-                    timeout=120,
-                )
-                resp.raise_for_status()
-                raw_content = extract_vertex_text(resp.json())
+                if status_code != 200:
+                    raise RuntimeError(f"LiteLLM analysis returned HTTP {status_code}")
+                raw_content = extract_chat_content(data_wrap.get("response", {}))
+                if not raw_content:
+                    logger.warning("hot video analysis: empty LiteLLM response (model=%s)", model)
                 parsed = try_parse_json_object(raw_content)
+                if not parsed:
+                    logger.warning("hot video analysis: unparseable JSON; raw_content=%r", raw_content[:300])
                 analysis = _normalize_analysis_payload(parsed, payload, subtitles, transcript, asr_error)
-                source = "vertex"
+                source = "litellm" if parsed else "litellm_empty"
                 _ANALYSIS_CACHE[cache_key] = (analysis, time.time())
             except Exception as exc:
+                logger.warning("hot video analysis stage failed: %s", exc, exc_info=True)
                 analysis = _build_fallback_analysis(payload, subtitles, transcript, str(exc))
 
         if not analysis:

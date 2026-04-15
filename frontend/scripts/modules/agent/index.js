@@ -1022,15 +1022,18 @@ function setLinkParseInlineStatus(text = "", visible = false) {
   linkParseStatusEl.textContent = text;
 }
 
-function setHotVideoInlineStatus(text = "", visible = false) {
+function setHotVideoInlineStatus(text = "", visible = false, variant = "") {
   if (!hotVideoParseStatusEl) return;
   if (!visible || !String(text).trim()) {
     hotVideoParseStatusEl.hidden = true;
     hotVideoParseStatusEl.textContent = "";
+    hotVideoParseStatusEl.classList.remove("status-success", "status-guide");
     return;
   }
   hotVideoParseStatusEl.hidden = false;
   hotVideoParseStatusEl.textContent = text;
+  hotVideoParseStatusEl.classList.remove("status-success", "status-guide");
+  if (variant) hotVideoParseStatusEl.classList.add(`status-${variant}`);
 }
 
 function updateHotVideoRemakeAction() {
@@ -4420,6 +4423,15 @@ async function onUpload(files) {
     // 仅在一次 hydrate 之后写入输入框，避免先草稿再覆盖造成的「回填两次」观感
     try { await hydrateWorkflowTexts(true); } catch (_e) {}
     if (state.lastPrompt) chatInput.value = sanitizePromptForUser(state.lastPrompt);
+    // After upload: if a hot-video remake is waiting for an image, show ready status
+    if (state.hotVideoRemake?.remakePrompt) {
+      setHotVideoInlineStatus(
+        currentLang === "zh"
+          ? "✅ 商品图已上传 — 点击「一键复刻」立即生成"
+          : "✅ Product image uploaded — click One-click Remake to generate",
+        true, "success"
+      );
+    }
     return;
   }
   pushSystemReplyMsg(t("insightRecapTitle"));
@@ -4808,15 +4820,27 @@ function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
     }) : "",
     usedLlmFallback ? t("hotVideoSummaryLlmWarning", {
       value: currentLang === "zh"
-        ? "已完成真实视频转写，但 LLM 分析服务鉴权失败，当前结构化拆解来自兜底模板。"
-        : "Real video transcription completed, but the LLM analysis service authentication failed. The structured breakdown is based on the fallback template.",
+        ? "已完成真实视频转写，但 LLM 分析鉴权失败，当前结构化拆解来自兜底模板。"
+        : "Real video transcription completed, but the LLM analysis service failed. The structured breakdown is based on the fallback template.",
     }) : "",
     strategyLabel ? t("hotVideoSummaryStrategy", { value: strategyLabel }) : "",
-    resolvedVideoUrl && resolvedVideoUrl !== sourceUrl ? t("hotVideoSummaryResolvedVideo", { value: resolvedVideoUrl }) : "",
-    resolvedPageUrl && resolvedPageUrl !== sourceUrl ? t("hotVideoSummaryResolvedPage", { value: resolvedPageUrl }) : "",
     t(usedFallback ? "hotVideoReadyFallback" : "hotVideoReady"),
   ].filter(Boolean);
   pushSystemStateMsg(summaryLines.join("\n\n"), "done");
+  // If no product image yet, show a separate guide prompt with upload action
+  if (!state.images?.length) {
+    const guideEl = pushSystemGuideMsg(t("hotVideoNeedImage"));
+    renderOptions(guideEl, [
+      {
+        title: currentLang === "zh" ? "上传商品图" : "Upload product image",
+        desc: currentLang === "zh" ? "AI 将参照爆款节奏生成您的产品视频" : "AI will remake the video with your product",
+        onClick: () => {
+          if (window._agentOpenRefModal) window._agentOpenRefModal();
+          else document.getElementById("imageInput")?.click();
+        },
+      },
+    ]);
+  }
   return { usedFallback, usedLlmFallback };
 }
 
@@ -5040,10 +5064,11 @@ async function parseHotVideoRemake(inputUrl = "") {
     );
     progress.stop();
     const resultMeta = applyHotVideoRemakeResult(data, url) || {};
-    setHotVideoInlineStatus(
-      t(resultMeta.usedFallback ? "hotVideoDoneFallback" : resultMeta.usedLlmFallback ? "hotVideoDoneLlmFallback" : "hotVideoDone"),
-      true
-    );
+    const doneKey = resultMeta.usedFallback ? "hotVideoDoneFallback"
+      : resultMeta.usedLlmFallback ? "hotVideoDoneLlmFallback"
+      : "hotVideoDone";
+    const variant = (resultMeta.usedFallback || resultMeta.usedLlmFallback) ? "guide" : "success";
+    setHotVideoInlineStatus(t(doneKey), true, variant);
   } catch (e) {
     progress.stop();
     const detail = String(e?.message || e || "").trim();
@@ -5461,6 +5486,14 @@ if (startHotVideoRemakeBtn) {
     const prompt = String(state.hotVideoRemake?.remakePrompt || state.lastPrompt || chatInput?.value || "").trim();
     if (!prompt) {
       pushSystemStateMsg(t("hotVideoFail"), "blocked");
+      return;
+    }
+    if (!state.images?.length) {
+      // Guide user to upload a product image first
+      pushSystemGuideMsg(t("hotVideoNeedImage"));
+      setHotVideoInlineStatus(t("hotVideoNeedImage"), true, "guide");
+      if (window._agentOpenRefModal) window._agentOpenRefModal();
+      else document.getElementById("imageInput")?.click();
       return;
     }
     submitSimplePromptGeneration(prompt);

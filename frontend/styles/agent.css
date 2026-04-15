@@ -3914,6 +3914,34 @@ body {
   white-space: nowrap;
 }
 
+/* Active (panel-open) state for compact-head toggle buttons */
+.composer.composer-compact.show-link-row .compact-head #toggleProductUrlBtn,
+.composer.composer-compact.show-hot-video-row .compact-head #toggleHotVideoBtn {
+  background: #3f86ff;
+  border-color: #3f86ff;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(63, 134, 255, 0.28);
+}
+.composer.composer-compact.show-link-row .compact-head #toggleProductUrlBtn:hover,
+.composer.composer-compact.show-hot-video-row .compact-head #toggleHotVideoBtn:hover {
+  background: #2f74f0;
+  border-color: #2f74f0;
+}
+
+/* Hot-video status: success variant (green tint) */
+.composer.composer-compact .hot-video-status:not([hidden]).status-success {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.09), rgba(16, 185, 129, 0.04));
+  border-color: rgba(16, 185, 129, 0.28);
+  color: #065f46;
+}
+/* Hot-video status: guide/action variant (blue tint, matches link-parse-status) */
+.composer.composer-compact .hot-video-status:not([hidden]).status-guide {
+  background: linear-gradient(180deg, rgba(63, 134, 255, 0.11), rgba(63, 134, 255, 0.05));
+  border-color: rgba(63, 134, 255, 0.28);
+  color: #1e3a5f;
+  font-weight: 500;
+}
+
 .composer.composer-compact .compact-chip {
   display: inline-flex;
   align-items: center;
