@@ -152,12 +152,15 @@ export function hydrateHotVideoRemakeWorkspace(remake = {}) {
     if (shotPlanStoryboard) remakeScript = shotPlanStoryboard;
   }
   const remakePrompt = _sanitizePromptForUser(String(payload.remakePrompt || payload.remake_prompt || "").trim());
+  const enginePrompts = (payload.enginePrompts && typeof payload.enginePrompts === "object") ? payload.enginePrompts : {};
   if (remakeScript) state.lastStoryboard = remakeScript;
   if (remakePrompt) state.lastPrompt = remakePrompt;
   state.hotVideoRemake = {
     ...(state.hotVideoRemake && typeof state.hotVideoRemake === "object" ? state.hotVideoRemake : {}),
     ...payload,
     shotPlan,
+    enginePrompts,
+    confidenceScore: Number(payload.confidenceScore || 0),
     remakeScript: remakeScript || String(payload.remakeScript || payload.remake_script || "").trim(),
     remakePrompt: remakePrompt || _sanitizePromptForUser(String(payload.remakePrompt || payload.remake_prompt || "").trim()),
   };

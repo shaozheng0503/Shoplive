@@ -25,6 +25,57 @@ _ASR_CACHE_TTL = 24 * 60 * 60
 _ANALYSIS_CACHE: Dict[str, tuple] = {}
 _ANALYSIS_CACHE_TTL = 15 * 60
 
+# Noise tags to strip from ASR subtitle text (multilingual)
+_NOISE_TAG_PAT = re.compile(
+    r"\[(?:music|音乐|背景音乐|掌声|applause|noise|噪音|笑声|laughter|"
+    r"鼓掌|clapping|静音|silence|音效|sound effect|背景噪音)\]",
+    re.IGNORECASE,
+)
+
+# Engine-specific prompt style hints
+_ENGINE_STYLE: Dict[str, Dict[str, str]] = {
+    "veo": {
+        "zh": (
+            "提示词风格：电影镜头语言，描述摄像机运动（推镜/拉镜/摇镜/跟镜）、光线（自然光/暖光/侧光）、"
+            "景别（特写/中景/全景），以英文输出 remake_prompt。"
+        ),
+        "en": (
+            "Prompt style: cinematic camera language — include camera movement (push/pull/pan/tracking), "
+            "lighting (natural/warm/side-lit), and framing (close-up/medium/wide). Write remake_prompt in English."
+        ),
+    },
+    "jimeng": {
+        "zh": (
+            "提示词风格：中文电商美学方向，强调画面质感（高清/细腻/通透）、"
+            "色调（暖调/冷调/莫兰迪）与场景氛围，以中文输出 remake_prompt。"
+        ),
+        "en": (
+            "Prompt style: Chinese e-commerce aesthetic — emphasize visual quality (HD/delicate/luminous), "
+            "color tone (warm/cool/Morandi), and scene atmosphere. Write remake_prompt in Chinese."
+        ),
+    },
+    "ltx": {
+        "zh": (
+            "提示词风格：关键帧描述为主，每个关键镜头标注时间点、主体动作与背景，"
+            "简洁技术化，以英文输出 remake_prompt。"
+        ),
+        "en": (
+            "Prompt style: keyframe-centric — for each key shot describe timestamp, subject action, and background. "
+            "Keep it concise and technical. Write remake_prompt in English."
+        ),
+    },
+    "grok": {
+        "zh": (
+            "提示词风格：自然描述型，口语化场景叙述，突出人物/商品的动态感与故事性，"
+            "以英文输出 remake_prompt。"
+        ),
+        "en": (
+            "Prompt style: natural descriptive — colloquial scene narration, emphasize dynamic movement and "
+            "storytelling around the person or product. Write remake_prompt in English."
+        ),
+    },
+}
+
 
 def _resolve_share_url_with_render(video_url: str, proxy: str, timeout_seconds: int = 20) -> Dict[str, str]:
     return resolve_video_share_url(
@@ -38,6 +89,100 @@ def _resolve_share_url_with_render(video_url: str, proxy: str, timeout_seconds: 
             wait_ms=1800,
         ),
     )
+
+
+def _clean_subtitle_text(text: str) -> str:
+    """Strip noise tags and normalize whitespace from a subtitle line."""
+    cleaned = _NOISE_TAG_PAT.sub("", text).strip()
+    # Collapse multiple spaces
+    cleaned = re.sub(r"  +", " ", cleaned)
+    return cleaned
+
+
+def _compute_confidence_score(source: str, subtitles: List[Dict], shot_plan: List[Dict]) -> float:
+    """Return a 0.0-1.0 confidence score for the analysis result."""
+    source_scores = {
+        "litellm": 1.0,
+        "vertex_cached": 1.0,
+        "litellm_empty": 0.45,
+        "fallback": 0.25,
+    }
+    base = source_scores.get(source, 0.5)
+    # Up to +0.2 for subtitle richness (10+ subtitles = full bonus)
+    sub_bonus = min(0.2, len(subtitles) * 0.02)
+    # Up to +0.1 for shot plan completeness (6 shots = full bonus)
+    shot_bonus = min(0.1, len(shot_plan) * 0.017)
+    return round(min(1.0, base + sub_bonus + shot_bonus), 2)
+
+
+def _build_engine_prompts(remake_prompt: str, analysis: Dict, req_dict: Dict) -> Dict[str, str]:
+    """Derive per-engine prompt variants from the base remake_prompt and analysis."""
+    language = str(req_dict.get("language") or "zh")
+    product_name = str(req_dict.get("product_name") or "").strip()
+    duration = int(req_dict.get("duration") or 16)
+    aspect_ratio = str(req_dict.get("aspect_ratio") or "16:9")
+    hook = str(analysis.get("hook") or "").strip()
+    selling_points = _normalize_text_list(req_dict.get("selling_points"), 3)
+    target_user = str(req_dict.get("target_user") or "").strip()
+    # Build a compact context line
+    context_bits = [
+        product_name or "",
+        f"hook: {hook}" if hook else "",
+        (f"selling points: {', '.join(selling_points)}" if selling_points else ""),
+        f"target: {target_user}" if target_user else "",
+        f"{duration}s",
+        aspect_ratio,
+    ]
+    context = ", ".join([b for b in context_bits if str(b).strip()])
+
+    base = remake_prompt or context
+
+    prompts: Dict[str, str] = {}
+
+    # VEO — cinematic camera language
+    veo_additions = (
+        "cinematic close-up, smooth camera push, soft natural lighting, product detail texture, fast-cut rhythm, direct CTA ending"
+        if language == "en"
+        else "电影感近景特写，平滑推镜，柔和自然光，商品材质细节，快节奏剪辑，直接行动召唤结尾"
+    )
+    prompts["veo"] = f"{base}. {veo_additions}"
+
+    # jimeng (即梦) — Chinese aesthetic
+    if language == "zh":
+        jimeng_additions = f"高清通透，暖调氛围，商品质感细腻，电商场景，适合{target_user or '都市用户'}，画面精致"
+    else:
+        jimeng_additions = f"high-definition luminous quality, warm tone, refined product texture, e-commerce scene, polished aesthetic"
+    prompts["jimeng"] = f"{base}. {jimeng_additions}"
+
+    # LTX — keyframe-centric
+    ltx_additions = (
+        "keyframe 0s: hero product reveal close-up; "
+        "keyframe 4s: usage demonstration mid-shot; "
+        "keyframe 8s: lifestyle scene wide-shot; "
+        f"keyframe {max(duration-4, 8)}s: clear CTA text overlay, fade-out"
+        if language == "en"
+        else (
+            f"关键帧0s：商品主体特写展示；"
+            f"关键帧4s：使用演示中景；"
+            f"关键帧8s：生活场景全景；"
+            f"关键帧{max(duration-4, 8)}s：CTA 文字叠加，淡出"
+        )
+    )
+    prompts["ltx"] = f"{base}. {ltx_additions}"
+
+    # Grok — natural descriptive
+    grok_additions = (
+        f"vivid scene: someone discovers {product_name or 'the product'}, instantly amazed, "
+        "shows it to camera, demonstrates the key benefit in real life, ends with a clear buy recommendation"
+        if language == "en"
+        else (
+            f"生动场景：某人发现{product_name or '商品'}瞬间被吸引，展示给镜头，"
+            "真实展示核心使用收益，自然有力地给出购买推荐"
+        )
+    )
+    prompts["grok"] = f"{base}. {grok_additions}"
+
+    return prompts
 
 
 def _ts_to_sec(t: str) -> float:
@@ -239,7 +384,7 @@ def _build_fallback_analysis(req_dict: Dict, subtitles: List[Dict], transcript: 
         },
     ]
     shot_plan = _clean_shot_plan([], language, int(req_dict.get("duration") or 16), hook, transcript)
-    return {
+    result: Dict[str, object] = {
         "summary": summary,
         "hook": hook,
         "structure": structure,
@@ -251,6 +396,8 @@ def _build_fallback_analysis(req_dict: Dict, subtitles: List[Dict], transcript: 
             f"fallback:{reason}" if reason else "fallback"
         ),
     }
+    result["engine_prompts"] = _build_engine_prompts(remake_prompt, result, req_dict)
+    return result
 
 
 def _normalize_analysis_payload(parsed: Dict, req_dict: Dict, subtitles: List[Dict], transcript: str, fallback_reason: str = "") -> Dict[str, object]:
@@ -267,7 +414,7 @@ def _normalize_analysis_payload(parsed: Dict, req_dict: Dict, subtitles: List[Di
     analysis_notes = str(parsed.get("analysis_notes") or parsed.get("caution") or "").strip()
     structure = _clean_structure(parsed.get("structure"), language) or fallback["structure"]
     shot_plan = _clean_shot_plan(parsed.get("shot_plan"), language, int(req_dict.get("duration") or 16), hook, transcript)
-    return {
+    result: Dict[str, object] = {
         "summary": summary,
         "hook": hook,
         "structure": structure,
@@ -277,10 +424,15 @@ def _normalize_analysis_payload(parsed: Dict, req_dict: Dict, subtitles: List[Di
         "remake_prompt": remake_prompt,
         "analysis_notes": analysis_notes,
     }
+    result["engine_prompts"] = _build_engine_prompts(remake_prompt, result, req_dict)
+    return result
 
 
 def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: str) -> List[Dict[str, str]]:
     language = str(req_dict.get("language") or "zh")
+    video_engine = str(req_dict.get("video_engine") or "veo")
+    engine_style_hint = (_ENGINE_STYLE.get(video_engine) or _ENGINE_STYLE["veo"]).get(language, "")
+    product_anchors = _normalize_product_anchors(req_dict.get("product_anchors"))
     product_context = {
         "product_name": req_dict.get("product_name") or "",
         "main_business": req_dict.get("main_business") or "",
@@ -288,26 +440,36 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
         "target_user": req_dict.get("target_user") or "",
         "sales_region": req_dict.get("sales_region") or "",
         "brand_direction": req_dict.get("brand_direction") or "",
-        "product_anchors": _normalize_product_anchors(req_dict.get("product_anchors")),
+        "product_anchors": product_anchors,
         "remake_goal": req_dict.get("remake_goal") or "",
         "duration": req_dict.get("duration") or 16,
         "aspect_ratio": req_dict.get("aspect_ratio") or "16:9",
-        "video_engine": req_dict.get("video_engine") or "veo",
+        "video_engine": video_engine,
     }
     schema_desc = {
-        "summary": "string",
-        "hook": "string",
+        "summary": "string — core strategy of the reference video (one sentence)",
+        "hook": "string — opening 3-second hook copy, rewritten for the target product",
         "structure": [{"title": "string", "summary": "string", "beats": ["string"]}],
-        "shot_plan": [{"shot": "string", "duration_seconds": 3, "visual": "string", "voiceover": "string", "onscreen_text": "string"}],
-        "voiceover_script": "string",
-        "remake_script": "string",
-        "remake_prompt": "string",
-        "analysis_notes": "string",
+        "shot_plan": [
+            {
+                "shot": "string — shot title/name",
+                "duration_seconds": 3,
+                "visual": "string — camera description for this shot",
+                "voiceover": "string — spoken copy for this shot",
+                "onscreen_text": "string — on-screen caption/text",
+            }
+        ],
+        "voiceover_script": "string — full spoken script in order",
+        "remake_script": "string — ready-to-use production script with shot labels",
+        "remake_prompt": "string — single video-engine prompt for the full video",
+        "analysis_notes": "string — leave empty if analysis complete; fill ONLY for important caveats",
     }
     system_prompt = (
         "你是短视频爆款拆解与复刻专家。\n"
         "任务：基于参考视频的字幕/转录与用户商品信息，输出一套可直接执行的复刻方案。\n"
         "原则：结构复刻 + 商品替换 + 文案改写，不逐字照搬原视频。\n"
+        f"视频引擎：{video_engine}。{engine_style_hint}\n"
+        "product_anchors 中的 colors/materials/key_details 需融入 remake_prompt 和 shot_plan 的 visual 描述中。\n"
         "输出格式：严格输出一个合法 JSON 对象，字段完整，禁止输出 Markdown 代码块、多余解释或任何前后缀文字。\n"
         'analysis_notes 字段：若正常完成分析留空 ("")，仅在确实有重要提示时填写。'
         if language == "zh"
@@ -315,6 +477,8 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
         "You are an expert at breaking down viral short videos and turning them into executable remake packages.\n"
         "Task: Use the reference transcript/subtitles and the product context to output a ready-to-use remake plan.\n"
         "Principle: Imitate structure, replace product, rewrite copy - do NOT copy verbatim.\n"
+        f"Video engine: {video_engine}. {engine_style_hint}\n"
+        "Weave product_anchors (colors, materials, key_details) into remake_prompt and shot_plan visual descriptions.\n"
         "Output format: Return exactly one valid JSON object with all fields populated. "
         "No markdown fences, no explanation, no extra text before or after.\n"
         'analysis_notes field: Leave empty ("") if the analysis is complete; only fill in if there is a genuinely important caveat.'
@@ -322,8 +486,8 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
     user_payload = {
         "response_schema": schema_desc,
         "reference_video": {
-            "subtitle_excerpt": _subtitle_excerpt(subtitles, 12),
-            "transcript": transcript[:2200],
+            "subtitle_excerpt": _subtitle_excerpt(subtitles, 14),
+            "transcript": transcript[:2600],
             "subtitle_count": len(subtitles),
         },
         "target_product": product_context,
@@ -339,8 +503,9 @@ def _build_analysis_messages(req_dict: Dict, subtitles: List[Dict], transcript: 
             "must_keep": [
                 "usable remake script",
                 "engine-ready remake prompt",
-                "clear shot plan",
+                "clear shot plan with duration_seconds for every shot",
                 "safe rewritten copy",
+                "product anchors woven into visual descriptions",
             ],
         },
     }
@@ -503,14 +668,19 @@ def _run_video_asr(
             end = _ts_to_sec(match.group(2))
             text = match.group(3).strip()
             if end > start and text:
-                subtitles.append({"start": round(start, 2), "end": round(end, 2), "text": text})
+                clean_text = _clean_subtitle_text(text)
+                if clean_text:
+                    subtitles.append({"start": round(start, 2), "end": round(end, 2), "text": clean_text})
             if len(subtitles) >= max_lines:
                 break
+        asr_duration = round(subtitles[-1]["end"], 1) if subtitles else 0.0
         _ASR_CACHE[cache_key] = (subtitles, raw_text, time.time())
         return {
             "ok": True,
             "subtitles": subtitles,
             "raw_text": raw_text,
+            "subtitle_count": len(subtitles),
+            "asr_duration": asr_duration,
             "cached": False,
             "resolved_video_url": resolved_video_url,
             "resolved_page_url": resolved_page_url,
@@ -562,6 +732,7 @@ def register_hot_video_routes(
         transcript = ""
         asr_cached = False
         asr_error = ""
+        asr_duration = 0.0
         resolved_video_url = str(payload.get("video_url") or "").strip()
         resolved_page_url = resolved_video_url
         share_resolution = {
@@ -586,6 +757,7 @@ def register_hot_video_routes(
             transcript = str(asr_result.get("raw_text") or "").strip()
             asr_cached = bool(asr_result.get("cached"))
             asr_error = str(asr_result.get("asr_error") or "").strip()
+            asr_duration = float(asr_result.get("asr_duration") or 0.0)
             resolved_video_url = str(asr_result.get("resolved_video_url") or resolved_video_url).strip() or resolved_video_url
             resolved_page_url = str(asr_result.get("resolved_page_url") or resolved_page_url).strip() or resolved_page_url
             share_resolution = asr_result.get("share_resolution") if isinstance(asr_result.get("share_resolution"), dict) else share_resolution
@@ -659,10 +831,16 @@ def register_hot_video_routes(
         if not analysis:
             analysis = _build_fallback_analysis(payload, subtitles, transcript, asr_error or "empty_analysis")
 
+        shot_plan = analysis.get("shot_plan") or []
+        total_shot_duration = sum(
+            max(1, int(round(float(s.get("duration_seconds") or 0)))) for s in shot_plan
+        )
+        confidence_score = _compute_confidence_score(source, subtitles, shot_plan)
         op.success({
             "subtitle_count": len(subtitles),
             "source": source,
             "asr_cached": asr_cached,
+            "confidence_score": confidence_score,
             "share_strategy": str(share_resolution.get("strategy") or ""),
         })
         return jsonify({
@@ -670,13 +848,19 @@ def register_hot_video_routes(
             "source": source,
             "asr_cached": asr_cached,
             "asr_error": asr_error,
+            "asr_duration": asr_duration,
+            "subtitle_count": len(subtitles),
+            "confidence_score": confidence_score,
             "summary": analysis.get("summary", ""),
             "hook": analysis.get("hook", ""),
             "structure": analysis.get("structure", []),
-            "shot_plan": analysis.get("shot_plan", []),
+            "shot_plan": shot_plan,
+            "shot_count": len(shot_plan),
+            "total_shot_duration": total_shot_duration,
             "voiceover_script": analysis.get("voiceover_script", ""),
             "remake_script": analysis.get("remake_script", ""),
             "remake_prompt": analysis.get("remake_prompt", ""),
+            "engine_prompts": analysis.get("engine_prompts", {}),
             "analysis_notes": analysis.get("analysis_notes", ""),
             "asr_subtitles": subtitles,
             "transcript": transcript,

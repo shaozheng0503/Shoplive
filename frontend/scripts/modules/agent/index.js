@@ -4770,6 +4770,13 @@ function formatHotVideoStructure(structure = []) {
   return lines.join("\n");
 }
 
+function formatConfidenceLabel(score) {
+  const n = Number(score || 0);
+  if (n >= 0.8) return currentLang === "zh" ? `高（${Math.round(n * 100)}%）` : `High (${Math.round(n * 100)}%)`;
+  if (n >= 0.5) return currentLang === "zh" ? `中（${Math.round(n * 100)}%）` : `Medium (${Math.round(n * 100)}%)`;
+  return currentLang === "zh" ? `低（${Math.round(n * 100)}%）` : `Low (${Math.round(n * 100)}%)`;
+}
+
 function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
   const analysis = data?.analysis && typeof data.analysis === "object" ? data.analysis : data || {};
   const remakeScript = String(analysis.remake_script || data?.remake_script || "").trim();
@@ -4784,34 +4791,62 @@ function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
   const resolvedPageUrl = String(data?.resolved_page_url || analysis?.resolved_page_url || "").trim();
   const shareResolution = data?.share_resolution && typeof data.share_resolution === "object" ? data.share_resolution : {};
   const strategyLabel = formatHotVideoShareStrategy(String(shareResolution.strategy || "").trim());
+  const enginePrompts = (data?.engine_prompts && typeof data.engine_prompts === "object") ? data.engine_prompts : {};
+  const confidenceScore = Number(data?.confidence_score || 0);
+  const shotCount = Number(data?.shot_count || 0);
+  const totalShotDuration = Number(data?.total_shot_duration || 0);
+  const subtitleCount = Number(data?.subtitle_count || 0);
   const usedFallback = Boolean(asrError);
   const usedLlmFallback = !usedFallback && source === "fallback";
   if (!remakePrompt && !remakeScript) {
     throw new Error(currentLang === "zh" ? "未拿到有效复刻结果" : "No remake package returned");
   }
-  if (remakePrompt) {
-    if (chatInput) chatInput.value = remakePrompt;
+  // Use engine-specific prompt if available for the current engine selection
+  const engineKey = (state.videoEngine || "veo").toLowerCase();
+  const enginePrompt = sanitizePromptForUser(String(enginePrompts[engineKey] || "").trim());
+  const effectivePrompt = enginePrompt || remakePrompt;
+  if (effectivePrompt) {
+    if (chatInput) chatInput.value = effectivePrompt;
   }
   hydrateHotVideoRemakeWorkspace({
     sourceUrl,
     summary,
     hook,
     structure: analysis.structure || data?.structure || [],
-    remakePrompt,
+    remakePrompt: effectivePrompt || remakePrompt,
     remakeScript,
     shotPlan: analysis.shot_plan || data?.shot_plan || [],
     resolvedVideoUrl,
     resolvedPageUrl,
     shareResolution,
+    enginePrompts,
+    confidenceScore,
   });
   state.videoEditorOpen = false;
   updateHotVideoRemakeAction();
   openEditorPanel("script");
+
+  // Build shot plan summary line
+  const shotPlanLine = shotCount > 0
+    ? (currentLang === "zh"
+      ? `${shotCount} 个镜头 · ${totalShotDuration > 0 ? `总时长约 ${totalShotDuration}s` : ""}`
+      : `${shotCount} shots${totalShotDuration > 0 ? ` · ~${totalShotDuration}s total` : ""}`)
+    : "";
+  const subtitleLine = subtitleCount > 0
+    ? (currentLang === "zh" ? `转写字幕：${subtitleCount} 条` : `Subtitles transcribed: ${subtitleCount}`)
+    : "";
+  const confidenceLine = confidenceScore > 0
+    ? (currentLang === "zh" ? `分析置信度：${formatConfidenceLabel(confidenceScore)}` : `Analysis confidence: ${formatConfidenceLabel(confidenceScore)}`)
+    : "";
+
   const summaryLines = [
     t("hotVideoSummaryTitle"),
     summary,
     hook ? t("hotVideoSummaryHook", { value: hook }) : "",
     structureLines ? t("hotVideoSummaryStructure", { value: structureLines }) : "",
+    shotPlanLine ? t("hotVideoSummaryShotPlan", { value: shotPlanLine }) : "",
+    subtitleLine,
+    confidenceLine,
     notes ? t("hotVideoSummaryNotes", { value: notes }) : "",
     usedFallback ? t("hotVideoSummaryAsrWarning", {
       value: currentLang === "zh"
@@ -4827,6 +4862,24 @@ function applyHotVideoRemakeResult(data = {}, sourceUrl = "") {
     t(usedFallback ? "hotVideoReadyFallback" : "hotVideoReady"),
   ].filter(Boolean);
   pushSystemStateMsg(summaryLines.join("\n\n"), "done");
+
+  // If fallback was used, offer retry with direct link CTA
+  if (usedFallback || usedLlmFallback) {
+    const retryEl = pushSystemGuideMsg(t("hotVideoRetryGuide"));
+    renderOptions(retryEl, [
+      {
+        title: currentLang === "zh" ? "换用直链重新解析" : "Retry with direct video link",
+        desc: currentLang === "zh" ? "粘贴可直接下载的 mp4 链接获得更精准结果" : "Paste a direct mp4 URL for a more accurate breakdown",
+        onClick: () => {
+          if (hotVideoUrlInput) {
+            hotVideoUrlInput.value = "";
+            hotVideoUrlInput.focus();
+          }
+        },
+      },
+    ]);
+  }
+
   // If no product image yet, show a separate guide prompt with upload action
   if (!state.images?.length) {
     const guideEl = pushSystemGuideMsg(t("hotVideoNeedImage"));
@@ -5483,7 +5536,12 @@ if (hotVideoUrlInput) {
 }
 if (startHotVideoRemakeBtn) {
   startHotVideoRemakeBtn.addEventListener("click", () => {
-    const prompt = String(state.hotVideoRemake?.remakePrompt || state.lastPrompt || chatInput?.value || "").trim();
+    // Prefer engine-specific prompt if available
+    const engineKey = (state.videoEngine || "veo").toLowerCase();
+    const enginePrompts = state.hotVideoRemake?.enginePrompts || {};
+    const engineSpecificPrompt = sanitizePromptForUser(String(enginePrompts[engineKey] || "").trim());
+    const prompt = engineSpecificPrompt
+      || String(state.hotVideoRemake?.remakePrompt || state.lastPrompt || chatInput?.value || "").trim();
     if (!prompt) {
       pushSystemStateMsg(t("hotVideoFail"), "blocked");
       return;
