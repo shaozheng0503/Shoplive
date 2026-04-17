@@ -13,6 +13,14 @@ English (current) | [简体中文 README](./README.md)
 
 ---
 
+> 🎉 **Project Origin**: This project was incubated at **Shoplazza's internal Spring Festival AI Innovation Hackathon**. The goal was to prove one end-to-end loop — *product understanding → AI video generation → in-browser editing → export* — within a tight timeframe.
+>
+> It is therefore a **full-demo-ready but not-yet-production-grade** system. Deployment, persistence, rate-limiting, and E2E testing are all still at "demo level". See 👉 [Known Limitations / Gap to Production](#known-limitations--gap-to-production).
+>
+> **PRs from newcomers are very welcome!** 🙌 Bug fixes, tests, features, architecture overhauls — every one moves it closer to a real product.
+
+---
+
 ## Table of Contents
 
 - [Why Shoplive](#why-shoplive)
@@ -26,6 +34,7 @@ English (current) | [简体中文 README](./README.md)
 - [Quick Start](#quick-start)
 - [API Quick Reference](#api-quick-reference)
 - [Run Tests](#run-tests)
+- [Known Limitations / Gap to Production](#known-limitations--gap-to-production)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -169,6 +178,43 @@ Default URL: `http://127.0.0.1:8000`
 ```bash
 python3 -m pytest backend/tests/ -v
 ```
+
+## Known Limitations / Gap to Production
+
+As a hackathon-incubated MVP, this project currently proves *one* working loop. Before it can safely serve real traffic (multi-tenant, 24/7, multi-worker), the items below need real work.
+
+We list them openly so **any newcomer can pick one and open a PR**. Items marked 🫱 are *high-leverage*; items marked 🐣 are *newcomer-friendly* entry points.
+
+### 🔴 P0 — Production blockers
+
+- 🫱 **No production serving**: `backend/run.py` runs Flask's dev server directly — no Gunicorn/uWSGI, no Dockerfile, no CI/CD. Must land before any real deploy.
+- 🫱 **All state lives in process memory**: `_chain_jobs` (veo_api), timeline job queue, audit queue, TTL caches are all in-process `dict/deque`. A restart wipes them; multi-worker deployments can't share state. Plan: Redis for task state + SQLite/Postgres for audit & long-term records.
+- 🫱 **`web_app.py` is a god module**: ~730 lines, 13+ route registrations, system-prompt constants and OpenAPI generation all in one file; `agent_api.py` even re-imports `app` dynamically, creating a circular-import hazard. Refactor to `create_app()` + per-domain blueprints.
+
+### 🟠 P1 — Reliability / cost / quality
+
+- 🫱 **No rate limit / quota on LLM endpoints**: `/api/agent/chat`, `/api/agent/run` etc. have no throttling — a malicious script can burn Vertex quota in minutes. Add IP/session token-bucket.
+- 🫱 **Tests are all mocks, zero E2E**: 377 tests `patch` out Vertex/Grok/Jimeng/GCS. The critical path "image → script → Veo → ffmpeg" has no integration coverage. Past bugs like the `text_overlay` vs `maskText` field mismatch slipped right through mocks.
+- 🐣 **Inconsistent upstream timeout / retry policies**: Veo / Grok / LiteLLM / Jimeng each carry their own settings (15s+90s / 90s / 1200s). Consolidate into one decision layer so "what retries, how many times, what backoff" is defined in one place.
+- 🐣 **No type contract on the frontend**: Backend has `schemas.py` + `/api/openapi.json`, but the plain-JS frontend has no codegen. Field renames only blow up at runtime. Add `openapi-typescript` or maintain `.d.ts`.
+
+### 🟡 P2 — Tech debt / UX debt
+
+- 🐣 **Primitive secret management**: `.env` is plain text — no secret manager, no rotation
+- 🐣 **Scattered scraper adapters**: `backend/scraper/adapters/` has 10+ per-platform scripts with no shared framework; adding a new platform is expensive
+- 🐣 **No global state management on the frontend**: no Redux/Pinia; modules communicate via callbacks + window events, which gets fragile fast
+- 🐣 **No structured logging config**: `DEBUG=1` is too noisy, off is too silent — on-call debugging suffers
+- 🐣 **Agent tool arg schemas only validated at the HTTP edge**: runtime tool calls surface type mismatches as exceptions; add a runtime validator inside `tool_registry.py`
+- 🐣 **Hard dependency on local ffmpeg-full**: `drawtext` / subtitles need brew `ffmpeg-full`; a Docker image as the standard execution environment would remove that friction
+
+### Tips for PRs
+
+- **Green first**: run `python3 -m pytest backend/tests/ -v` and confirm baseline is green before you start
+- **Small steps**: one PR = one thing; ship code + tests + a PR description that says *why*, not *what*
+- **Talk first when unsure**: open an Issue to align on direction — much cheaper than discovering a wrong turn mid-dig
+- **Read the trail**: `CLAUDE.md` accumulates past pitfalls (written for an AI, readable by humans too)
+
+---
 
 ## Roadmap
 
