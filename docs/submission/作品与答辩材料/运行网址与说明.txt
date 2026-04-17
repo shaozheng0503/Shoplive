@@ -1,0 +1,16 @@
+ShopLive — AI 驱动的电商短视频智能创作平台
+=============================================
+
+运行方式：Web 应用（浏览器访问）
+
+本地部署：
+  1. 安装 Python 3.9+，配置 GCP 凭证
+  2. pip install -r requirements.txt
+  3. python3 backend/run.py
+  4. 浏览器打开 http://127.0.0.1:8000
+
+GitHub 仓库：
+  https://github.com/shaozheng0503/Shoplive
+
+推荐浏览器：Chrome / Edge（最新版本）
+支持设备：桌面端 + 移动端浏览器
