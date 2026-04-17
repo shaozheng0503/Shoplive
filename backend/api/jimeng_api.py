@@ -23,7 +23,7 @@ Env vars:
 import io
 import os
 import time
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
 from flask import g, jsonify
@@ -34,6 +34,11 @@ from shoplive.backend.schemas import JimengVideoRequest, JimengImageRequest
 
 _DEFAULT_API_BASE = "http://43.163.110.48"
 _TIMEOUT = 1200  # 20 minutes per provider docs
+
+# Retryable upstream conditions: SessionId exhaustion, rate-limit, transient 5xx.
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+_RETRY_MAX_ATTEMPTS = 3            # total attempts including first
+_RETRY_BACKOFF_SECONDS = (3.0, 8.0)  # sleeps between attempts 1->2 and 2->3
 
 # Credit costs per call
 _CREDITS = {
@@ -77,6 +82,49 @@ def _base64_to_bytes(b64: str) -> Tuple[bytes, str]:
 
 def _ext_from_mime(mime: str) -> str:
     return {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(mime, "jpg")
+
+
+def _rewind_files(files: Dict) -> None:
+    """Seek each multipart stream back to 0 so a retry can resend the same bytes."""
+    for value in files.values():
+        stream = value[1] if isinstance(value, tuple) and len(value) >= 2 else None
+        if stream is not None and hasattr(stream, "seek"):
+            try:
+                stream.seek(0)
+            except Exception:
+                pass
+
+
+def _post_with_retry(
+    endpoint: str,
+    *,
+    headers: Dict[str, str],
+    data: Dict[str, str],
+    files: Optional[Dict],
+    proxies: Dict,
+    timeout: int,
+) -> Tuple[requests.Response, List[Dict]]:
+    """POST with bounded retries on 429/5xx. Returns (final_response, attempt_log)."""
+    attempts: List[Dict] = []
+    resp: Optional[requests.Response] = None
+    for i in range(_RETRY_MAX_ATTEMPTS):
+        if i > 0 and files:
+            _rewind_files(files)
+        resp = requests.post(
+            endpoint,
+            headers=headers,
+            data=data,
+            files=files if files else None,
+            proxies=proxies,
+            timeout=timeout,
+        )
+        attempts.append({"attempt": i + 1, "status_code": resp.status_code})
+        if resp.ok or resp.status_code not in _RETRY_STATUS:
+            break
+        if i < _RETRY_MAX_ATTEMPTS - 1:
+            # look up via module attr so tests can patch time.sleep
+            time.sleep(_RETRY_BACKOFF_SECONDS[min(i, len(_RETRY_BACKOFF_SECONDS) - 1)])
+    return resp, attempts
 
 
 def _resolve_image_bytes(
@@ -200,11 +248,11 @@ def register_jimeng_routes(
         )
 
         try:
-            resp = requests.post(
+            resp, attempts = _post_with_retry(
                 endpoint,
                 headers=_auth_headers(api_key),
                 data=data,
-                files=files if files else None,
+                files=files,
                 proxies=proxies,
                 timeout=_TIMEOUT,
             )
@@ -228,16 +276,25 @@ def register_jimeng_routes(
             audit_log.record(
                 tool="generate_video_jimeng",
                 action="jimeng_video_error",
-                input_summary={"model": req.model, "status_code": resp.status_code},
-                output_summary={"error": str(err_body)[:120]},
+                input_summary={
+                    "model": req.model,
+                    "status_code": resp.status_code,
+                    "attempts": len(attempts),
+                },
+                output_summary={"error": str(err_body)[:120], "retry_log": attempts},
                 status="error",
                 error_code="JIMENG_API_ERROR",
                 duration_ms=dur_ms,
             )
+            suggestion = (
+                "Upstream SessionId pool exhausted after retries. Switch engine (Veo/LTXV) or retry in a few minutes."
+                if resp.status_code in _RETRY_STATUS
+                else "Check JIMENG_API_KEY. If 500, check image size (<2MB)."
+            )
             return json_error(
-                f"Jimeng API error ({resp.status_code}): {err_body}",
+                f"Jimeng API error ({resp.status_code}) after {len(attempts)} attempt(s): {err_body}",
                 resp.status_code,
-                "Check JIMENG_API_KEY. If 500, check image size (<2MB).",
+                suggestion,
             )
 
         result = resp.json()
@@ -247,7 +304,7 @@ def register_jimeng_routes(
         audit_log.record(
             tool="generate_video_jimeng",
             action="jimeng_video_done",
-            input_summary={"model": req.model, "mode": mode},
+            input_summary={"model": req.model, "mode": mode, "attempts": len(attempts)},
             output_summary={"count": len(video_urls), "credits_used": credits},
             status="success",
             duration_ms=dur_ms,
@@ -262,6 +319,7 @@ def register_jimeng_routes(
             "duration_seconds": req.duration,
             "ratio": req.ratio,
             "elapsed_seconds": round(dur_ms / 1000, 1),
+            "attempts": len(attempts),
             "note": "video_urls are external CDN links — VPN/proxy may be required to download.",
             "raw": result,
         })
@@ -311,11 +369,11 @@ def register_jimeng_routes(
         credits = base_credits + (2 if req.resolution == "4k" else 0)
 
         try:
-            resp = requests.post(
+            resp, attempts = _post_with_retry(
                 endpoint,
                 headers=_auth_headers(api_key),
                 data=data,
-                files=files if files else None,
+                files=files,
                 proxies=proxies,
                 timeout=_TIMEOUT,
             )
@@ -331,9 +389,28 @@ def register_jimeng_routes(
                 err_body = resp.json()
             except Exception:
                 err_body = {"raw": resp.text[:300]}
+            audit_log.record(
+                tool="generate_image_jimeng",
+                action="jimeng_image_error",
+                input_summary={
+                    "model": req.model,
+                    "status_code": resp.status_code,
+                    "attempts": len(attempts),
+                },
+                output_summary={"error": str(err_body)[:120], "retry_log": attempts},
+                status="error",
+                error_code="JIMENG_API_ERROR",
+                duration_ms=dur_ms,
+            )
+            suggestion = (
+                "Upstream SessionId pool exhausted after retries. Retry in a few minutes."
+                if resp.status_code in _RETRY_STATUS
+                else "Check JIMENG_API_KEY / image size (<2MB)."
+            )
             return json_error(
-                f"Jimeng image API error ({resp.status_code}): {err_body}",
+                f"Jimeng image API error ({resp.status_code}) after {len(attempts)} attempt(s): {err_body}",
                 resp.status_code,
+                suggestion,
             )
 
         result = resp.json()
@@ -343,7 +420,12 @@ def register_jimeng_routes(
         audit_log.record(
             tool="generate_image_jimeng",
             action="jimeng_image_done",
-            input_summary={"model": req.model, "mode": mode, "resolution": req.resolution},
+            input_summary={
+                "model": req.model,
+                "mode": mode,
+                "resolution": req.resolution,
+                "attempts": len(attempts),
+            },
             output_summary={"count": len(image_urls), "credits_used": credits},
             status="success",
             duration_ms=dur_ms,
@@ -357,6 +439,7 @@ def register_jimeng_routes(
             "count": len(image_urls),
             "credits_used": credits,
             "elapsed_seconds": round(dur_ms / 1000, 1),
+            "attempts": len(attempts),
             "raw": result,
         })
 
